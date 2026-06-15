@@ -15,13 +15,29 @@ __pycache__/
 
 # Node/package caches, in case frontend tooling is added later
 node_modules/
+.pnpm-store/
 dist/
 build/
+coverage/
+.vite/
+.vitest/
+*.tsbuildinfo
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
 # Local environment and generated run artifacts
 .env
 .env.*
+!.env.example
+!.env.sample
 *.traj.json
+runs/
+traces/
 
 # OS files
 .DS_Store

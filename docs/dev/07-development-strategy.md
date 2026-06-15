@@ -2,9 +2,9 @@
 
 本文用于指导 Huaness Lite 从文档研究进入代码实现。核心策略是：
 
-> 先做最小可运行骨架，再做一个核心单模块的纵向切片。
+> 先做最小可运行骨架，再跑通一次 Mock LLM Agent Loop，然后做核心单模块纵向切片。
 
-这不是先做完整 MVP，也不是把单个模块关起来孤岛式开发。当前更合适的方式是：先建立极薄的工程骨架和核心接口边界，再选择一个最能代表 Agent Harness 价值的模块做深、做透、做可测试。
+这不是先做完整 MVP，也不是把单个模块关起来孤岛式开发。当前更合适的方式是：先建立极薄的工程骨架和核心接口边界，再用 fake model 跑通一次最小 agent run，最后选择一个最能代表 Agent Harness 价值的模块做深、做透、做可测试。
 
 ## 1. 当前结论
 
@@ -23,7 +23,8 @@ run/session
 
 - TypeScript 工程能跑。
 - core 类型和模块边界清楚。
-- fake run 能产生可读的 JSONL event log。
+- mock LLM agent run 能完整跑一次。
+- run 过程有可观察的事件记录接口。
 - 后续每个模块都能挂回这条链路验收。
 
 ## 2. 为什么不是直接整体 MVP
@@ -106,16 +107,52 @@ pnpm typecheck
 
 能跑通即可。如果某个命令暂时不存在，要在 README 或 AGENTS.md 里明确当前可用命令。
 
-## 5. 阶段二：第一个核心模块纵向切片
+## 5. 阶段二：Mock LLM Agent Loop 纵向骨架
 
-第一个建议深挖模块是 `EventLog`。
+工程骨架完成后，先跑通一次最小 mock LLM agent run，再进入单模块深挖。
+
+这一阶段目标不是把每个模块写完整，而是确认 Huaness Lite 已经有一条真实可运行的 harness 主链路：
+
+```text
+create run
+  -> FakeModelClient returns tool call
+  -> AgentLoop asks ToolGateway
+  -> PolicyEngine returns allow
+  -> fake echo tool returns result
+  -> event sink records key steps
+  -> FakeModelClient returns final answer
+  -> run completed
+```
+
+这一阶段可以用很薄的实现：
+
+- `FakeModelClient`：固定两步，先返回 tool call，再返回 final answer。
+- `AgentLoop`：只支持单 run、少量 step、无 streaming。
+- `ToolGateway`：只注册一个 `echo` fake tool。
+- `PolicyEngine`：只返回 `allow`。
+- `EventSink`：可以先用 in-memory，不必立刻做 JSONL。
+
+验收重点：
+
+- `AgentLoop` 不直接执行工具。
+- `ToolGateway` 不绕过 policy。
+- 关键步骤都有事件记录。
+- 测试可以稳定复现，不依赖网络、真实 LLM、真实 shell。
+
+阶段完成标志：
+
+> `pnpm test` 能跑通一次 fake agent run，并断言 final answer、tool result 和事件顺序。
+
+## 6. 阶段三：EventLog V1 单模块深挖
+
+Mock loop 能跑后，第一个建议深挖模块是 `EventLog`。
 
 原因：
 
 - JSONL append-only 是 Harness 与普通聊天机器人的关键区别。
+- 已经有 mock run 可以作为集成验收入口。
 - 后续 AgentLoop、ToolGateway、PolicyEngine 都要依赖事件记录来证明行为。
 - EventLog 相对稳定，不依赖真实模型和真实工具。
-- 最容易写出清晰测试。
 
 `EventLog V1` 至少包含：
 
@@ -139,38 +176,7 @@ run.completed
 run.failed
 ```
 
-纵向验收不是只测试文件读写，而是让一个 fake run 真的写出事件，再从 JSONL 读回来断言顺序和内容。
-
-## 6. 阶段三：FakeModelClient + 最小 AgentLoop
-
-EventLog 稳定后，再接最小 AgentLoop。
-
-先用 `FakeModelClient`，不要急着接真实 LLM。Fake 模型固定模拟两步：
-
-```text
-step 1: 返回一个 tool call
-step 2: 收到 tool result 后返回 final answer
-```
-
-这一阶段要跑通：
-
-```text
-create run
-  -> FakeModelClient returns tool call
-  -> AgentLoop asks ToolGateway
-  -> PolicyEngine returns allow
-  -> fake tool returns result
-  -> EventLog records all steps
-  -> FakeModelClient returns final answer
-  -> run completed
-```
-
-验收重点：
-
-- `AgentLoop` 不直接执行工具。
-- `ToolGateway` 不绕过 policy。
-- 每个关键动作都进入 EventLog。
-- 测试可以稳定复现，不依赖网络和真实模型。
+纵向验收不是只测试文件读写，而是把阶段二的 fake run 接到 `JsonlEventLog`，再从 JSONL 读回来断言顺序和内容。
 
 ## 7. 阶段四：加深 ToolGateway / PolicyEngine
 
@@ -262,8 +268,8 @@ type ToolCall = {
 
 - 跑通 TypeScript 工程。
 - 明确 core 类型。
-- 让事件可落盘。
 - 用 fake model 跑通 loop。
+- 让事件可落盘。
 - 让工具调用必须经过 policy。
 - 用测试证明 replay 能读回关键事件。
 
@@ -294,7 +300,18 @@ type ToolCall = {
 - 没有真实 LLM。
 - 没有真实工具执行。
 
-### Milestone 2：EventLog V1
+### Milestone 2：Mock Agent Run
+
+目标：
+
+- FakeModelClient。
+- 最小 AgentLoop。
+- fake echo tool。
+- allow policy。
+- in-memory event sink。
+- 测试跑通一次完整 fake run。
+
+### Milestone 3：EventLog V1
 
 目标：
 
@@ -303,17 +320,14 @@ type ToolCall = {
 - 顺序稳定。
 - schema version。
 - 单元测试覆盖。
+- fake run 接入 JSONL event log。
 
-### Milestone 3：Fake Agent Run
+### Milestone 4：模块深挖
 
 目标：
 
-- FakeModelClient。
-- 最小 AgentLoop。
-- fake tool。
-- allow policy。
-- 完整事件落盘。
-- replay smoke test。
+- 加深 ToolGateway。
+- 加深 PolicyEngine。
+- 加入 replay smoke test。
 
-完成 Milestone 3 后，再考虑 Fastify、真实 LLM 和真实 shell 工具。
-
+完成 Milestone 4 后，再考虑 Fastify、真实 LLM 和真实 shell 工具。
