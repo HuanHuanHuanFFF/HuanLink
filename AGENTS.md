@@ -41,13 +41,21 @@ Use descriptive test names that state behavior, not implementation details.
 
 ## Commit & Pull Request Guidelines
 
-Current history uses short imperative commit messages, for example:
+Commit messages use short Conventional Commits with Chinese subjects:
 
 ```text
-Add project docs and reference submodules
+<type>(<scope>): <中文变更说明>
 ```
 
-For future commits, keep the subject direct and scoped. Pull requests should include:
+Use lowercase English `type`/optional `scope`, keep technical names as-is, and do not add trailing punctuation.
+
+```text
+docs: 更新项目当前状态
+feat(frontend): 支持 Sources Markdown 渲染
+refactor(rag): 移动 RagTextFormatter
+```
+
+Pull requests should include:
 
 - What changed.
 - Why it changed.
