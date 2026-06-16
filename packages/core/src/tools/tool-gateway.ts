@@ -32,10 +32,15 @@ export class ToolGateway {
     runId: RunId;
     sessionId: SessionId;
     toolCall: ToolCall;
+    signal?: AbortSignal;
   }): Promise<ToolResult> {
+    this.throwIfAborted(input.signal);
+
     await this.emit(input, "tool.requested", {
       toolCall: input.toolCall
     });
+
+    this.throwIfAborted(input.signal);
 
     const decision = await this.policyEngine.decide(input);
 
@@ -44,24 +49,90 @@ export class ToolGateway {
       toolCall: input.toolCall
     });
 
+    this.throwIfAborted(input.signal);
+
     if (decision.kind !== "allow") {
-      throw new Error(`Tool call blocked by policy: ${decision.reason}`);
+      const result = this.createErrorResult(
+        input.toolCall,
+        `Tool call blocked by policy: ${decision.reason}`
+      );
+
+      await this.emit(input, "tool.blocked", {
+        result,
+        toolCall: input.toolCall
+      });
+
+      return result;
     }
 
     const tool = this.tools.get(input.toolCall.name);
 
     if (!tool) {
-      throw new Error(`Unknown tool: ${input.toolCall.name}`);
+      const result = this.createErrorResult(
+        input.toolCall,
+        `Unknown tool: ${input.toolCall.name}`
+      );
+
+      await this.emit(input, "tool.failed", {
+        result,
+        toolCall: input.toolCall
+      });
+
+      return result;
     }
 
-    const result = await tool.execute(input.toolCall);
+    this.throwIfAborted(input.signal);
 
-    await this.emit(input, "tool.completed", {
-      result,
-      toolCall: input.toolCall
-    });
+    try {
+      const rawResult = await tool.execute(input.toolCall);
 
-    return result;
+      this.throwIfAborted(input.signal);
+
+      const result = this.normalizeResult(input.toolCall, rawResult);
+
+      await this.emit(input, "tool.completed", {
+        result,
+        toolCall: input.toolCall
+      });
+
+      return result;
+    } catch (error) {
+      if (this.isCancellation(input.signal, error)) {
+        throw error;
+      }
+
+      const result = this.createErrorResult(
+        input.toolCall,
+        `Tool execution failed: ${error instanceof Error ? error.message : String(error)}`
+      );
+
+      await this.emit(input, "tool.failed", {
+        result,
+        toolCall: input.toolCall
+      });
+
+      return result;
+    }
+  }
+
+  private normalizeResult(
+    toolCall: ToolCall,
+    result: ToolResult
+  ): ToolResult {
+    return {
+      ...result,
+      callId: toolCall.id,
+      toolName: toolCall.name
+    };
+  }
+
+  private createErrorResult(toolCall: ToolCall, output: string): ToolResult {
+    return {
+      callId: toolCall.id,
+      toolName: toolCall.name,
+      output,
+      isError: true
+    };
   }
 
   // 记录工具网关产生的事件。
@@ -77,6 +148,24 @@ export class ToolGateway {
         sessionId: input.sessionId,
         data
       })
+    );
+  }
+
+  private throwIfAborted(signal?: AbortSignal): void {
+    if (signal?.aborted) {
+      const error = new Error("Tool execution cancelled");
+      error.name = "AbortError";
+      throw error;
+    }
+  }
+
+  private isCancellation(
+    signal: AbortSignal | undefined,
+    error: unknown
+  ): boolean {
+    return (
+      signal?.aborted === true ||
+      (error instanceof Error && error.name === "AbortError")
     );
   }
 }

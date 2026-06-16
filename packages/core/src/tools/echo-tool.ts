@@ -9,6 +9,7 @@ export const echoTool: Tool = {
   execute(toolCall) {
     return {
       callId: toolCall.id,
+      toolName: "echo",
       output:
         typeof toolCall.args.text === "string"
           ? toolCall.args.text

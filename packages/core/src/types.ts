@@ -26,6 +26,9 @@ export type AgentEvent = {
 export type ModelMessage = {
   role: "system" | "user" | "assistant" | "tool";
   content: string;
+  toolCallId?: string;
+  toolName?: string;
+  isError?: boolean;
 };
 
 // 模型请求执行工具时给出的结构化调用。
@@ -38,7 +41,9 @@ export type ToolCall = {
 // 工具执行后的结构化结果。
 export type ToolResult = {
   callId: string;
+  toolName: string;
   output: string;
+  isError?: boolean;
   metadata?: Record<string, unknown>;
 };
 
@@ -55,6 +60,7 @@ export type ModelClient = {
     runId: RunId;
     sessionId: SessionId;
     messages: ModelMessage[];
+    signal?: AbortSignal;
   }): Promise<ModelResponse>;
 };
 
@@ -101,6 +107,12 @@ export type AgentRunInput = {
   runId: RunId;
   sessionId: SessionId;
   userMessage: string;
+  maxSteps?: number;
+  signal?: AbortSignal;
+};
+
+export type ContextAssembler = {
+  assemble(input: AgentRunInput): Promise<ModelMessage[]> | ModelMessage[];
 };
 
 // 一次 agent run 完成后的最小输出。

@@ -30,6 +30,7 @@ describe("core public types", () => {
 
     const toolResult: ToolResult = {
       callId: toolCall.id,
+      toolName: toolCall.name,
       output: "hello"
     };
 

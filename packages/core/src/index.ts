@@ -2,6 +2,7 @@
 
 export * from "./events/create-agent-event.js";
 export * from "./events/in-memory-event-log.js";
+export * from "./context/static-context-assembler.js";
 export * from "./loop/agent-loop.js";
 export * from "./model/fake-model-client.js";
 export * from "./policy/allow-policy-engine.js";
