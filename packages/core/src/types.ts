@@ -64,11 +64,20 @@ export type PolicyDecision =
   | { kind: "deny"; reason: string }
   | { kind: "requires_approval"; reason: string };
 
-// 事件写入接口，当前可由内存实现承接。
-export type EventSink = {
-  // 记录一个 agent 运行事件。
+// 事件写入接口，后续内存和 JSONL 实现都遵守它。
+export type EventWriter = {
+  // 追加记录一个 agent 运行事件。
   append(event: AgentEvent): Promise<void> | void;
 };
+
+// 事件读取接口，按 runId 取回事件序列。
+export type EventReader = {
+  // 读取某次 run 的全部事件，顺序由具体实现保证。
+  readByRun(runId: RunId): Promise<AgentEvent[]> | AgentEvent[];
+};
+
+// 完整事件日志接口，同时支持写入和读取。
+export type EventLog = EventWriter & EventReader;
 
 // 工具调用策略接口，后续可扩展审批和权限规则。
 export type PolicyEngine = {

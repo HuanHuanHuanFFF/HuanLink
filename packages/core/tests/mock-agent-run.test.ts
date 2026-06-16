@@ -6,22 +6,22 @@ import {
   AgentLoop,
   AllowPolicyEngine,
   FakeModelClient,
-  InMemoryEventSink,
+  InMemoryEventLog,
   ToolGateway,
   echoTool
 } from "../src/index.js";
 
 describe("mock agent run", () => {
-  // 覆盖 fake model、policy、tool gateway、event sink 的 happy path。
+  // 覆盖 fake model、policy、tool gateway、event writer 的 happy path。
   test("runs a fake model through policy, echo tool, events, and final answer", async () => {
-    const eventSink = new InMemoryEventSink();
+    const eventLog = new InMemoryEventLog();
     const toolGateway = new ToolGateway({
-      eventSink,
+      eventWriter: eventLog,
       policyEngine: new AllowPolicyEngine(),
       tools: [echoTool]
     });
     const loop = new AgentLoop({
-      eventSink,
+      eventWriter: eventLog,
       modelClient: new FakeModelClient(),
       toolGateway
     });
@@ -32,6 +32,8 @@ describe("mock agent run", () => {
       userMessage: "Echo the fake input"
     });
 
+    const runEvents = eventLog.readByRun("run_mock_01");
+
     expect(result.finalAnswer).toBe("Final answer: hello from fake model");
     expect(result.toolResults).toEqual([
       {
@@ -39,7 +41,18 @@ describe("mock agent run", () => {
         output: "hello from fake model"
       }
     ]);
-    expect(eventSink.events.map((event) => event.type)).toEqual([
+    expect(eventLog.events.map((event) => event.type)).toEqual([
+      "run.created",
+      "model.requested",
+      "model.responded",
+      "tool.requested",
+      "policy.decided",
+      "tool.completed",
+      "model.requested",
+      "model.responded",
+      "run.completed"
+    ]);
+    expect(runEvents.map((event) => event.type)).toEqual([
       "run.created",
       "model.requested",
       "model.responded",

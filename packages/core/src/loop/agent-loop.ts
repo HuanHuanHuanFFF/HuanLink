@@ -4,7 +4,7 @@ import { createAgentEvent } from "../events/create-agent-event.js";
 import type {
   AgentRunInput,
   AgentRunResult,
-  EventSink,
+  EventWriter,
   ModelClient,
   ModelMessage,
   ToolResult
@@ -12,17 +12,17 @@ import type {
 import type { ToolGateway } from "../tools/tool-gateway.js";
 
 export class AgentLoop {
-  private readonly eventSink: EventSink;
+  private readonly eventWriter: EventWriter;
   private readonly modelClient: ModelClient;
   private readonly toolGateway: ToolGateway;
 
-  // 注入模型、工具网关和事件接收器，保持 loop 不直接依赖具体实现。
+  // 注入模型、工具网关和事件写入端，保持 loop 不直接依赖具体实现。
   constructor(input: {
-    eventSink: EventSink;
+    eventWriter: EventWriter;
     modelClient: ModelClient;
     toolGateway: ToolGateway;
   }) {
-    this.eventSink = input.eventSink;
+    this.eventWriter = input.eventWriter;
     this.modelClient = input.modelClient;
     this.toolGateway = input.toolGateway;
   }
@@ -93,7 +93,7 @@ export class AgentLoop {
     type: string,
     data?: Record<string, unknown>
   ): Promise<void> {
-    await this.eventSink.append(
+    await this.eventWriter.append(
       createAgentEvent({
         type,
         runId: input.runId,

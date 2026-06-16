@@ -5,6 +5,9 @@ import { describe, expect, test } from "vitest";
 import { CORE_SCHEMA_VERSION } from "../src/index.js";
 import type {
   AgentEvent,
+  EventLog,
+  EventReader,
+  EventWriter,
   ModelClient,
   PolicyDecision,
   RunId,
@@ -44,6 +47,19 @@ describe("core public types", () => {
       data: { source: "test" }
     };
 
+    const eventWriter: EventWriter = {
+      append: () => undefined
+    };
+
+    const eventReader: EventReader = {
+      readByRun: () => [event]
+    };
+
+    const eventLog: EventLog = {
+      append: eventWriter.append,
+      readByRun: eventReader.readByRun
+    };
+
     const modelClient: ModelClient = {
       complete: async () => ({
         message: {
@@ -63,6 +79,7 @@ describe("core public types", () => {
     expect(event.schemaVersion).toBe(1);
     expect(decision.kind).toBe("allow");
     expect(toolResult.callId).toBe(toolCall.id);
+    expect(eventLog.readByRun(runId)).toEqual([event]);
     expect(response.message.content).toBe("ready");
     expect(response.toolCalls).toEqual([toolCall]);
   });

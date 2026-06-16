@@ -6,6 +6,7 @@
   "packageManager": "pnpm@11.7.0",
   "scripts": {
     "build": "corepack pnpm -r --if-present build",
+    "demo:mock-run": "corepack pnpm --silent --filter @huaness-lite/core demo:mock-run",
     "typecheck": "corepack pnpm -r --if-present typecheck",
     "test": "corepack pnpm -r --if-present test"
   },

@@ -2,7 +2,7 @@
 
 import { createAgentEvent } from "../events/create-agent-event.js";
 import type {
-  EventSink,
+  EventWriter,
   PolicyEngine,
   RunId,
   SessionId,
@@ -12,17 +12,17 @@ import type {
 } from "../types.js";
 
 export class ToolGateway {
-  private readonly eventSink: EventSink;
+  private readonly eventWriter: EventWriter;
   private readonly policyEngine: PolicyEngine;
   private readonly tools: Map<string, Tool>;
 
-  // 注入工具列表、策略引擎和事件接收器。
+  // 注入工具列表、策略引擎和事件写入端。
   constructor(input: {
-    eventSink: EventSink;
+    eventWriter: EventWriter;
     policyEngine: PolicyEngine;
     tools: Tool[];
   }) {
-    this.eventSink = input.eventSink;
+    this.eventWriter = input.eventWriter;
     this.policyEngine = input.policyEngine;
     this.tools = new Map(input.tools.map((tool) => [tool.name, tool]));
   }
@@ -70,7 +70,7 @@ export class ToolGateway {
     type: string,
     data?: Record<string, unknown>
   ): Promise<void> {
-    await this.eventSink.append(
+    await this.eventWriter.append(
       createAgentEvent({
         type,
         runId: input.runId,
