@@ -1,8 +1,11 @@
 // 最小 AgentLoop，跑通 fake model 到工具调用再到最终回答的链路。
 
-import { createAgentEvent } from "../events/create-agent-event.js";
 import { StaticContextAssembler } from "../context/static-context-assembler.js";
 import type {
+  AgentEvent,
+  AgentEventDataByType,
+  AgentEventDraft,
+  AgentEventType,
   AgentRunInput,
   AgentRunResult,
   ContextAssembler,
@@ -73,7 +76,7 @@ export class AgentLoop {
       for (let step = 0; step < maxSteps; step += 1) {
         this.throwIfAborted(input.signal);
 
-        await this.emit(input, "model.requested", { step });
+        await this.emit(input, "model.requested", { step }, { step });
 
         const response = await this.modelClient.complete({
           runId: input.runId,
@@ -84,10 +87,15 @@ export class AgentLoop {
 
         this.throwIfAborted(input.signal);
 
-        await this.emit(input, "model.responded", {
-          content: response.message.content,
-          toolCalls: response.toolCalls ?? []
-        });
+        await this.emit(
+          input,
+          "model.responded",
+          {
+            content: response.message.content,
+            toolCalls: response.toolCalls ?? []
+          },
+          { step }
+        );
 
         messages.push(response.message);
 
@@ -95,21 +103,32 @@ export class AgentLoop {
           for (const toolCall of response.toolCalls) {
             this.throwIfAborted(input.signal);
 
-            const result = await this.toolGateway.execute({
+            const execution = await this.toolGateway.execute({
               runId: input.runId,
               sessionId: input.sessionId,
+              step,
               toolCall,
               signal: input.signal
             });
 
+            const result = execution.result;
             toolResults.push(result);
             const toolMessage = this.createToolMessage(result);
             messages.push(toolMessage);
-            await this.emit(input, "observation.appended", {
-              toolCallId: result.callId,
-              toolName: result.toolName,
-              message: { ...toolMessage }
-            });
+            await this.emit(
+              input,
+              "observation.appended",
+              {
+                toolCallId: result.callId,
+                toolName: result.toolName,
+                message: { ...toolMessage }
+              },
+              {
+                step,
+                toolCallId: result.callId,
+                parentEventId: execution.terminalEvent.id
+              }
+            );
             this.throwIfAborted(input.signal);
           }
           continue;
@@ -150,20 +169,24 @@ export class AgentLoop {
     }
   }
 
-  // 把 loop 内部动作转换成标准事件。
-  private async emit(
+  // 把 loop 内部动作转换成事件 draft，完整 envelope 由 EventLog 补齐。
+  private async emit<Type extends AgentEventType>(
     input: AgentRunInput,
-    type: string,
-    data?: Record<string, unknown>
-  ): Promise<void> {
-    await this.eventWriter.append(
-      createAgentEvent({
-        type,
-        runId: input.runId,
-        sessionId: input.sessionId,
-        data
-      })
-    );
+    type: Type,
+    data: AgentEventDataByType[Type],
+    correlation: Pick<
+      AgentEventDraft,
+      "step" | "toolCallId" | "parentEventId"
+    > = {}
+  ): Promise<AgentEvent> {
+    return this.eventWriter.append({
+      type,
+      runId: input.runId,
+      sessionId: input.sessionId,
+      source: "agent_loop",
+      ...correlation,
+      data
+    } as AgentEventDraft);
   }
 
   private createToolMessage(result: ToolResult): ModelMessage {

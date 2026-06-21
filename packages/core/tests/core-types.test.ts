@@ -5,8 +5,11 @@ import { describe, expect, test } from "vitest";
 import { CORE_SCHEMA_VERSION } from "../src/index.js";
 import type {
   AgentEvent,
+  AgentEventDraft,
+  AgentEventType,
   EventLog,
   EventReader,
+  EventSource,
   EventWriter,
   ModelClient,
   PolicyDecision,
@@ -21,6 +24,8 @@ describe("core public types", () => {
   test("exports the first milestone core API shape", async () => {
     const runId: RunId = "run_01";
     const sessionId: SessionId = "session_01";
+    const eventType: AgentEventType = "run.created";
+    const eventSource: EventSource = "agent_loop";
 
     const toolCall: ToolCall = {
       id: "call_01",
@@ -41,15 +46,26 @@ describe("core public types", () => {
 
     const event: AgentEvent = {
       schemaVersion: CORE_SCHEMA_VERSION,
-      type: "run.created",
+      id: "event_01",
+      seq: 1,
+      type: eventType,
       runId,
       sessionId,
+      source: eventSource,
       timestamp: "2026-06-15T00:00:00.000Z",
-      data: { source: "test" }
+      data: { userMessage: "start" }
+    };
+
+    const eventDraft: AgentEventDraft = {
+      type: eventType,
+      runId,
+      sessionId,
+      source: eventSource,
+      data: { userMessage: "start" }
     };
 
     const eventWriter: EventWriter = {
-      append: () => undefined
+      append: () => event
     };
 
     const eventReader: EventReader = {
@@ -77,7 +93,7 @@ describe("core public types", () => {
       messages: [{ role: "user", content: "start" }]
     });
 
-    expect(event.schemaVersion).toBe(1);
+    expect(eventWriter.append(eventDraft)).toEqual(event);
     expect(decision.kind).toBe("allow");
     expect(toolResult.callId).toBe(toolCall.id);
     expect(eventLog.readByRun(runId)).toEqual([event]);

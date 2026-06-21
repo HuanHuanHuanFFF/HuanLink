@@ -13,6 +13,7 @@ import {
 } from "../src/index.js";
 import type {
   AgentEvent,
+  AgentEventDraft,
   ContextAssembler,
   ModelClient,
   ModelMessage,
@@ -69,12 +70,14 @@ class AbortAfterEventLog extends InMemoryEventLog {
     super();
   }
 
-  override append(event: AgentEvent): void {
-    super.append(event);
+  override append(event: AgentEventDraft): AgentEvent {
+    const completed = super.append(event);
 
-    if (event.type === this.eventType) {
+    if (completed.type === this.eventType) {
       this.abortController.abort();
     }
+
+    return completed;
   }
 }
 
@@ -156,6 +159,41 @@ describe("mock agent run", () => {
       "model.responded",
       "run.completed"
     ]);
+    expect(runEvents.map((event) => event.seq)).toEqual([
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11
+    ]);
+    expect(runEvents[2]).toMatchObject({ step: 0 });
+    expect(runEvents[3]).toMatchObject({ step: 0 });
+    expect(runEvents[4]).toMatchObject({
+      step: 0,
+      toolCallId: "call_echo_01"
+    });
+    expect(runEvents[5]).toMatchObject({
+      step: 0,
+      toolCallId: "call_echo_01"
+    });
+    expect(runEvents[6]).toMatchObject({
+      step: 0,
+      toolCallId: "call_echo_01"
+    });
+    expect(runEvents[6]?.id).toEqual(expect.any(String));
+    expect(runEvents[7]).toMatchObject({
+      step: 0,
+      toolCallId: "call_echo_01",
+      parentEventId: runEvents[6]?.id
+    });
+    expect(runEvents[8]).toMatchObject({ step: 1 });
+    expect(runEvents[9]).toMatchObject({ step: 1 });
     expect(eventLog.events[1]?.data).toEqual({
       messages: [
         {
@@ -452,6 +490,11 @@ describe("mock agent run", () => {
         toolName: "echo"
       }
     });
+    expect(eventLog.events[7]).toMatchObject({
+      step: 0,
+      toolCallId: "call_abort_after_tool_completed_01",
+      parentEventId: eventLog.events[6]?.id
+    });
   });
 
   test("uses the original tool call id and name when a tool returns mismatched identity", async () => {
@@ -707,6 +750,11 @@ describe("mock agent run", () => {
         isError: true
       }
     });
+    expect(eventLog.events[7]).toMatchObject({
+      step: 0,
+      toolCallId: "call_missing_01",
+      parentEventId: eventLog.events[6]?.id
+    });
     expect(modelClient.calls).toHaveLength(2);
   });
 
@@ -791,6 +839,11 @@ describe("mock agent run", () => {
         toolName: "echo",
         isError: true
       }
+    });
+    expect(eventLog.events[7]).toMatchObject({
+      step: 0,
+      toolCallId: "call_denied_01",
+      parentEventId: eventLog.events[6]?.id
     });
     expect(modelClient.calls).toHaveLength(2);
   });
@@ -882,6 +935,11 @@ describe("mock agent run", () => {
         toolName: "explode",
         isError: true
       }
+    });
+    expect(eventLog.events[7]).toMatchObject({
+      step: 0,
+      toolCallId: "call_explode_01",
+      parentEventId: eventLog.events[6]?.id
     });
     expect(modelClient.calls).toHaveLength(2);
   });

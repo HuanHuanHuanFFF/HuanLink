@@ -1,15 +1,26 @@
-// 创建标准 AgentEvent，统一补齐 schema 版本和时间戳。
+import { randomUUID } from "node:crypto";
 
 import { CORE_SCHEMA_VERSION } from "../types.js";
-import type { AgentEvent } from "../types.js";
+import type { AgentEvent, AgentEventDraft } from "../types.js";
 
-// 根据调用方提供的事件内容生成完整事件。
-export function createAgentEvent(
-  input: Omit<AgentEvent, "schemaVersion" | "timestamp">
+// 根据 EventLog 分配的 seq，把 draft 补齐成完整 AgentEvent。
+export function completeAgentEvent(
+  draft: AgentEventDraft,
+  seq: number
 ): AgentEvent {
   return {
-    ...input,
     schemaVersion: CORE_SCHEMA_VERSION,
-    timestamp: new Date().toISOString()
-  };
+    id: randomUUID(),
+    seq,
+    timestamp: new Date().toISOString(),
+    type: draft.type,
+    runId: draft.runId,
+    sessionId: draft.sessionId,
+    source: draft.source,
+    ...(draft.step === undefined ? {} : { step: draft.step }),
+    ...(draft.toolCallId === undefined ? {} : { toolCallId: draft.toolCallId }),
+    ...(draft.parentEventId === undefined
+      ? {} : { parentEventId: draft.parentEventId }),
+    data: draft.data
+  } as AgentEvent;
 }

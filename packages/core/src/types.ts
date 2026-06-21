@@ -1,7 +1,7 @@
 // Core 运行链路的共享类型定义。
 
 // 当前 core 事件 schema 版本。
-export const CORE_SCHEMA_VERSION = 1;
+export const CORE_SCHEMA_VERSION = "1.0" as const;
 
 // 事件 schema 版本类型。
 export type CoreSchemaVersion = typeof CORE_SCHEMA_VERSION;
@@ -11,16 +11,6 @@ export type RunId = string;
 
 // 一段会话的唯一标识。
 export type SessionId = string;
-
-// Agent 运行过程中的可观察事件。
-export type AgentEvent = {
-  schemaVersion: CoreSchemaVersion;
-  type: string;
-  runId: RunId;
-  sessionId: SessionId;
-  timestamp: string;
-  data?: Record<string, unknown>;
-};
 
 // 传给模型或由模型返回的消息。
 export type ModelMessage = {
@@ -53,9 +43,130 @@ export type ModelResponse = {
   toolCalls?: ToolCall[];
 };
 
+// 策略引擎对工具调用的决策结果。
+export type PolicyDecision =
+  | { kind: "allow"; reason: string }
+  | { kind: "deny"; reason: string }
+  | { kind: "requires_approval"; reason: string };
+
+// 当前 core 已知的 agent 事件类型。
+export const AGENT_EVENT_TYPES = [
+  "run.created",
+  "context.built",
+  "model.requested",
+  "model.responded",
+  "tool.requested",
+  "policy.decided",
+  "tool.completed",
+  "tool.failed",
+  "tool.blocked",
+  "observation.appended",
+  "run.completed",
+  "run.max_steps_exceeded",
+  "run.failed",
+  "run.cancelled"
+] as const;
+
+export type AgentEventType = (typeof AGENT_EVENT_TYPES)[number];
+
+// 事件来源，表示哪个运行组件发出了事件。
+export const AGENT_EVENT_SOURCES = [
+  "agent_loop",
+  "tool_gateway"
+] as const;
+
+export type EventSource = (typeof AGENT_EVENT_SOURCES)[number];
+
+// 各事件类型对应的业务 payload。
+export type AgentEventDataByType = {
+  "run.created": {
+    userMessage: string;
+  };
+  "context.built": {
+    messages: ModelMessage[];
+    messageCount: number;
+  };
+  "model.requested": {
+    step: number;
+  };
+  "model.responded": {
+    content: string;
+    toolCalls: ToolCall[];
+  };
+  "tool.requested": {
+    toolCall: ToolCall;
+  };
+  "policy.decided": {
+    decision: PolicyDecision;
+    toolCall: ToolCall;
+  };
+  "tool.completed": {
+    result: ToolResult;
+    toolCall: ToolCall;
+  };
+  "tool.failed": {
+    result: ToolResult;
+    toolCall: ToolCall;
+  };
+  "tool.blocked": {
+    result: ToolResult;
+    toolCall: ToolCall;
+  };
+  "observation.appended": {
+    toolCallId: string;
+    toolName: string;
+    message: ModelMessage;
+  };
+  "run.completed": {
+    finalAnswer: string;
+  };
+  "run.max_steps_exceeded": {
+    maxSteps: number;
+  };
+  "run.failed": {
+    error: string;
+  };
+  "run.cancelled": {
+    reason: string;
+  };
+};
+
+// 调用方写入事件时只提供业务字段，完整 envelope 由 EventLog 补齐。
+export type AgentEventDraftOf<Type extends AgentEventType> = {
+  type: Type;
+  runId: RunId;
+  sessionId: SessionId;
+  source: EventSource;
+  step?: number;
+  toolCallId?: string;
+  parentEventId?: string;
+  data: AgentEventDataByType[Type];
+};
+
+export type AgentEventDraft = {
+  [Type in AgentEventType]: AgentEventDraftOf<Type>;
+}[AgentEventType];
+
+// 已补齐 schema、id、seq 和 timestamp 的完整事件。
+export type AgentEventOf<Type extends AgentEventType> =
+  AgentEventDraftOf<Type> & {
+    schemaVersion: CoreSchemaVersion;
+    id: string;
+    seq: number;
+    timestamp: string;
+  };
+
+export type AgentEvent = {
+  [Type in AgentEventType]: AgentEventOf<Type>;
+}[AgentEventType];
+
+export type ToolGatewayResult = {
+  result: ToolResult;
+  terminalEvent: AgentEvent;
+};
+
 // 模型适配器接口，真实 LLM 和 fake model 都实现它。
 export type ModelClient = {
-  // 根据当前消息上下文返回下一步模型响应。
   complete(input: {
     runId: RunId;
     sessionId: SessionId;
@@ -64,21 +175,13 @@ export type ModelClient = {
   }): Promise<ModelResponse>;
 };
 
-// 策略引擎对工具调用的决策结果。
-export type PolicyDecision =
-  | { kind: "allow"; reason: string }
-  | { kind: "deny"; reason: string }
-  | { kind: "requires_approval"; reason: string };
-
-// 事件写入接口，后续内存和 JSONL 实现都遵守它。
+// 事件写入接口，接收 draft 并返回完整事件。
 export type EventWriter = {
-  // 追加记录一个 agent 运行事件。
-  append(event: AgentEvent): Promise<void> | void;
+  append(event: AgentEventDraft): Promise<AgentEvent> | AgentEvent;
 };
 
 // 事件读取接口，按 runId 取回事件序列。
 export type EventReader = {
-  // 读取某次 run 的全部事件，顺序由具体实现保证。
   readByRun(runId: RunId): Promise<AgentEvent[]> | AgentEvent[];
 };
 
@@ -87,7 +190,6 @@ export type EventLog = EventWriter & EventReader;
 
 // 工具调用策略接口，后续可扩展审批和权限规则。
 export type PolicyEngine = {
-  // 判断一次工具调用是否允许执行。
   decide(input: {
     runId: RunId;
     sessionId: SessionId;
@@ -98,7 +200,6 @@ export type PolicyEngine = {
 // 工具接口，所有工具都通过 ToolGateway 调用。
 export type Tool = {
   name: string;
-  // 执行一次工具调用并返回结果。
   execute(toolCall: ToolCall): Promise<ToolResult> | ToolResult;
 };
 
@@ -111,6 +212,7 @@ export type AgentRunInput = {
   signal?: AbortSignal;
 };
 
+// 上下文组装接口，负责生成模型初始消息。
 export type ContextAssembler = {
   assemble(input: AgentRunInput): Promise<ModelMessage[]> | ModelMessage[];
 };

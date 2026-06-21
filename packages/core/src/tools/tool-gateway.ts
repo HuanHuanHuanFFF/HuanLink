@@ -1,13 +1,17 @@
 // 最小工具网关，负责策略检查、工具查找、执行和事件记录。
 
-import { createAgentEvent } from "../events/create-agent-event.js";
 import type {
+  AgentEvent,
+  AgentEventDataByType,
+  AgentEventDraft,
+  AgentEventType,
   EventWriter,
   PolicyEngine,
   RunId,
   SessionId,
   Tool,
   ToolCall,
+  ToolGatewayResult,
   ToolResult
 } from "../types.js";
 
@@ -31,9 +35,10 @@ export class ToolGateway {
   async execute(input: {
     runId: RunId;
     sessionId: SessionId;
+    step: number;
     toolCall: ToolCall;
     signal?: AbortSignal;
-  }): Promise<ToolResult> {
+  }): Promise<ToolGatewayResult> {
     this.throwIfAborted(input.signal);
 
     await this.emit(input, "tool.requested", {
@@ -57,12 +62,12 @@ export class ToolGateway {
         `Tool call blocked by policy: ${decision.reason}`
       );
 
-      await this.emit(input, "tool.blocked", {
+      const terminalEvent = await this.emit(input, "tool.blocked", {
         result,
         toolCall: input.toolCall
       });
 
-      return result;
+      return { result, terminalEvent };
     }
 
     const tool = this.tools.get(input.toolCall.name);
@@ -73,12 +78,12 @@ export class ToolGateway {
         `Unknown tool: ${input.toolCall.name}`
       );
 
-      await this.emit(input, "tool.failed", {
+      const terminalEvent = await this.emit(input, "tool.failed", {
         result,
         toolCall: input.toolCall
       });
 
-      return result;
+      return { result, terminalEvent };
     }
 
     this.throwIfAborted(input.signal);
@@ -90,12 +95,12 @@ export class ToolGateway {
 
       const result = this.normalizeResult(input.toolCall, rawResult);
 
-      await this.emit(input, "tool.completed", {
+      const terminalEvent = await this.emit(input, "tool.completed", {
         result,
         toolCall: input.toolCall
       });
 
-      return result;
+      return { result, terminalEvent };
     } catch (error) {
       if (this.isCancellation(input.signal, error)) {
         throw error;
@@ -106,12 +111,12 @@ export class ToolGateway {
         `Tool execution failed: ${error instanceof Error ? error.message : String(error)}`
       );
 
-      await this.emit(input, "tool.failed", {
+      const terminalEvent = await this.emit(input, "tool.failed", {
         result,
         toolCall: input.toolCall
       });
 
-      return result;
+      return { result, terminalEvent };
     }
   }
 
@@ -135,20 +140,26 @@ export class ToolGateway {
     };
   }
 
-  // 记录工具网关产生的事件。
-  private async emit(
-    input: { runId: RunId; sessionId: SessionId },
-    type: string,
-    data?: Record<string, unknown>
-  ): Promise<void> {
-    await this.eventWriter.append(
-      createAgentEvent({
-        type,
-        runId: input.runId,
-        sessionId: input.sessionId,
-        data
-      })
-    );
+  // 记录工具网关产生的事件 draft，完整 envelope 由 EventLog 补齐。
+  private async emit<Type extends AgentEventType>(
+    input: {
+      runId: RunId;
+      sessionId: SessionId;
+      step: number;
+      toolCall: ToolCall;
+    },
+    type: Type,
+    data: AgentEventDataByType[Type]
+  ): Promise<AgentEvent> {
+    return this.eventWriter.append({
+      type,
+      runId: input.runId,
+      sessionId: input.sessionId,
+      source: "tool_gateway",
+      step: input.step,
+      toolCallId: input.toolCall.id,
+      data
+    } as AgentEventDraft);
   }
 
   private throwIfAborted(signal?: AbortSignal): void {

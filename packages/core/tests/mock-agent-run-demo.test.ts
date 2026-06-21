@@ -47,7 +47,7 @@ describe("mock agent run demo", () => {
     const events = content
       .split(/\r?\n/u)
       .filter((line) => line.length > 0)
-      .map((line) => JSON.parse(line) as { type: string });
+      .map((line) => JSON.parse(line) as { seq: number; type: string });
 
     expect(events.map((event) => event.type)).toEqual([
       "run.created",
@@ -61,6 +61,19 @@ describe("mock agent run demo", () => {
       "model.requested",
       "model.responded",
       "run.completed"
+    ]);
+    expect(events.map((event) => event.seq)).toEqual([
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11
     ]);
   });
 });

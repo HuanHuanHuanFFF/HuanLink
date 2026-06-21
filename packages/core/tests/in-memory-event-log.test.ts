@@ -1,63 +1,91 @@
-// 验证内存 EventLog 的 append/readByRun 行为。
-
 import { describe, expect, test } from "vitest";
 
-import {
-  CORE_SCHEMA_VERSION,
-  InMemoryEventLog
-} from "../src/index.js";
-import type { AgentEvent, RunId, SessionId } from "../src/index.js";
+import { CORE_SCHEMA_VERSION, InMemoryEventLog } from "../src/index.js";
+import type { RunId, SessionId } from "../src/index.js";
 
 describe("InMemoryEventLog", () => {
-  // 覆盖 Step 2 要求的 runId 过滤和顺序稳定。
-  test("reads events for one run in append order", () => {
+  test("completes event drafts and reads events for one run in append order", () => {
     const eventLog = new InMemoryEventLog();
     const runA: RunId = "run_a";
     const runB: RunId = "run_b";
     const sessionId: SessionId = "session_01";
 
-    const first = createEvent({
+    const first = eventLog.append({
+      type: "run.created",
       runId: runA,
       sessionId,
-      type: "run.created"
+      source: "agent_loop",
+      data: { userMessage: "first" }
     });
-    const otherRun = createEvent({
+    const otherRun = eventLog.append({
+      type: "run.created",
       runId: runB,
       sessionId,
-      type: "run.created"
+      source: "agent_loop",
+      data: { userMessage: "other" }
     });
-    const second = createEvent({
+    const second = eventLog.append({
+      type: "run.completed",
       runId: runA,
       sessionId,
-      type: "run.completed"
+      source: "agent_loop",
+      data: { finalAnswer: "done" }
     });
-
-    eventLog.append(first);
-    eventLog.append(otherRun);
-    eventLog.append(second);
 
     expect(eventLog.readByRun(runA)).toEqual([first, second]);
     expect(eventLog.readByRun(runB)).toEqual([otherRun]);
+    expect(first).toMatchObject({
+      schemaVersion: CORE_SCHEMA_VERSION,
+      seq: 1,
+      type: "run.created",
+      runId: runA,
+      sessionId,
+      source: "agent_loop",
+      data: { userMessage: "first" }
+    });
+    expect(second.seq).toBe(2);
+    expect(otherRun.seq).toBe(1);
+    expect(first.id).toEqual(expect.any(String));
+    expect(first.timestamp).toEqual(expect.any(String));
   });
 
-  // 未写入的 run 应返回空数组，方便调用方直接遍历。
+  test("assigns contiguous seq values per run", () => {
+    const eventLog = new InMemoryEventLog();
+    const runId: RunId = "run_seq";
+    const sessionId: SessionId = "session_seq";
+
+    eventLog.append({
+      type: "run.created",
+      runId,
+      sessionId,
+      source: "agent_loop",
+      data: { userMessage: "start" }
+    });
+    eventLog.append({
+      type: "model.requested",
+      runId,
+      sessionId,
+      source: "agent_loop",
+      data: { step: 0 }
+    });
+    eventLog.append({
+      type: "run.completed",
+      runId,
+      sessionId,
+      source: "agent_loop",
+      data: { finalAnswer: "done" }
+    });
+
+    expect(eventLog.readByRun(runId).map((event) => event.seq)).toEqual([
+      1,
+      2,
+      3
+    ]);
+  });
+
   test("returns an empty array for unknown run", () => {
     const eventLog = new InMemoryEventLog();
 
     expect(eventLog.readByRun("missing_run")).toEqual([]);
   });
 });
-
-function createEvent(input: {
-  runId: RunId;
-  sessionId: SessionId;
-  type: string;
-}): AgentEvent {
-  return {
-    schemaVersion: CORE_SCHEMA_VERSION,
-    type: input.type,
-    runId: input.runId,
-    sessionId: input.sessionId,
-    timestamp: "2026-06-16T00:00:00.000Z"
-  };
-}

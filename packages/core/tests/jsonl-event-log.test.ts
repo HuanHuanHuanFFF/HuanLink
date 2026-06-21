@@ -1,5 +1,3 @@
-// 验证 JSONL EventLog 的文件写入、读取和 mock run 持久化行为。
-
 import {
   appendFile,
   mkdtemp,
@@ -23,7 +21,12 @@ import {
   ToolGateway,
   echoTool
 } from "../src/index.js";
-import type { AgentEvent, RunId, SessionId } from "../src/index.js";
+import type {
+  AgentEvent,
+  AgentEventDraft,
+  RunId,
+  SessionId
+} from "../src/index.js";
 
 let tempRoot: string;
 let baseDir: string;
@@ -38,25 +41,40 @@ afterEach(async () => {
 });
 
 describe("JsonlEventLog", () => {
-  test("appends complete JSON lines and reads one run in append order", async () => {
+  test("appends complete JSON lines from drafts and reads one run in append order", async () => {
     const eventLog = new JsonlEventLog({ baseDir });
     const runA: RunId = "run_a";
     const runB: RunId = "run_b";
     const sessionId: SessionId = "session_01";
-    const first = createEvent({ runId: runA, sessionId, type: "run.created" });
-    const otherRun = createEvent({ runId: runB, sessionId, type: "run.created" });
-    const second = createEvent({
+
+    const first = await eventLog.append(
+      createDraft({ runId: runA, sessionId, type: "run.created" })
+    );
+    const otherRun = await eventLog.append(
+      createDraft({ runId: runB, sessionId, type: "run.created" })
+    );
+    const second = await eventLog.append({
+      type: "run.completed",
       runId: runA,
       sessionId,
-      type: "run.completed"
+      source: "agent_loop",
+      data: { finalAnswer: "done" }
     });
-
-    await eventLog.append(first);
-    await eventLog.append(otherRun);
-    await eventLog.append(second);
 
     expect(await eventLog.readByRun(runA)).toEqual([first, second]);
     expect(await eventLog.readByRun(runB)).toEqual([otherRun]);
+    expect(first).toMatchObject({
+      schemaVersion: CORE_SCHEMA_VERSION,
+      seq: 1,
+      type: "run.created",
+      runId: runA,
+      sessionId,
+      source: "agent_loop"
+    });
+    expect(first.id).toEqual(expect.any(String));
+    expect(first.timestamp).toEqual(expect.any(String));
+    expect(second.seq).toBe(2);
+    expect(otherRun.seq).toBe(1);
 
     const eventFiles = await findEventsFiles(baseDir);
     expect(eventFiles).toHaveLength(2);
@@ -68,6 +86,66 @@ describe("JsonlEventLog", () => {
     expect(rawLines.map((line) => JSON.parse(line))).toEqual([first, second]);
   });
 
+  test("queues concurrent appends for the same run in call order", async () => {
+    const eventLog = new JsonlEventLog({ baseDir });
+    const runId: RunId = "run_concurrent";
+    const sessionId: SessionId = "session_concurrent";
+
+    const completed = await Promise.all([
+      eventLog.append(createDraft({ runId, sessionId, type: "run.created" })),
+      eventLog.append({
+        type: "model.requested",
+        runId,
+        sessionId,
+        source: "agent_loop",
+        data: { step: 0 }
+      }),
+      eventLog.append({
+        type: "run.completed",
+        runId,
+        sessionId,
+        source: "agent_loop",
+        data: { finalAnswer: "done" }
+      })
+    ]);
+
+    expect(completed.map((event) => event.seq)).toEqual([1, 2, 3]);
+    expect((await eventLog.readByRun(runId)).map((event) => event.seq)).toEqual([
+      1,
+      2,
+      3
+    ]);
+  });
+
+  test("continues seq after a new instance appends to an existing run file", async () => {
+    const runId: RunId = "run_restart";
+    const sessionId: SessionId = "session_restart";
+    const firstEventLog = new JsonlEventLog({ baseDir });
+
+    await firstEventLog.append(createDraft({ runId, sessionId, type: "run.created" }));
+    await firstEventLog.append({
+      type: "model.requested",
+      runId,
+      sessionId,
+      source: "agent_loop",
+      data: { step: 0 }
+    });
+
+    const restartedEventLog = new JsonlEventLog({ baseDir });
+    const completed = await restartedEventLog.append({
+      type: "run.completed",
+      runId,
+      sessionId,
+      source: "agent_loop",
+      data: { finalAnswer: "after restart" }
+    });
+
+    expect(completed.seq).toBe(3);
+    expect(
+      (await restartedEventLog.readByRun(runId)).map((event) => event.seq)
+    ).toEqual([1, 2, 3]);
+  });
+
   test("returns an empty array when the run file does not exist", async () => {
     const eventLog = new JsonlEventLog({ baseDir });
 
@@ -76,13 +154,13 @@ describe("JsonlEventLog", () => {
 
   test("skips blank lines while reading", async () => {
     const eventLog = new JsonlEventLog({ baseDir });
-    const event = createEvent({
-      runId: "run_blank_lines",
-      sessionId: "session_blank_lines",
-      type: "run.created"
-    });
-
-    await eventLog.append(event);
+    const event = await eventLog.append(
+      createDraft({
+        runId: "run_blank_lines",
+        sessionId: "session_blank_lines",
+        type: "run.created"
+      })
+    );
 
     const [eventFile] = await findEventsFiles(baseDir);
     await appendFile(eventFile, "\n  \n", "utf8");
@@ -92,13 +170,14 @@ describe("JsonlEventLog", () => {
 
   test("throws a clear error when a JSONL line is invalid", async () => {
     const eventLog = new JsonlEventLog({ baseDir });
-    const event = createEvent({
-      runId: "run_bad_json",
-      sessionId: "session_bad_json",
-      type: "run.created"
-    });
 
-    await eventLog.append(event);
+    await eventLog.append(
+      createDraft({
+        runId: "run_bad_json",
+        sessionId: "session_bad_json",
+        type: "run.created"
+      })
+    );
 
     const [eventFile] = await findEventsFiles(baseDir);
     await appendFile(eventFile, "{bad json}\n", "utf8");
@@ -108,20 +187,40 @@ describe("JsonlEventLog", () => {
     );
   });
 
+  test("throws a clear error when a JSONL event envelope is invalid", async () => {
+    const eventLog = new JsonlEventLog({ baseDir });
+
+    await eventLog.append(
+      createDraft({
+        runId: "run_bad_envelope",
+        sessionId: "session_bad_envelope",
+        type: "run.created"
+      })
+    );
+
+    const [eventFile] = await findEventsFiles(baseDir);
+    await appendFile(eventFile, '{"runId":"run_bad_envelope"}\n', "utf8");
+
+    await expect(eventLog.readByRun("run_bad_envelope")).rejects.toThrow(
+      /Invalid JSONL EventLog event envelope on line 2 for run "run_bad_envelope"/
+    );
+  });
+
   test("filters out events in the file that belong to another run", async () => {
     const eventLog = new JsonlEventLog({ baseDir });
-    const runEvent = createEvent({
-      runId: "run_current",
-      sessionId: "session_current",
-      type: "run.created"
-    });
-    const strayEvent = createEvent({
+    const runEvent = await eventLog.append(
+      createDraft({
+        runId: "run_current",
+        sessionId: "session_current",
+        type: "run.created"
+      })
+    );
+    const strayEvent = createCompleteEvent({
       runId: "run_stray",
       sessionId: "session_stray",
-      type: "run.created"
+      type: "run.created",
+      seq: 99
     });
-
-    await eventLog.append(runEvent);
 
     const [eventFile] = await findEventsFiles(baseDir);
     await appendFile(eventFile, `${JSON.stringify(strayEvent)}\n`, "utf8");
@@ -132,13 +231,13 @@ describe("JsonlEventLog", () => {
   test("keeps path-like run ids inside the configured base directory", async () => {
     const eventLog = new JsonlEventLog({ baseDir });
     const runId = "../escape\\..\\run";
-    const event = createEvent({
-      runId,
-      sessionId: "session_path_guard",
-      type: "run.created"
-    });
-
-    await eventLog.append(event);
+    const event = await eventLog.append(
+      createDraft({
+        runId,
+        sessionId: "session_path_guard",
+        type: "run.created"
+      })
+    );
 
     expect(await eventLog.readByRun(runId)).toEqual([event]);
 
@@ -158,7 +257,7 @@ describe("JsonlEventLog", () => {
 
     await expect(
       eventLog.append(
-        createEvent({
+        createDraft({
           runId: "run_write_failure",
           sessionId: "session_write_failure",
           type: "run.created"
@@ -202,6 +301,54 @@ describe("JsonlEventLog", () => {
       "model.responded",
       "run.completed"
     ]);
+    expect(runEvents.map((event) => event.seq)).toEqual([
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11
+    ]);
+    expect(runEvents.map((event) => event.source)).toEqual([
+      "agent_loop",
+      "agent_loop",
+      "agent_loop",
+      "agent_loop",
+      "tool_gateway",
+      "tool_gateway",
+      "tool_gateway",
+      "agent_loop",
+      "agent_loop",
+      "agent_loop",
+      "agent_loop"
+    ]);
+    expect(runEvents[2]).toMatchObject({ step: 0 });
+    expect(runEvents[3]).toMatchObject({ step: 0 });
+    expect(runEvents[4]).toMatchObject({
+      step: 0,
+      toolCallId: "call_echo_01"
+    });
+    expect(runEvents[5]).toMatchObject({
+      step: 0,
+      toolCallId: "call_echo_01"
+    });
+    expect(runEvents[6]).toMatchObject({
+      step: 0,
+      toolCallId: "call_echo_01"
+    });
+    expect(runEvents[6]?.id).toEqual(expect.any(String));
+    expect(runEvents[7]).toMatchObject({
+      step: 0,
+      toolCallId: "call_echo_01",
+      parentEventId: runEvents[6]?.id
+    });
+    expect(runEvents[8]).toMatchObject({ step: 1 });
+    expect(runEvents[9]).toMatchObject({ step: 1 });
     expect(runEvents.at(0)?.data).toEqual({
       userMessage: "Echo the fake input"
     });
@@ -228,17 +375,36 @@ describe("JsonlEventLog", () => {
   });
 });
 
-function createEvent(input: {
+function createDraft(input: {
   runId: RunId;
   sessionId: SessionId;
-  type: string;
-}): AgentEvent {
+  type: "run.created";
+}): AgentEventDraft {
   return {
-    schemaVersion: CORE_SCHEMA_VERSION,
     type: input.type,
     runId: input.runId,
     sessionId: input.sessionId,
-    timestamp: "2026-06-16T00:00:00.000Z"
+    source: "agent_loop",
+    data: { userMessage: "start" }
+  };
+}
+
+function createCompleteEvent(input: {
+  runId: RunId;
+  sessionId: SessionId;
+  type: "run.created";
+  seq: number;
+}): AgentEvent {
+  return {
+    schemaVersion: CORE_SCHEMA_VERSION,
+    id: `event_${input.seq}`,
+    seq: input.seq,
+    timestamp: "2026-06-16T00:00:00.000Z",
+    type: input.type,
+    runId: input.runId,
+    sessionId: input.sessionId,
+    source: "agent_loop",
+    data: { userMessage: "stray" }
   };
 }
 
