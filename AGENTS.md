@@ -71,4 +71,6 @@ Pull requests should include:
 
 Before editing, inspect the relevant files and follow the current repository shape. For non-trivial work, make a short plan first. After changes, run whatever verification exists; if no verification exists yet, state that clearly.
 
+When dispatching subagents, default to GPT-5.4 with high reasoning unless the user specifies a different model or effort.
+
 Do not expand project boundaries prematurely. This repository is still defining its runtime architecture through small, testable steps.
