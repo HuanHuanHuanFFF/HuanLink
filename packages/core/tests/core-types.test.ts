@@ -69,12 +69,12 @@ describe("core public types", () => {
     };
 
     const eventReader: EventReader = {
-      readByRun: () => [event]
+    readRunEvents: () => [event]
     };
 
     const eventLog: EventLog = {
       append: eventWriter.append,
-      readByRun: eventReader.readByRun
+    readRunEvents: eventReader.readRunEvents
     };
 
     const modelClient: ModelClient = {
@@ -96,7 +96,7 @@ describe("core public types", () => {
     expect(eventWriter.append(eventDraft)).toEqual(event);
     expect(decision.kind).toBe("allow");
     expect(toolResult.callId).toBe(toolCall.id);
-    expect(eventLog.readByRun(runId)).toEqual([event]);
+  expect(eventLog.readRunEvents(runId)).toEqual([event]);
     expect(response.message.content).toBe("ready");
     expect(response.toolCalls).toEqual([toolCall]);
   });

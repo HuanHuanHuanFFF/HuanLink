@@ -53,7 +53,7 @@ export async function runMockAgentDemo(
   log(`input: ${runInput.userMessage}`);
 
   const result = await loop.run(runInput);
-  const events = await eventLog.readByRun(runInput.runId);
+  const events = await eventLog.readRunEvents(runInput.runId);
 
   log(`finalAnswer: ${result.finalAnswer}`);
   log("toolResults:");

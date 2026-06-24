@@ -32,8 +32,8 @@ describe("InMemoryEventLog", () => {
       data: { finalAnswer: "done" }
     });
 
-    expect(eventLog.readByRun(runA)).toEqual([first, second]);
-    expect(eventLog.readByRun(runB)).toEqual([otherRun]);
+    expect(eventLog.readRunEvents(runA)).toEqual([first, second]);
+    expect(eventLog.readRunEvents(runB)).toEqual([otherRun]);
     expect(first).toMatchObject({
       schemaVersion: CORE_SCHEMA_VERSION,
       seq: 1,
@@ -76,7 +76,7 @@ describe("InMemoryEventLog", () => {
       data: { finalAnswer: "done" }
     });
 
-    expect(eventLog.readByRun(runId).map((event) => event.seq)).toEqual([
+    expect(eventLog.readRunEvents(runId).map((event) => event.seq)).toEqual([
       1,
       2,
       3
@@ -86,6 +86,6 @@ describe("InMemoryEventLog", () => {
   test("returns an empty array for unknown run", () => {
     const eventLog = new InMemoryEventLog();
 
-    expect(eventLog.readByRun("missing_run")).toEqual([]);
+    expect(eventLog.readRunEvents("missing_run")).toEqual([]);
   });
 });

@@ -28,7 +28,7 @@ describe("ToolGateway", () => {
       step: 3,
       toolCall
     });
-    const events = eventLog.readByRun("run_direct_gateway_01");
+    const events = eventLog.readRunEvents("run_direct_gateway_01");
 
     expect(execution.result).toEqual({
       callId: "call_direct_gateway_01",

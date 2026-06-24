@@ -123,7 +123,7 @@ describe("mock agent run", () => {
       userMessage: "Echo the fake input"
     });
 
-    const runEvents = eventLog.readByRun("run_mock_01");
+    const runEvents = eventLog.readRunEvents("run_mock_01");
 
     expect(result.finalAnswer).toBe("Final answer: hello from fake model");
     expect(result.toolResults).toEqual([
