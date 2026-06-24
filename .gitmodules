@@ -22,3 +22,6 @@
 [submodule "references/eve"]
 	path = references/eve
 	url = https://github.com/vercel/eve.git
+[submodule "references/maibot"]
+	path = references/maibot
+	url = https://github.com/Mai-with-u/MaiBot.git
