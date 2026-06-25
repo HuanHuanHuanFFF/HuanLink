@@ -17,3 +17,7 @@ export * from "./events/event-log.js";
 export * from "./events/types.js";
 export * from "./context/types.js";
 export * from "./loop/types.js";
+export * from "./replay/types.js";
+export * from "./replay/create-run-view.js";
+export * from "./replay/run-view-reader.js";
+export * from "./replay/event-log-run-view-reader.js";
