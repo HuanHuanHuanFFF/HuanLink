@@ -1,5 +1,12 @@
 // Runtime logging 模块的公开类型，保持与具体日志库解耦。
-export type RuntimeLogFields = Record<string, unknown>;
+export type RuntimeLogSource = string;
+
+// source 是 runtime log v0 的第一个 reserved field，但不是 required field。
+export type RuntimeLogReservedFields = {
+  readonly source?: RuntimeLogSource;
+};
+
+export type RuntimeLogFields = RuntimeLogReservedFields & Record<string, unknown>;
 
 export type RuntimeLogLevel = "debug" | "info" | "warn" | "error";
 

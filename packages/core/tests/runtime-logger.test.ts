@@ -3,7 +3,11 @@ import { Writable } from "node:stream";
 import { describe, expect, test } from "vitest";
 
 import * as core from "../src/index.js";
-import type { PinoRuntimeLoggerOptions, RuntimeLogger } from "../src/index.js";
+import type {
+  PinoRuntimeLoggerOptions,
+  RuntimeLogReservedFields,
+  RuntimeLogger
+} from "../src/index.js";
 
 describe("NoopRuntimeLogger", () => {
   test("ignores log calls and keeps child chaining available", () => {
@@ -70,6 +74,22 @@ describe("createPinoRuntimeLogger", () => {
     });
   });
 
+  test("writes the reserved source field when provided on a log line", () => {
+    const sink = createMemorySink();
+    const logger = core.createPinoRuntimeLogger({}, sink);
+
+    logger.info("with source", {
+      source: "agent_loop",
+      step: 6
+    });
+
+    expect(JSON.parse(sink.lines[0] ?? "")).toMatchObject({
+      source: "agent_loop",
+      step: 6,
+      msg: "with source"
+    });
+  });
+
   test("applies default redaction and appends custom redaction paths", () => {
     const sink = createMemorySink();
     const options: PinoRuntimeLoggerOptions = {
@@ -121,6 +141,7 @@ describe("createPinoRuntimeLogger", () => {
       sink
     );
     const child = logger.child({
+      source: "tool_gateway",
       authorization: "Bearer child-secret",
       module: "gateway"
     });
@@ -129,6 +150,7 @@ describe("createPinoRuntimeLogger", () => {
 
     expect(JSON.parse(sink.lines[0] ?? "")).toMatchObject({
       service: "core-runtime",
+      source: "tool_gateway",
       token: "[Redacted]",
       authorization: "[Redacted]",
       module: "gateway",
@@ -180,6 +202,7 @@ describe("createPinoRuntimeLogger", () => {
 test("RuntimeLogger rejects ambiguous second string arguments at type level", () => {
   const logger = new core.NoopRuntimeLogger();
   const options: PinoRuntimeLoggerOptions = { level: "info" };
+  const reservedFields: RuntimeLogReservedFields = { source: "agent_loop" };
 
   logger.info("valid", { step: 1 });
   // @ts-expect-error RuntimeLogger should not accept a second string argument
@@ -188,6 +211,7 @@ test("RuntimeLogger rejects ambiguous second string arguments at type level", ()
   const invalidOptions: PinoRuntimeLoggerOptions = { pretty: true };
 
   expect(options.level).toBe("info");
+  expect(reservedFields.source).toBe("agent_loop");
   expect(typeof invalidOptions).toBe("object");
 });
 
