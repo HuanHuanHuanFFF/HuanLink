@@ -68,7 +68,7 @@ P1+ 再看：
 开发基础的replay模块,可初步检验当前的event log
 - [ ] 将部分硬编码改为可配置项
 - [ ] 接入Vercel AI SDK
-- [ ] 接入log模块
+- [x] 接入log模块
 ### MaiBot分析结果
 #### agent回复链
 MaiBot在接收群聊消息的时候会先写入缓存,达到一定阈值后刷出到历史记录,同时触发接下来的agent链
@@ -94,3 +94,28 @@ Replyer
 没看见有我想的那种异步工具调用,长任务会阻塞群聊会话
 #### 新消息中断当前推理
 - 群聊上下文流动很快，旧推理很容易过时。MaiBot 允许 Planner 被新消息打断，重新等静默、合并新消息、直接重跑 Planner，见 [reasoning_engine.py (line 1151)](/D:/CodingProject/Huaness Lite/references/maibot/src/maisaka/reasoning_engine.py:1151)。
+## 6.27
+调研了deep agents的harness,主动压缩上下文可以学习,毕竟群聊场景话题高速迭代,但是可能压缩频率需要控制
+开发了一个运行时log的模块,目前还未接入业务
+### deep agents的harness特点
+#### 定制化harness
+有些模型会有特定的提示词
+```
+共享 Harness 内核
+├── Agent Loop
+├── Tool 执行
+├── 上下文压缩
+├── Subagent
+├── 文件系统
+├── Approval / 恢复机制
+│
+├── Provider Profile        # API 层适配
+│   └── OpenAI 使用 Responses API
+│
+└── Model Harness Profile   # 模型行为适配
+    └── Codex 专属 prompt、工具描述、功能开关
+```
+#### 子线程提示
+会把派子线程的工具默认暴露给LLM,并且强烈提示使用场景每次执行任务LLM都会判是否合适派子线程去做,减少对上下文的污染
+#### 主动压缩上下文
+LLM可以判断当前上下文,然后对上下文进行主动的压缩,但是原始记录仍然可以通过调用工具获取到
