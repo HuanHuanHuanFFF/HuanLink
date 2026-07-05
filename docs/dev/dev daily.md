@@ -66,7 +66,7 @@ P1+ 再看：
 ## 6.25
 分析完了Maibot,下面记录了一些针对群聊场景的核心设计
 开发基础的replay模块,可初步检验当前的event log
-- [ ] 将部分硬编码改为可配置项
+- [x] 将部分硬编码改为可配置项
 - [ ] 接入Vercel AI SDK
 - [x] 接入log模块
 ### MaiBot分析结果
@@ -122,3 +122,17 @@ LLM可以判断当前上下文,然后对上下文进行主动的压缩,但是原
 ## 6.29
 push了初版的log
 做初版的.env配置化
+## 7.2
+提交了配置化
+接入Vercel AI SDK
+- [ ] 将runtime log接入`AgentLoop + ToolGateway + server bootstrap`
+## 7.4
+考虑是否接入轻量agent框架
+## 7.5
+考虑放弃自研agent loop,向原本要做的方向转型
+# 方向改变
+放弃自研agent loop
+接下来我的目标是基于框架拼接和自定义agent loop流程上的控制权
+首先是面向群聊场景的特化
+其次是接入A2A,我要尝试做下一代agent,通过A2A实现跨平台的agent合作,通过主控agent去组织其他垂类agent
+A2A方面肯定很多基建还没做好,这个将会是我们手搓实现的重点
