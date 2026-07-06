@@ -80,15 +80,15 @@ describe("replay reducer", () => {
                 {
                     message: {
                         role: "assistant",
-                        content: "Call echo"
-                    },
-                    toolCalls: [
-                        {
-                            id: "call_replay_echo_01",
-                            name: "echo",
-                            args: {text: "hello replay"}
-                        }
-                    ]
+                        content: "Call echo",
+                        toolCalls: [
+                            {
+                                id: "call_replay_echo_01",
+                                name: "echo",
+                                args: {text: "hello replay"}
+                            }
+                        ]
+                    }
                 },
                 {
                     message: {
@@ -287,15 +287,15 @@ describe("replay reducer", () => {
                 {
                     message: {
                         role: "assistant",
-                        content: "Loop once"
-                    },
-                    toolCalls: [
-                        {
-                            id: "call_replay_loop_01",
-                            name: "echo",
-                            args: {text: "again"}
-                        }
-                    ]
+                        content: "Loop once",
+                        toolCalls: [
+                            {
+                                id: "call_replay_loop_01",
+                                name: "echo",
+                                args: {text: "again"}
+                            }
+                        ]
+                    }
                 }
             ])
         });
@@ -368,15 +368,15 @@ describe("EventLogRunViewReader", () => {
                 {
                     message: {
                         role: "assistant",
-                        content: "Call denied echo"
-                    },
-                    toolCalls: [
-                        {
-                            id: "call_replay_blocked_01",
-                            name: "echo",
-                            args: {text: "blocked"}
-                        }
-                    ]
+                        content: "Call denied echo",
+                        toolCalls: [
+                            {
+                                id: "call_replay_blocked_01",
+                                name: "echo",
+                                args: {text: "blocked"}
+                            }
+                        ]
+                    }
                 },
                 {
                     message: {

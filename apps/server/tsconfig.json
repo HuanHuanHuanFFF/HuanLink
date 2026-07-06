@@ -2,6 +2,7 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "noEmit": true,
+    "types": ["node"],
     "baseUrl": ".",
     "paths": {
       "@huaness-lite/core": ["../../packages/core/src/index.ts"]

@@ -6,6 +6,7 @@ export * from "./events/jsonl-event-log.js";
 export * from "./context/static-context-assembler.js";
 export * from "./loop/agent-loop.js";
 export * from "./model/fake-model-client.js";
+export * from "./model/vercel-ai-model-client.js";
 export * from "./policy/allow-policy-engine.js";
 export * from "./tools/echo-tool.js";
 export * from "./tools/tool-gateway.js";

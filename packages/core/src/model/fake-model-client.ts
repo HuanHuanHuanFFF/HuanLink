@@ -22,15 +22,15 @@ export class FakeModelClient implements ModelClient {
     return {
       message: {
         role: "assistant",
-        content: "Calling echo"
-      },
-      toolCalls: [
-        {
-          id: "call_echo_01",
-          name: "echo",
-          args: { text: "hello from fake model" }
-        }
-      ]
+        content: "Calling echo",
+        toolCalls: [
+          {
+            id: "call_echo_01",
+            name: "echo",
+            args: { text: "hello from fake model" }
+          }
+        ]
+      }
     };
   }
 }

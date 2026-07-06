@@ -81,9 +81,9 @@ describe("core public types", () => {
       complete: async () => ({
         message: {
           role: "assistant",
-          content: "ready"
-        },
-        toolCalls: [toolCall]
+          content: "ready",
+          toolCalls: [toolCall]
+        }
       })
     };
 
@@ -98,6 +98,6 @@ describe("core public types", () => {
     expect(toolResult.callId).toBe(toolCall.id);
   expect(eventLog.readRunEvents(runId)).toEqual([event]);
     expect(response.message.content).toBe("ready");
-    expect(response.toolCalls).toEqual([toolCall]);
+    expect(response.message.toolCalls).toEqual([toolCall]);
   });
 });

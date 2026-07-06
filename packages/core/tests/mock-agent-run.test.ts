@@ -263,15 +263,15 @@ describe("mock agent run", () => {
         return {
           message: {
             role: "assistant",
-            content: "Calling echo after abort"
-          },
-          toolCalls: [
-            {
-              id: "call_abort_before_tool_01",
-              name: "echo",
-              args: { text: "should not execute" }
-            }
-          ]
+            content: "Calling echo after abort",
+            toolCalls: [
+              {
+                id: "call_abort_before_tool_01",
+                name: "echo",
+                args: { text: "should not execute" }
+              }
+            ]
+          }
         };
       }
     ]);
@@ -338,15 +338,15 @@ describe("mock agent run", () => {
       () => ({
         message: {
           role: "assistant",
-          content: "Calling echo"
-        },
-        toolCalls: [
-          {
-            id: "call_policy_abort_01",
-            name: "echo",
-            args: { text: "should not execute" }
-          }
-        ]
+          content: "Calling echo",
+          toolCalls: [
+            {
+              id: "call_policy_abort_01",
+              name: "echo",
+              args: { text: "should not execute" }
+            }
+          ]
+        }
       })
     ]);
     const loop = createLoop({
@@ -384,15 +384,15 @@ describe("mock agent run", () => {
       () => ({
         message: {
           role: "assistant",
-          content: "Calling slow tool"
-        },
-        toolCalls: [
-          {
-            id: "call_slow_abort_01",
-            name: "slow",
-            args: {}
-          }
-        ]
+          content: "Calling slow tool",
+          toolCalls: [
+            {
+              id: "call_slow_abort_01",
+              name: "slow",
+              args: {}
+            }
+          ]
+        }
       }),
       () => {
         throw new Error("model should not receive a cancelled tool result");
@@ -445,15 +445,15 @@ describe("mock agent run", () => {
       () => ({
         message: {
           role: "assistant",
-          content: "Calling echo"
-        },
-        toolCalls: [
-          {
-            id: "call_abort_after_tool_completed_01",
-            name: "echo",
-            args: { text: "late cancellation" }
-          }
-        ]
+          content: "Calling echo",
+          toolCalls: [
+            {
+              id: "call_abort_after_tool_completed_01",
+              name: "echo",
+              args: { text: "late cancellation" }
+            }
+          ]
+        }
       }),
       () => {
         throw new Error("model should not receive a cancelled observation");
@@ -518,15 +518,15 @@ describe("mock agent run", () => {
       () => ({
         message: {
           role: "assistant",
-          content: "Calling identity"
-        },
-        toolCalls: [
-          {
-            id: "call_identity_01",
-            name: "identity",
-            args: {}
-          }
-        ]
+          content: "Calling identity",
+          toolCalls: [
+            {
+              id: "call_identity_01",
+              name: "identity",
+              args: {}
+            }
+          ]
+        }
       }),
       (messages) => {
         expect(messages.at(-1)).toMatchObject({
@@ -681,15 +681,15 @@ describe("mock agent run", () => {
       () => ({
         message: {
           role: "assistant",
-          content: "Calling missing tool"
-        },
-        toolCalls: [
-          {
-            id: "call_missing_01",
-            name: "missing",
-            args: {}
-          }
-        ]
+          content: "Calling missing tool",
+          toolCalls: [
+            {
+              id: "call_missing_01",
+              name: "missing",
+              args: {}
+            }
+          ]
+        }
       }),
       (messages) => {
         const toolMessage = messages.at(-1);
@@ -769,15 +769,15 @@ describe("mock agent run", () => {
       () => ({
         message: {
           role: "assistant",
-          content: "Calling denied tool"
-        },
-        toolCalls: [
-          {
-            id: "call_denied_01",
-            name: "echo",
-            args: { text: "blocked" }
-          }
-        ]
+          content: "Calling denied tool",
+          toolCalls: [
+            {
+              id: "call_denied_01",
+              name: "echo",
+              args: { text: "blocked" }
+            }
+          ]
+        }
       }),
       (messages) => {
         const toolMessage = messages.at(-1);
@@ -865,15 +865,15 @@ describe("mock agent run", () => {
       () => ({
         message: {
           role: "assistant",
-          content: "Calling throwing tool"
-        },
-        toolCalls: [
-          {
-            id: "call_explode_01",
-            name: "explode",
-            args: {}
-          }
-        ]
+          content: "Calling throwing tool",
+          toolCalls: [
+            {
+              id: "call_explode_01",
+              name: "explode",
+              args: {}
+            }
+          ]
+        }
       }),
       (messages) => {
         const toolMessage = messages.at(-1);
@@ -955,15 +955,15 @@ describe("mock agent run", () => {
       () => ({
         message: {
           role: "assistant",
-          content: "Calling echo forever"
-        },
-        toolCalls: [
-          {
-            id: "call_echo_loop_01",
-            name: "echo",
-            args: { text: "again" }
-          }
-        ]
+          content: "Calling echo forever",
+          toolCalls: [
+            {
+              id: "call_echo_loop_01",
+              name: "echo",
+              args: { text: "again" }
+            }
+          ]
+        }
       })
     ]);
     const loop = createLoop({
@@ -1001,15 +1001,15 @@ describe("mock agent run", () => {
       () => ({
         message: {
           role: "assistant",
-          content: "Calling echo forever"
-        },
-        toolCalls: [
-          {
-            id: "call_default_max_steps_01",
-            name: "echo",
-            args: { text: "again" }
-          }
-        ]
+          content: "Calling echo forever",
+          toolCalls: [
+            {
+              id: "call_default_max_steps_01",
+              name: "echo",
+              args: { text: "again" }
+            }
+          ]
+        }
       })
     ]);
     const loop = createLoop({

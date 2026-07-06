@@ -89,6 +89,7 @@ export class AgentLoop {
                     messages,
                     signal: input.signal
                 });
+                const toolCalls = response.message.toolCalls ?? [];
 
                 this.throwIfAborted(input.signal);
 
@@ -97,15 +98,15 @@ export class AgentLoop {
                     "model.responded",
                     {
                         content: response.message.content,
-                        toolCalls: response.toolCalls ?? []
+                        toolCalls
                     },
                     {step}
                 );
 
                 messages.push(response.message);
 
-                if (response.toolCalls && response.toolCalls.length > 0) {
-                    for (const toolCall of response.toolCalls) {
+                if (toolCalls.length > 0) {
+                    for (const toolCall of toolCalls) {
                         this.throwIfAborted(input.signal);
 
                         const execution = await this.toolGateway.execute({

@@ -11,7 +11,9 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "clean": "rimraf --glob dist \"*.tsbuildinfo\" \"*.tsbuildinfo.*\"",
@@ -20,6 +22,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "pino": "^10.3.1"
+    "ai": "^7.0.9",
+    "pino": "^10.3.1",
+    "zod": "^4.4.3"
   }
 }
