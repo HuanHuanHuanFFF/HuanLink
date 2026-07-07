@@ -28,3 +28,6 @@
 [submodule "references/deepagents"]
 	path = references/deepagents
 	url = https://github.com/langchain-ai/deepagents.git
+[submodule "references/openai-agents-js"]
+	path = references/openai-agents-js
+	url = https://github.com/openai/openai-agents-js.git
