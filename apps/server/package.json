@@ -1,5 +1,5 @@
 {
-  "name": "@huaness-lite/server",
+  "name": "@huanlink/server",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -21,7 +21,7 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@huaness-lite/core": "workspace:*",
+    "@huanlink/core": "workspace:*",
     "zod": "^4.4.3"
   }
 }

@@ -3,7 +3,7 @@ import type {
   AgentRuntime,
   AgentRuntimeInput,
   AgentRuntimeResult
-} from "@huaness-lite/core";
+} from "@huanlink/core";
 import { Agent, Runner } from "@openai/agents";
 
 // 约束运行时真正依赖的最小 Runner 形状，便于测试替身注入。

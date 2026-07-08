@@ -14,7 +14,7 @@ let tempRoot: string;
 let packageDir: string;
 
 beforeEach(async () => {
-  tempRoot = await mkdtemp(path.join(os.tmpdir(), "huaness-demo-run-"));
+  tempRoot = await mkdtemp(path.join(os.tmpdir(), "huanlink-demo-run-"));
   packageDir = path.join(tempRoot, "packages", "core");
   await mkdir(packageDir, { recursive: true });
   process.env.INIT_CWD = tempRoot;
@@ -32,15 +32,15 @@ afterEach(async () => {
 });
 
 describe("mock agent run demo", () => {
-  test("writes the event timeline under INIT_CWD .huaness", async () => {
+  test("writes the event timeline under INIT_CWD .huanlink", async () => {
     const logs: string[] = [];
 
     await runMockAgentDemo({ log: (line) => logs.push(line) });
 
-    const eventFiles = await findEventsFiles(path.join(tempRoot, ".huaness"));
+    const eventFiles = await findEventsFiles(path.join(tempRoot, ".huanlink"));
 
     expect(eventFiles).toHaveLength(1);
-    expect(await exists(path.join(packageDir, ".huaness"))).toBe(false);
+    expect(await exists(path.join(packageDir, ".huanlink"))).toBe(false);
     expect(logs.at(-1)).toBe(`eventLog: ${eventFiles[0]}`);
 
     const content = await readFile(eventFiles[0], "utf8");

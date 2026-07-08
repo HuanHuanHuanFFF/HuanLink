@@ -2,16 +2,16 @@ import {
   resolveRuntimeConfig,
   type RuntimeConfig,
   type RuntimeLogLevel
-} from "@huaness-lite/core";
+} from "@huanlink/core";
 import { z } from "zod";
 
 const RUNTIME_LOG_LEVELS = ["debug", "info", "warn", "error"] as const satisfies readonly RuntimeLogLevel[];
 
 const runtimeConfigEnvSchema = z.object({
-  HUANESS_EVENT_LOG_BASE_DIR: z.string().trim().min(1).optional(),
-  HUANESS_EVENT_LOG_NEXT_SEQ_CACHE_SIZE: z.coerce.number().int().positive().optional(),
-  HUANESS_AGENT_DEFAULT_MAX_STEPS: z.coerce.number().int().positive().optional(),
-  HUANESS_LOG_LEVEL: z.enum(RUNTIME_LOG_LEVELS).optional()
+  HUANLINK_EVENT_LOG_BASE_DIR: z.string().trim().min(1).optional(),
+  HUANLINK_EVENT_LOG_NEXT_SEQ_CACHE_SIZE: z.coerce.number().int().positive().optional(),
+  HUANLINK_AGENT_DEFAULT_MAX_STEPS: z.coerce.number().int().positive().optional(),
+  HUANLINK_LOG_LEVEL: z.enum(RUNTIME_LOG_LEVELS).optional()
 });
 
 // 启动时一次性读取环境变量，并映射成 core 可消费的 RuntimeConfig。
@@ -21,12 +21,12 @@ export function loadRuntimeConfigFromEnv(input: {
   loadEnvFile(input.envFilePath);
 
   const parsed = runtimeConfigEnvSchema.safeParse({
-    HUANESS_EVENT_LOG_BASE_DIR: process.env.HUANESS_EVENT_LOG_BASE_DIR,
-    HUANESS_EVENT_LOG_NEXT_SEQ_CACHE_SIZE:
-      process.env.HUANESS_EVENT_LOG_NEXT_SEQ_CACHE_SIZE,
-    HUANESS_AGENT_DEFAULT_MAX_STEPS:
-      process.env.HUANESS_AGENT_DEFAULT_MAX_STEPS,
-    HUANESS_LOG_LEVEL: process.env.HUANESS_LOG_LEVEL
+    HUANLINK_EVENT_LOG_BASE_DIR: process.env.HUANLINK_EVENT_LOG_BASE_DIR,
+    HUANLINK_EVENT_LOG_NEXT_SEQ_CACHE_SIZE:
+      process.env.HUANLINK_EVENT_LOG_NEXT_SEQ_CACHE_SIZE,
+    HUANLINK_AGENT_DEFAULT_MAX_STEPS:
+      process.env.HUANLINK_AGENT_DEFAULT_MAX_STEPS,
+    HUANLINK_LOG_LEVEL: process.env.HUANLINK_LOG_LEVEL
   });
 
   if (!parsed.success) {
@@ -35,14 +35,14 @@ export function loadRuntimeConfigFromEnv(input: {
 
   return resolveRuntimeConfig({
     eventLog: {
-      baseDir: parsed.data.HUANESS_EVENT_LOG_BASE_DIR,
-      nextSeqCacheSize: parsed.data.HUANESS_EVENT_LOG_NEXT_SEQ_CACHE_SIZE
+      baseDir: parsed.data.HUANLINK_EVENT_LOG_BASE_DIR,
+      nextSeqCacheSize: parsed.data.HUANLINK_EVENT_LOG_NEXT_SEQ_CACHE_SIZE
     },
     agent: {
-      defaultMaxSteps: parsed.data.HUANESS_AGENT_DEFAULT_MAX_STEPS
+      defaultMaxSteps: parsed.data.HUANLINK_AGENT_DEFAULT_MAX_STEPS
     },
     logging: {
-      level: parsed.data.HUANESS_LOG_LEVEL
+      level: parsed.data.HUANLINK_LOG_LEVEL
     }
   });
 }

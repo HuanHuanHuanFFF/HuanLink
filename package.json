@@ -1,5 +1,5 @@
 {
-  "name": "huaness-lite",
+  "name": "huanlink",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -7,7 +7,7 @@
   "scripts": {
     "build": "corepack pnpm -r --if-present build",
     "clean": "corepack pnpm -r --if-present run clean",
-    "demo:mock-run": "corepack pnpm --silent --filter @huaness-lite/core demo:mock-run",
+    "demo:mock-run": "corepack pnpm --silent --filter @huanlink/core demo:mock-run",
     "build:clean": "corepack pnpm run clean && corepack pnpm build",
     "typecheck": "corepack pnpm -r --if-present typecheck",
     "test": "corepack pnpm -r --if-present test"

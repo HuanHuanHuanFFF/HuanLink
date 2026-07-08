@@ -1,5 +1,4 @@
 // 控制台 demo：跑一次 fake agent loop，并打印结果和事件链。
-
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -25,7 +24,7 @@ type DemoResult = {
   events: AgentEvent[];
 };
 
-// 跑一次 fake agent loop，并把事件写入当前工作目录的 .huaness。
+// 跑一次 fake agent loop，并把事件写入当前工作目录的 .huanlink。
 export async function runMockAgentDemo(
   input: DemoInput = {}
 ): Promise<DemoResult> {
@@ -97,7 +96,7 @@ function resolveEventLogBaseDir(inputBaseDir?: string): string {
     return path.resolve(inputBaseDir);
   }
 
-  return path.resolve(process.env.INIT_CWD ?? process.cwd(), ".huaness");
+  return path.resolve(process.env.INIT_CWD ?? process.cwd(), ".huanlink");
 }
 
 function eventFilePath(eventLogBaseDir: string, runId: string): string {

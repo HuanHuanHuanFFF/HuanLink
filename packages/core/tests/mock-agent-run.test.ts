@@ -647,7 +647,7 @@ describe("mock agent run", () => {
       eventLog,
       modelClient,
       contextAssembler: new StaticContextAssembler({
-        systemMessages: ["You are Huaness Lite core."],
+        systemMessages: ["You are HuanLink core."],
         contextMessages: ["Repo context: packages/core only."]
       })
     });
@@ -662,7 +662,7 @@ describe("mock agent run", () => {
     expect(modelClient.calls[0]).toEqual([
       {
         role: "system",
-        content: "You are Huaness Lite core."
+        content: "You are HuanLink core."
       },
       {
         role: "user",

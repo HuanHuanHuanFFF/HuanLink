@@ -34,8 +34,8 @@ let tempRoot: string;
 let baseDir: string;
 
 beforeEach(async () => {
-  tempRoot = await mkdtemp(path.join(os.tmpdir(), "huaness-jsonl-event-log-"));
-  baseDir = path.join(tempRoot, ".huaness");
+  tempRoot = await mkdtemp(path.join(os.tmpdir(), "huanlink-jsonl-event-log-"));
+  baseDir = path.join(tempRoot, ".huanlink");
 });
 
 afterEach(async () => {

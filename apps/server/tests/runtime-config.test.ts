@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { getDefaultRuntimeConfig, resolveRuntimeConfig } from "@huaness-lite/core";
+import { getDefaultRuntimeConfig, resolveRuntimeConfig } from "@huanlink/core";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
 import * as server from "../src/index.js";
@@ -12,10 +12,10 @@ type LoadRuntimeConfigFromEnv = (input?: {
 }) => ReturnType<typeof resolveRuntimeConfig>;
 
 const ENV_KEYS = [
-  "HUANESS_EVENT_LOG_BASE_DIR",
-  "HUANESS_EVENT_LOG_NEXT_SEQ_CACHE_SIZE",
-  "HUANESS_AGENT_DEFAULT_MAX_STEPS",
-  "HUANESS_LOG_LEVEL"
+  "HUANLINK_EVENT_LOG_BASE_DIR",
+  "HUANLINK_EVENT_LOG_NEXT_SEQ_CACHE_SIZE",
+  "HUANLINK_AGENT_DEFAULT_MAX_STEPS",
+  "HUANLINK_LOG_LEVEL"
 ] as const;
 
 let originalCwd: string;
@@ -24,7 +24,7 @@ let originalEnv: Record<(typeof ENV_KEYS)[number], string | undefined>;
 
 beforeEach(async () => {
   originalCwd = process.cwd();
-  tempRoot = await mkdtemp(path.join(os.tmpdir(), "huaness-server-runtime-config-"));
+  tempRoot = await mkdtemp(path.join(os.tmpdir(), "huanlink-server-runtime-config-"));
   originalEnv = snapshotEnv();
   clearRuntimeConfigEnv();
 });
@@ -45,12 +45,12 @@ describe("loadRuntimeConfigFromEnv", () => {
     const envFilePath = path.join(tempRoot, ".env");
 
     await writeFile(
-      envFilePath,
+        envFilePath,
       [
-        "HUANESS_EVENT_LOG_BASE_DIR=.runtime-events",
-        "HUANESS_EVENT_LOG_NEXT_SEQ_CACHE_SIZE=64",
-        "HUANESS_AGENT_DEFAULT_MAX_STEPS=12",
-        "HUANESS_LOG_LEVEL=debug"
+        "HUANLINK_EVENT_LOG_BASE_DIR=.runtime-events",
+        "HUANLINK_EVENT_LOG_NEXT_SEQ_CACHE_SIZE=64",
+        "HUANLINK_AGENT_DEFAULT_MAX_STEPS=12",
+        "HUANLINK_LOG_LEVEL=debug"
       ].join("\n")
     );
 
@@ -82,19 +82,19 @@ describe("loadRuntimeConfigFromEnv", () => {
   test("throws at startup when a numeric env value is invalid", () => {
     const loadRuntimeConfigFromEnv = getLoader();
 
-    process.env.HUANESS_AGENT_DEFAULT_MAX_STEPS = "0";
+    process.env.HUANLINK_AGENT_DEFAULT_MAX_STEPS = "0";
     process.chdir(tempRoot);
 
-    expect(() => loadRuntimeConfigFromEnv()).toThrow(/HUANESS_AGENT_DEFAULT_MAX_STEPS/);
+    expect(() => loadRuntimeConfigFromEnv()).toThrow(/HUANLINK_AGENT_DEFAULT_MAX_STEPS/);
   });
 
-  test("throws at startup when HUANESS_LOG_LEVEL is unsupported", () => {
+  test("throws at startup when HUANLINK_LOG_LEVEL is unsupported", () => {
     const loadRuntimeConfigFromEnv = getLoader();
 
-    process.env.HUANESS_LOG_LEVEL = "verbose";
+    process.env.HUANLINK_LOG_LEVEL = "verbose";
     process.chdir(tempRoot);
 
-    expect(() => loadRuntimeConfigFromEnv()).toThrow(/HUANESS_LOG_LEVEL/);
+    expect(() => loadRuntimeConfigFromEnv()).toThrow(/HUANLINK_LOG_LEVEL/);
   });
 });
 
@@ -112,12 +112,12 @@ function clearRuntimeConfigEnv(): void {
 
 function snapshotEnv(): Record<(typeof ENV_KEYS)[number], string | undefined> {
   return {
-    HUANESS_EVENT_LOG_BASE_DIR: process.env.HUANESS_EVENT_LOG_BASE_DIR,
-    HUANESS_EVENT_LOG_NEXT_SEQ_CACHE_SIZE:
-      process.env.HUANESS_EVENT_LOG_NEXT_SEQ_CACHE_SIZE,
-    HUANESS_AGENT_DEFAULT_MAX_STEPS:
-      process.env.HUANESS_AGENT_DEFAULT_MAX_STEPS,
-    HUANESS_LOG_LEVEL: process.env.HUANESS_LOG_LEVEL
+    HUANLINK_EVENT_LOG_BASE_DIR: process.env.HUANLINK_EVENT_LOG_BASE_DIR,
+    HUANLINK_EVENT_LOG_NEXT_SEQ_CACHE_SIZE:
+      process.env.HUANLINK_EVENT_LOG_NEXT_SEQ_CACHE_SIZE,
+    HUANLINK_AGENT_DEFAULT_MAX_STEPS:
+      process.env.HUANLINK_AGENT_DEFAULT_MAX_STEPS,
+    HUANLINK_LOG_LEVEL: process.env.HUANLINK_LOG_LEVEL
   };
 }
 

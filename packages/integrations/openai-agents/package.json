@@ -1,5 +1,5 @@
 {
-  "name": "@huaness-lite/integration-openai-agents",
+  "name": "@huanlink/integration-openai-agents",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -19,7 +19,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@huaness-lite/core": "workspace:*",
+    "@huanlink/core": "workspace:*",
     "@openai/agents": "^0.12.0"
   }
 }

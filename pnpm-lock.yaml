@@ -23,7 +23,7 @@ importers:
 
   apps/server:
     dependencies:
-      '@huaness-lite/core':
+      '@huanlink/core':
         specifier: workspace:*
         version: link:../../packages/core
       zod:
@@ -38,7 +38,7 @@ importers:
 
   packages/integrations/openai-agents:
     dependencies:
-      '@huaness-lite/core':
+      '@huanlink/core':
         specifier: workspace:*
         version: link:../../core
       '@openai/agents':

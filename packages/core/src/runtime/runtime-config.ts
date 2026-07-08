@@ -21,7 +21,7 @@ export type RuntimeConfigInput = {
 
 const DEFAULT_RUNTIME_CONFIG: RuntimeConfig = freezeRuntimeConfig({
     eventLog: {
-        baseDir: ".huaness",
+        baseDir: ".huanlink",
         nextSeqCacheSize: 256
     },
     agent: {

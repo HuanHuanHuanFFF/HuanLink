@@ -54,7 +54,7 @@ describe("runtime config", () => {
 
         expect(resolveRuntimeConfig()).toEqual({
             eventLog: {
-                baseDir: ".huaness",
+                baseDir: ".huanlink",
                 nextSeqCacheSize: 256
             },
             agent: {
