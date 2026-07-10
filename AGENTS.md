@@ -2,10 +2,11 @@
 
 ## Project Structure & Module Organization
 
-This repository is currently a lightweight agent-runtime study and design workspace.
+HuanLink is a multi-agent orchestration project specialized for group-chat scenarios and an experimental platform for A2A-based cross-platform agent collaboration.
 
 - `apps/server/` is the placeholder server app. It should stay thin and must not own core runtime decisions.
-- `packages/core/` contains the first runtime-facing TypeScript types and public core package entrypoint.
+- `packages/core/` contains framework-independent runtime contracts and shared infrastructure such as EventLog, Replay, runtime logging, and configuration.
+- `packages/integrations/` contains adapters for external agent frameworks. The current OpenAI Agents JS adapter lives under `packages/integrations/openai-agents/`.
 - `docs/` is reserved for future finalized project documents.
 - `docs/dev/` contains the current development notes, design drafts, reference analysis, learning summaries, prompts, and other process-oriented materials that are not final formal docs.
 - `references/` contains Git submodules for external agent projects. Treat these as read-only references unless explicitly updating the submodule pointer.
@@ -33,7 +34,7 @@ Use `git submodule update --init --recursive` after cloning so `references/*` re
 
 Keep changes small and easy to review. Follow existing file naming:
 
-- Markdown docs use numbered prefixes when they are part of a learning or development sequence, for example `docs/dev/06-mini-swe-agent-learning-summary.md`.
+- Research and reference docs use numbered prefixes, for example `docs/dev/06-mini-swe-agent-learning-summary.md`; active implementation docs use `Dxx` prefixes, for example `docs/dev/D01-openai-agents-js-mock-spike-plan.md`.
 - Use clear English file names for shared project docs.
 - Prefer concise explanations over long speculative design rules.
 
@@ -41,7 +42,7 @@ TypeScript uses strict `NodeNext` settings from `tsconfig.base.json`. No formatt
 
 ## Testing Guidelines
 
-Vitest is configured for `packages/core`. Once runtime code expands, add focused tests for the agent loop, tool registry, configuration loading, and trace/event logging.
+Vitest is configured for `packages/core`, `packages/integrations/openai-agents`, and `apps/server`. Add focused tests for runtime contracts, framework adapters, configuration, runtime logging, EventLog/Replay, and HuanLink-owned orchestration behavior. Do not expand the legacy self-built generic agent loop or tool registry unless explicitly requested.
 
 Use descriptive test names that state behavior, not implementation details.
 
@@ -71,7 +72,7 @@ Pull requests should include:
 
 Before editing, inspect the relevant files and follow the current repository shape. For non-trivial work, make a short plan first. After changes, run whatever verification exists; if no verification exists yet, state that clearly.
 
-When dispatching subagents, default to GPT-5.4 with high reasoning unless the user specifies a different model or effort.
+When dispatching subagents, default to GPT-5.6 Terra with high reasoning unless the user specifies a different model or effort.
 When dispatching subagents, default to using the `$boris-prompts` skill to write the task prompt unless the user specifies otherwise.
 
-Do not expand project boundaries prematurely. This repository is still defining its runtime architecture through small, testable steps.
+Keep HuanLink-owned concerns focused on outer orchestration: group-chat ingress, buffering and gating, asynchronous task lifecycle, AgentCall/A2A routing, and EventLog/Replay. Prefer framework capabilities such as OpenAI Agents JS for single-agent run internals instead of expanding a self-built generic agent loop.
