@@ -8,8 +8,8 @@ export function createAgentCard(origin: string): AgentCardValue {
   return AgentCard.fromJSON({
     name: "HuanLink Codex A2A Adapter",
     description:
-      "Phase 1 standards-validation adapter with a fixed task executor.",
-    version: "0.1.0",
+      "Runs scoped HuanLink code tasks through the official codex app-server.",
+    version: "0.2.0",
     supportedInterfaces: [
       {
         url: `${origin}/a2a/jsonrpc`,
@@ -25,12 +25,12 @@ export function createAgentCard(origin: string): AgentCardValue {
     defaultOutputModes: ["text/plain"],
     skills: [
       {
-        id: "phase-1-fixed-response",
-        name: "Phase 1 fixed response",
+        id: "codex-code-task",
+        name: "Codex code task",
         description:
-          "Exercises the A2A v1.0 task lifecycle without invoking Codex.",
-        tags: ["a2a", "phase-1", "protocol-validation"],
-        examples: ["Run the Phase 1 protocol check"],
+          "Runs a real coding turn in the configured HuanLink workspace.",
+        tags: ["a2a", "codex", "coding"],
+        examples: ["Add a focused validation rule and run its tests"],
         inputModes: ["text/plain"],
         outputModes: ["text/plain"]
       }

@@ -7,12 +7,9 @@ import {
   type RequestContext
 } from "@a2a-js/sdk/server";
 
-export const PHASE_1_FIXED_RESPONSE =
-  "Phase 1 fixed executor completed the task.";
+export const CONTROLLED_RESPONSE = "Controlled test executor completed the task.";
 
-const DEFAULT_COMPLETION_DELAY_MS = 1_000;
-
-export interface FixedTaskExecutorOptions {
+interface ControlledTaskExecutorOptions {
   waitBeforeComplete?: (signal: AbortSignal) => Promise<void>;
 }
 
@@ -21,11 +18,11 @@ interface InFlightExecution {
   contextId: string;
 }
 
-export class FixedTaskExecutor implements AgentExecutor {
+export class ControlledTaskExecutor implements AgentExecutor {
   private readonly inFlight = new Map<string, InFlightExecution>();
   private readonly waitBeforeComplete: (signal: AbortSignal) => Promise<void>;
 
-  constructor(options: FixedTaskExecutorOptions = {}) {
+  constructor(options: ControlledTaskExecutorOptions = {}) {
     this.waitBeforeComplete =
       options.waitBeforeComplete ?? waitForDefaultCompletionWindow;
   }
@@ -72,12 +69,12 @@ export class FixedTaskExecutor implements AgentExecutor {
       }
 
       const artifact: Artifact = {
-        artifactId: createArtifactId(taskId),
-        name: "Phase 1 fixed result",
-        description: "Fixed output used only to validate the A2A protocol shell.",
+        artifactId: `${taskId}-controlled-result`,
+        name: "Controlled test result",
+        description: "Test-only A2A lifecycle output.",
         parts: [
           {
-            content: { $case: "text", value: PHASE_1_FIXED_RESPONSE },
+            content: { $case: "text", value: CONTROLLED_RESPONSE },
             metadata: undefined,
             filename: "",
             mediaType: "text/plain"
@@ -138,10 +135,6 @@ export class FixedTaskExecutor implements AgentExecutor {
   }
 }
 
-function createArtifactId(taskId: string): string {
-  return `${taskId}-fixed-result`;
-}
-
 function waitForDefaultCompletionWindow(signal: AbortSignal): Promise<void> {
   if (signal.aborted) {
     return Promise.resolve();
@@ -153,7 +146,7 @@ function waitForDefaultCompletionWindow(signal: AbortSignal): Promise<void> {
       signal.removeEventListener("abort", finish);
       resolve();
     };
-    const timer = setTimeout(finish, DEFAULT_COMPLETION_DELAY_MS);
+    const timer = setTimeout(finish, 1_000);
     signal.addEventListener("abort", finish, { once: true });
   });
 }

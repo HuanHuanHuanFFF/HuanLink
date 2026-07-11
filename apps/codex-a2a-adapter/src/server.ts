@@ -14,10 +14,9 @@ import {
 import express from "express";
 
 import { createAgentCard } from "./agent-card.js";
-import { FixedTaskExecutor } from "./fixed-task-executor.js";
 
 export interface StartAdapterServerOptions {
-  executor?: AgentExecutor;
+  executor: AgentExecutor;
   host?: string;
   port?: number;
 }
@@ -28,7 +27,7 @@ export interface RunningAdapterServer {
 }
 
 export async function startAdapterServer(
-  options: StartAdapterServerOptions = {}
+  options: StartAdapterServerOptions
 ): Promise<RunningAdapterServer> {
   const host = options.host ?? "127.0.0.1";
   const port = options.port ?? 4000;
@@ -49,7 +48,7 @@ export async function startAdapterServer(
     const requestHandler = new DefaultRequestHandler(
       agentCard,
       new InMemoryTaskStore(),
-      options.executor ?? new FixedTaskExecutor()
+      options.executor
     );
 
     app.use(

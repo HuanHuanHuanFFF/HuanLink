@@ -6,12 +6,16 @@ import {
   startAdapterServer,
   type RunningAdapterServer
 } from "../src/server.js";
+import { ControlledTaskExecutor } from "./support/controlled-task-executor.js";
 
 describe("Codex A2A adapter Agent Card", () => {
   let server: RunningAdapterServer | undefined;
 
   beforeAll(async () => {
-    server = await startAdapterServer({ port: 0 });
+    server = await startAdapterServer({
+      executor: new ControlledTaskExecutor(),
+      port: 0
+    });
   });
 
   afterAll(async () => {
@@ -36,9 +40,9 @@ describe("Codex A2A adapter Agent Card", () => {
         tenant: ""
       }
     ]);
-    expect(card.skills.map((skill) => skill.id)).toEqual([
-      "phase-1-fixed-response"
-    ]);
+    expect(card.description).toContain("codex app-server");
+    expect(card.description).not.toContain("Phase 1");
+    expect(card.skills.map((skill) => skill.id)).toEqual(["codex-code-task"]);
   });
 
   it("serves the standard well-known Agent Card path", async () => {

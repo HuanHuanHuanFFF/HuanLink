@@ -13,11 +13,14 @@ import {
 import { ClientFactory, type Client } from "@a2a-js/sdk/client";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { FixedTaskExecutor } from "../src/fixed-task-executor.js";
 import {
   startAdapterServer,
   type RunningAdapterServer
 } from "../src/server.js";
+import {
+  CONTROLLED_RESPONSE,
+  ControlledTaskExecutor
+} from "./support/controlled-task-executor.js";
 
 const runningServers: RunningAdapterServer[] = [];
 
@@ -50,7 +53,7 @@ function taskStateFrom(event: StreamResponse): TaskState | undefined {
 }
 
 async function startClient(
-  executor = new FixedTaskExecutor()
+  executor = new ControlledTaskExecutor()
 ): Promise<{ client: Client; server: RunningAdapterServer }> {
   const server = await startAdapterServer({ executor, port: 0 });
   runningServers.push(server);
@@ -113,7 +116,7 @@ describe("Codex A2A adapter task lifecycle", () => {
     expect(persisted.artifacts).toHaveLength(1);
     expect(persisted.artifacts[0]?.parts[0]?.content).toEqual({
       $case: "text",
-      value: "Phase 1 fixed executor completed the task."
+      value: CONTROLLED_RESPONSE
     });
   });
 
@@ -122,7 +125,7 @@ describe("Codex A2A adapter task lifecycle", () => {
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const executor = new FixedTaskExecutor({
+    const executor = new ControlledTaskExecutor({
       waitBeforeComplete: async () => gate
     });
     const { client } = await startClient(executor);
@@ -181,7 +184,7 @@ describe("Codex A2A adapter task lifecycle", () => {
   });
 
   it("does not complete after a controlled cancellation", async () => {
-    const executor = new FixedTaskExecutor({
+    const executor = new ControlledTaskExecutor({
       waitBeforeComplete: (signal) =>
         new Promise<void>((resolve) => {
           signal.addEventListener("abort", () => resolve(), { once: true });

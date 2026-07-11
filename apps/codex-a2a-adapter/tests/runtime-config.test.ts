@@ -1,8 +1,24 @@
 import { describe, expect, it } from "vitest";
 
-import { parsePort } from "../src/runtime-config.js";
+import { parseHost, parsePort } from "../src/runtime-config.js";
 
 describe("adapter runtime config", () => {
+  it.each(["127.0.0.1", "localhost", "::1"])(
+    "parses loopback host %s",
+    (value) => {
+      expect(parseHost(value)).toBe(value);
+    }
+  );
+
+  it.each(["", " ", "\t", "0.0.0.0", "127.0.0.2", "example.com", " localhost "])(
+    "rejects invalid host %s",
+    (value) => {
+      expect(() => parseHost(value)).toThrow(
+        `Invalid HUANLINK_CODEX_A2A_HOST: ${value}`
+      );
+    }
+  );
+
   it.each([
     ["0", 0],
     ["4000", 4000],

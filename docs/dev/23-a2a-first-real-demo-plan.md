@@ -227,7 +227,7 @@ Phase 1 实际核验记录（2026-07-11）：
 - 黑盒测试使用官方 A2A Client 验证了 Task 创建、查询、流式 `submitted -> working -> completed`、artifact 持久化、`SubscribeToTask` 和 `CancelTask -> canceled`。包级共 3 个测试文件、14 个测试通过，typecheck 和 build 通过。
 - 编译后的独立进程已通过官方 Client 外部 smoke：初始状态为 `TASK_STATE_SUBMITTED`，取消返回并持久化为 `TASK_STATE_CANCELED`。
 - 官方 A2A TCK `5996b79f9cefa6fc390980e383e358a66fb9e49e` 已能发现和测试服务。针对 Agent Card、数据模型、错误处理、transport behavior 和 JSON-RPC 的协议核验为 43 passed、23 skipped、6 deselected，进程退出码为 0。完整 JSON-RPC MUST 运行结果为 68 passed、5 failed、162 skipped、30 deselected；Agent Card 6/6，以及 v1 方法名、错误映射、数据模型和 SSE envelope 等协议检查通过。5 个 pytest 失败来自 Phase 1 固定执行器不按 TCK 专用 messageId 生成其指定的多种 artifact 或直接 Message，不是 Agent Card 或 wire protocol 识别失败；本阶段不为刷 TCK 扩写临时场景业务，也不声称 full MUST 100% 通过。
-- 固定执行器仍明确只属于 Phase 1 协议外壳；Phase 2 必须用真实 Codex app-server executor 替换。Phase 1 未 merge、未 push，也未进入 Phase 2。
+- 固定执行器仍明确只属于 Phase 1 协议外壳；Phase 2 必须用真实 Codex app-server executor 替换。Phase 1 已以 `d1a8bcc` 推送到 `origin/spike/demo-v0`，未 merge。
 
 ### Phase 2：接入真实 Codex app-server
 
@@ -248,6 +248,16 @@ Phase 1 实际核验记录（2026-07-11）：
 - Codex 在 `spike/demo-v0` 分支真实修改文件。
 - 客户端能观察进度和终态。
 - 最终 Artifact 能说明修改内容。
+
+Phase 2 实际核验记录（2026-07-12）：
+
+- Adapter 现在直接启动并管理官方 `codex app-server --stdio` 子进程，完成 `initialize` / `initialized` 握手，并将真实 A2A Task 映射到 Codex thread/turn；生产入口已移除固定执行器，固定实现只保留在测试支持代码中。
+- Codex 通知会映射为 A2A `working`、Artifact 和终态；`tasks/cancel` 会调用真实 `turn/interrupt`，等待 Codex 的 interrupted 终态，并覆盖取消超时、app-server 异常退出、并发 thread 映射和运行时关闭等路径。
+- 真实运行使用 `codex-cli 0.144.1`，Adapter 在 `thread/start` 显式指定 `gpt-5.4-mini`，不继承用户全局模型。此前 `0.142.5` 对当前全局模型返回升级提示，因此已按实际运行版本更新锁定。
+- 标准 A2A Client 创建的真实 Task（ID 前缀 `90838f53`）经历了 returned Task、订阅初始快照、`working` 和 `completed`；最终持久化 1 个 Artifact，并包含真实 unified diff。
+- Codex 真实修改且只修改了 `src/runtime-config.ts`、`src/main.ts` 和 `tests/runtime-config.test.ts`：新增仅允许 `127.0.0.1`、`localhost`、`::1` 的 loopback host 校验，并接入生产启动配置。
+- 真实 smoke 在 `spike/demo-v0` 上完成；运行前后 HEAD 均为 `b41dd9853d0692aa533d0d6de7f850b32c6d93c7`，所有非目标 tracked/untracked 文件指纹、暂存区和工作区状态保持一致。smoke 随后独立执行 Adapter test、typecheck、build 和 host 行为检查，均通过。
+- 全仓默认测试共 21 个测试文件、109 个测试通过，其中 Adapter 为 7 个测试文件、41 个测试；真实 model-backed smoke 单独为 1/1 通过。
 
 ### Phase 3：HuanLink 原生接入 A2A
 
