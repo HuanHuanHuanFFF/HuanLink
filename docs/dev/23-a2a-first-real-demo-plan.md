@@ -4,11 +4,11 @@
 >
 > **For agentic workers:** 实施时按阶段推进，每个阶段先形成可运行结果再进入下一阶段。不要在 Demo 跑通前扩展成通用平台。
 
-**Goal:** 在真实 QQ 群中，由 HuanLink 通过标准 A2A v1.0 协议异步调用 Codex，允许 Codex 在独立 `demo` 分支执行真实代码任务，并在完成后由 MainAgent 结合最新群聊上下文返回结果。
+**Goal:** 在真实 QQ 群中，由 HuanLink 通过标准 A2A v1.0 协议异步调用 Codex，允许 Codex 在独立 `spike/demo-v0` 分支执行真实代码任务，并在完成后由 MainAgent 结合最新群聊上下文返回结果。
 
-**Architecture:** HuanLink 负责 QQ 群聊入口、MainAgent、AgentCall、异步回流和最终回复；独立的 Codex A2A Adapter 对外提供标准 A2A Server，对内通过 stdio 驱动官方 `codex app-server`。两者只通过 A2A 协议通信，不共享 Codex 内部类型。
+**Architecture:** HuanLink 负责 QQ 群聊入口、MainAgent、AgentCall、异步回流和最终回复；独立的 Codex A2A Adapter 对外提供标准 A2A Server，对内通过 stdio 驱动官方 `codex app-server`。两者只通过 A2A 协议通信，不共享 Codex 内部类型。这里的集成边界是 app-server 协议，不是 Codex CLI 终端界面或 Codex 桌面应用 UI。
 
-**Tech Stack:** TypeScript/Node.js、pnpm workspace、OpenAI Agents JS、A2A Protocol v1.0、固定版本的 `@a2a-js/sdk@next`、官方 `codex app-server`、真实 QQ/OneBot 兼容通道。
+**Tech Stack:** TypeScript/Node.js、pnpm workspace、OpenAI Agents JS、A2A Protocol v1.0、`@a2a-js/sdk@1.0.0-beta.0`、官方 `codex app-server`、真实 QQ、LLBot/NapCat 共用的 OneBot 兼容接口与协议。
 
 ---
 
@@ -46,7 +46,7 @@ QQ 消息
 -> HuanLink A2A Client 调用 Codex Agent Card 声明的能力
 -> Codex A2A Adapter 创建标准 A2A Task
 -> Adapter 启动或复用 codex app-server
--> Codex 在 demo 分支执行真实代码修改
+-> Codex 在 spike/demo-v0 分支执行真实代码修改
 -> A2A Task 持续产生状态和 Artifact
 -> HuanLink 立即向群里返回 taskId/已受理状态
 -> Task 完成后触发 MainAgent 新 turn
@@ -148,24 +148,24 @@ a2aTaskId
 <-> contextId
 <-> codexThreadId
 <-> codexTurnId
-<-> workspace/demo branch
+<-> workspace / spike/demo-v0 branch
 ```
 
-Codex app-server 通信优先使用默认 stdio JSONL。当前不依赖其仍处于实验状态的 WebSocket transport。
+Codex app-server 通信优先使用默认 stdio JSONL。当前不依赖其仍处于实验状态的 WebSocket transport。Adapter 启动固定版本的官方 `codex` 可执行程序并使用 app-server 协议，不解析 Codex CLI 终端输出，也不自动化 Codex 桌面应用 UI。
 
 ## 6. 分支和代码修改边界
 
-Demo 开发和 Codex 实际操作都在独立 `demo` 分支进行：
+Demo 开发和 Codex 实际操作都在独立 `spike/demo-v0` 分支进行：
 
 ```text
 main
-  -> demo
+  -> spike/demo-v0
 ```
 
 约束：
 
 - Codex 只允许操作配置好的 HuanLink workspace。
-- 启动任务前校验当前分支为 `demo`。
+- 启动任务前校验当前分支为 `spike/demo-v0`。
 - 不允许任务切换到 `main`。
 - 不自动 merge 到 `main`。
 - 不自动 push。
@@ -180,10 +180,10 @@ main
 
 目标：
 
-- 创建并切换到独立 `demo` 分支。
+- 创建并切换到独立 `spike/demo-v0` 分支。
 - 确认现有 pnpm workspace、OpenAI Agents JS integration 和测试基线可运行。
-- 确认服务器已安装并登录可用的 Codex CLI。
-- 记录 Codex 和 `@a2a-js/sdk@next` 的精确版本。
+- 确认服务器已安装官方 `codex` 可执行程序、ChatGPT 登录可用，并能启动 `codex app-server`。
+- 记录 Codex 和 `@a2a-js/sdk` 的精确版本；后续安装时不使用浮动 `next`。
 
 完成标准：
 
@@ -192,12 +192,21 @@ main
 - `corepack pnpm build`
 - `codex app-server` 可以启动并完成 initialize handshake。
 
+Phase 0 实际核验记录（2026-07-11）：
+
+- 当前分支为 `spike/demo-v0`，基线提交为 `95414e88d5c57aaf1b6d63cf58fd9018d6250ba9`。
+- pnpm workspace 和 OpenAI Agents JS integration 存在；typecheck、14 个测试文件中的 68 个测试以及 build 均通过。
+- 当前使用的官方 Codex 可执行程序来自 `codex-cli 0.142.5`，`codex login status` 确认为 ChatGPT 登录。
+- `codex app-server` 已通过 stdio JSONL 完成 `initialize` / `initialized` 握手；初始化后的脱敏 `account/read` 成功，进程正常退出。Phase 0 未发起模型 turn。
+- 仓库尚未声明、锁定或安装 `@a2a-js/sdk`；核验时 npm `next` 精确解析为 `1.0.0-beta.0`，Phase 1 使用该精确版本。
+- 核验结束时工作树干净；没有 commit、merge 或 push。
+
 ### Phase 1：先验证标准 A2A Server
 
 目标：
 
 - 新增独立 `apps/codex-a2a-adapter`。
-- 使用固定版本的官方 TypeScript A2A v1 SDK。
+- 使用固定版本 `@a2a-js/sdk@1.0.0-beta.0` 的官方 TypeScript A2A v1 SDK。
 - 暴露 Agent Card。
 - 实现最小 Task 创建、查询、订阅和取消。
 - 暂时用最薄执行器验证协议，不接入 HuanLink。
@@ -227,7 +236,7 @@ main
 
 - 通过标准 A2A Client 提交任务。
 - 立即获得标准 Task。
-- Codex 在 `demo` 分支真实修改文件。
+- Codex 在 `spike/demo-v0` 分支真实修改文件。
 - 客户端能观察进度和终态。
 - 最终 Artifact 能说明修改内容。
 
@@ -252,7 +261,7 @@ main
 
 目标：
 
-- 复用服务器现有 QQ Bot 网关，增加最薄的 OneBot 兼容 Channel Adapter。
+- 对接服务器现有 LLBot 或 NapCat 网关暴露的共用 OneBot 兼容接口与协议，增加最薄的 Channel Adapter；不依赖任一网关的私有接口。
 - 只支持明确 `@HuanLink` 或明确命令触发。
 - 把任务受理和任务完成结果发回原群。
 - Task 完成后的新 turn 读取当时最新群聊消息。
@@ -274,7 +283,7 @@ main
 2. HuanLink 通过 Agent Card 选择 Codex 能力。
 3. A2A Task 创建成功。
 4. 群里立即收到受理信息。
-5. Codex 在 `demo` 分支完成代码修改。
+5. Codex 在 `spike/demo-v0` 分支完成代码修改。
 6. A2A 返回状态与 Artifact。
 7. HuanLink 唤醒 MainAgent。
 8. MainAgent 结合最新群聊上下文回复。
@@ -362,7 +371,7 @@ codexTurnId
 ### Codex 修改范围失控
 
 - 限制 workspace。
-- 强制 `demo` 分支。
+- 强制 `spike/demo-v0` 分支。
 - 不自动 commit、merge 或 push。
 - 最终人工检查 diff。
 
@@ -397,7 +406,7 @@ codexTurnId
 - [ ] HuanLink 使用真实 MainAgent 判断并发起 AgentCall。
 - [ ] HuanLink 与 Codex Adapter 之间使用标准 A2A v1.0。
 - [ ] Adapter 通过官方 Codex app-server 执行任务。
-- [ ] Codex 在 `demo` 分支产生真实代码修改。
+- [ ] Codex 在 `spike/demo-v0` 分支产生真实代码修改。
 - [ ] AgentCall 异步执行且不阻塞群聊。
 - [ ] 群里先收到 taskId，再收到最终结果。
 - [ ] 最终结果来自 A2A Task/Artifact，而不是旁路读取。
