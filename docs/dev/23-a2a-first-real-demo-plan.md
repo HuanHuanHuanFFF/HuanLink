@@ -220,6 +220,15 @@ Phase 0 实际核验记录（2026-07-11）：
 - Task 状态能从 submitted 进入 working，再进入终态。
 - 取消操作产生标准 canceled 状态。
 
+Phase 1 实际核验记录（2026-07-11）：
+
+- 已新增独立 `apps/codex-a2a-adapter`，精确安装并锁定 `@a2a-js/sdk@1.0.0-beta.0`；该 app 未依赖 HuanLink core、Codex app-server 或 QQ 链路。
+- Adapter 只声明 A2A v1.0 JSON-RPC interface，通过标准 `/.well-known/agent-card.json` 暴露 Agent Card；官方 `ClientFactory.createFromUrl(...)` 可以自动发现并协商到 `1.0`。
+- 黑盒测试使用官方 A2A Client 验证了 Task 创建、查询、流式 `submitted -> working -> completed`、artifact 持久化、`SubscribeToTask` 和 `CancelTask -> canceled`。包级共 3 个测试文件、14 个测试通过，typecheck 和 build 通过。
+- 编译后的独立进程已通过官方 Client 外部 smoke：初始状态为 `TASK_STATE_SUBMITTED`，取消返回并持久化为 `TASK_STATE_CANCELED`。
+- 官方 A2A TCK `5996b79f9cefa6fc390980e383e358a66fb9e49e` 已能发现和测试服务。针对 Agent Card、数据模型、错误处理、transport behavior 和 JSON-RPC 的协议核验为 43 passed、23 skipped、6 deselected，进程退出码为 0。完整 JSON-RPC MUST 运行结果为 68 passed、5 failed、162 skipped、30 deselected；Agent Card 6/6，以及 v1 方法名、错误映射、数据模型和 SSE envelope 等协议检查通过。5 个 pytest 失败来自 Phase 1 固定执行器不按 TCK 专用 messageId 生成其指定的多种 artifact 或直接 Message，不是 Agent Card 或 wire protocol 识别失败；本阶段不为刷 TCK 扩写临时场景业务，也不声称 full MUST 100% 通过。
+- 固定执行器仍明确只属于 Phase 1 协议外壳；Phase 2 必须用真实 Codex app-server executor 替换。Phase 1 未 merge、未 push，也未进入 Phase 2。
+
 ### Phase 2：接入真实 Codex app-server
 
 目标：
