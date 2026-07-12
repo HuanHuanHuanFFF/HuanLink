@@ -25,6 +25,7 @@ export type OpenAiAgentsRunContext = {
   runId: RunId;
   sessionId: SessionId;
   trigger: AgentRuntimeTrigger;
+  signal?: AbortSignal;
 };
 
 // 描述 OpenAI Agents 适配运行时的构造参数。
@@ -51,7 +52,8 @@ export class OpenAiAgentsRuntime implements AgentRuntime {
       context: {
         runId: input.runId,
         sessionId: input.sessionId,
-        trigger: input.trigger ?? "user"
+        trigger: input.trigger ?? "user",
+        ...(input.signal === undefined ? {} : { signal: input.signal })
       }
     });
 

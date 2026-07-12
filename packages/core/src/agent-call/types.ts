@@ -1,4 +1,5 @@
 import type { AgentCallId, RunId, SessionId } from "../shared/ids.js";
+import type { TaskExecutionMode } from "../tasks/types.js";
 
 export type AgentCallTaskState =
   | "unknown"
@@ -22,6 +23,14 @@ const terminalStates = new Set<AgentCallTaskState>(AGENT_CALL_TERMINAL_STATES);
 
 export function isAgentCallTerminalState(state: AgentCallTaskState): boolean {
   return terminalStates.has(state);
+}
+
+export function isAgentCallOutcomeState(state: AgentCallTaskState): boolean {
+  return (
+    isAgentCallTerminalState(state) ||
+    state === "input-required" ||
+    state === "auth-required"
+  );
 }
 
 export type AgentCallCapability = {
@@ -73,16 +82,30 @@ export type AgentCallRequest = {
   sessionId: SessionId;
   skillId: string;
   input: string;
+  executionMode: TaskExecutionMode;
   contextId?: string;
   signal?: AbortSignal;
 };
 
 export type AgentCallReceipt = {
   status: "accepted";
+  executionMode: TaskExecutionMode;
   agentCallId: AgentCallId;
   taskId: string;
   state: AgentCallTaskState;
 };
+
+export type AgentCallWaitResult = {
+  status: "result";
+  executionMode: "wait";
+  agentCallId: AgentCallId;
+  taskId: string;
+  state: AgentCallTaskState;
+  artifacts: AgentCallArtifact[];
+  statusMessage?: string;
+};
+
+export type AgentCallInvocationResult = AgentCallReceipt | AgentCallWaitResult;
 
 export type AgentCallRecord = {
   agentCallId: AgentCallId;
@@ -93,6 +116,7 @@ export type AgentCallRecord = {
   skillId: string;
   capabilityName: string;
   input: string;
+  executionMode: TaskExecutionMode;
   state: AgentCallTaskState;
   artifacts: AgentCallArtifact[];
   statusMessage?: string;
@@ -103,6 +127,10 @@ export type AgentCallRecord = {
 
 export interface AgentCallSubmitter {
   submit(request: AgentCallRequest): Promise<AgentCallReceipt>;
+}
+
+export interface AgentCallInvoker {
+  invoke(request: AgentCallRequest): Promise<AgentCallInvocationResult>;
 }
 
 export type AgentCallTerminalListener = (

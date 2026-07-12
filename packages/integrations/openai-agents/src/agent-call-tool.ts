@@ -1,4 +1,7 @@
-import type { AgentCallSubmitter } from "@huanlink/core";
+import {
+  TASK_EXECUTION_MODES,
+  type AgentCallInvoker
+} from "@huanlink/core";
 import { tool } from "@openai/agents";
 import { z } from "zod";
 
@@ -12,11 +15,15 @@ const parameters = z.object({
     .string()
     .trim()
     .min(1)
-    .describe("The concrete coding task that Codex should perform.")
+    .describe("The concrete coding task that Codex should perform."),
+  executionMode: z
+    .enum(TASK_EXECUTION_MODES)
+    .optional()
+    .describe("Use background unless the user explicitly asks to wait.")
 });
 
 export type CreateCodexAgentCallToolOptions = {
-  submitter: AgentCallSubmitter;
+  invoker: AgentCallInvoker;
   skillId?: string;
 };
 
@@ -28,24 +35,50 @@ export function createCodexAgentCallTool(
   return tool<typeof parameters, OpenAiAgentsRunContext>({
     name: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
     description:
-      "Submit a coding task to the remote Codex agent. The call is asynchronous and returns an accepted task ID immediately.",
+      "Submit a coding task to the remote Codex agent. Background mode returns an accepted task ID; wait mode returns the observed task outcome.",
     parameters,
     isEnabled: ({ runContext }) =>
       runContext.context.trigger !== "agent_call_terminal",
-    execute: async ({ task }, runContext) => {
+    execute: async (
+      { task, executionMode = "background" },
+      runContext,
+      details
+    ) => {
       if (!runContext) {
         throw new Error("Codex AgentCall tool requires a HuanLink RunContext");
       }
 
-      const receipt = await options.submitter.submit({
-        runId: runContext.context.runId,
-        sessionId: runContext.context.sessionId,
-        contextId: runContext.context.sessionId,
-        skillId,
-        input: task
-      });
+      const signal = combineAbortSignals(
+        runContext.context.signal,
+        details?.signal
+      );
 
-      return JSON.stringify(receipt);
+      return JSON.stringify(
+        await options.invoker.invoke({
+          runId: runContext.context.runId,
+          sessionId: runContext.context.sessionId,
+          contextId: runContext.context.sessionId,
+          skillId,
+          input: task,
+          executionMode,
+          ...(signal === undefined ? {} : { signal })
+        })
+      );
     }
   });
+}
+
+function combineAbortSignals(
+  ...signals: Array<AbortSignal | undefined>
+): AbortSignal | undefined {
+  const available = signals.filter(
+    (signal): signal is AbortSignal => signal !== undefined
+  );
+  if (available.length === 0) {
+    return undefined;
+  }
+  if (available.length === 1) {
+    return available[0];
+  }
+  return AbortSignal.any(available);
 }

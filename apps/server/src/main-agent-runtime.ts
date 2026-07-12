@@ -1,7 +1,6 @@
-import type { AgentCallSubmitter } from "@huanlink/core";
+import type { AgentCallInvoker } from "@huanlink/core";
 import {
   OpenAiAgentsRuntime,
-  SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
   createCodexAgentCallTool,
   type OpenAiAgentsRunContext,
   type OpenAiAgentsRunner
@@ -9,7 +8,7 @@ import {
 import { Agent } from "@openai/agents";
 
 export type CreatePhase3MainAgentRuntimeOptions = {
-  submitter: AgentCallSubmitter;
+  invoker: AgentCallInvoker;
   runner?: OpenAiAgentsRunner;
   codexSkillId?: string;
 };
@@ -18,7 +17,7 @@ export function createPhase3MainAgentRuntime(
   options: CreatePhase3MainAgentRuntimeOptions
 ): OpenAiAgentsRuntime {
   const tool = createCodexAgentCallTool({
-    submitter: options.submitter,
+    invoker: options.invoker,
     skillId: options.codexSkillId
   });
   const agent = new Agent<OpenAiAgentsRunContext>({
@@ -26,14 +25,12 @@ export function createPhase3MainAgentRuntime(
     instructions: [
       "You are HuanLink's MainAgent.",
       "When the user asks for a concrete code change, delegate it with submit_codex_agent_call.",
-      "The tool is asynchronous: report its accepted task IDs immediately and never wait for the remote task.",
+      "Use background mode by default; after acceptance, acknowledge the task IDs and continue the current turn.",
+      "Use wait mode only when the user explicitly asks to wait; then continue the current turn with the returned task outcome.",
       "When receiving an AgentCall terminal notification, summarize that result and the supplied latest context; do not delegate it again."
     ].join(" "),
     model: "gpt-5.4-mini",
-    tools: [tool],
-    toolUseBehavior: {
-      stopAtToolNames: [SUBMIT_CODEX_AGENT_CALL_TOOL_NAME]
-    }
+    tools: [tool]
   });
 
   return new OpenAiAgentsRuntime({

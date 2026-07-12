@@ -2,7 +2,10 @@ import { randomUUID } from "node:crypto";
 
 import type { AgentCallId } from "../shared/ids.js";
 import {
+  isAgentCallOutcomeState,
   isAgentCallTerminalState,
+  type AgentCallInvocationResult,
+  type AgentCallInvoker,
   type AgentCallRecord,
   type AgentCallBackgroundErrorListener,
   type AgentCallReceipt,
@@ -24,7 +27,9 @@ type ActiveWatcher = {
   promise: Promise<void>;
 };
 
-export class AgentCallService implements AgentCallSubmitter {
+type AgentCallOutcomeWaiter = (record: AgentCallRecord) => void;
+
+export class AgentCallService implements AgentCallSubmitter, AgentCallInvoker {
   private readonly transport: AgentCallTransport;
   private readonly createId: () => AgentCallId;
   private readonly now: () => Date;
@@ -36,12 +41,46 @@ export class AgentCallService implements AgentCallSubmitter {
     new Set<AgentCallBackgroundErrorListener>();
   private readonly activeSubmissions = new Set<Promise<AgentCallReceipt>>();
   private readonly activeWatchers = new Map<AgentCallId, ActiveWatcher>();
+  private readonly activeCancellations = new Set<Promise<AgentCallRecord>>();
+  private readonly outcomeWaiters = new Map<
+    AgentCallId,
+    Set<AgentCallOutcomeWaiter>
+  >();
   private closed = false;
 
   constructor(options: AgentCallServiceOptions) {
     this.transport = options.transport;
     this.createId = options.createId ?? randomUUID;
     this.now = options.now ?? (() => new Date());
+  }
+
+  async invoke(request: AgentCallRequest): Promise<AgentCallInvocationResult> {
+    const receipt = await this.submit(request);
+    if (request.executionMode === "background") {
+      return receipt;
+    }
+
+    let record: AgentCallRecord;
+    try {
+      record = await this.waitForOutcome(receipt.agentCallId, request.signal);
+    } catch (error) {
+      if (request.signal?.aborted) {
+        this.activeWatchers.get(receipt.agentCallId)?.controller.abort();
+        this.cancelAfterAbortedWait(receipt.agentCallId);
+      }
+      throw error;
+    }
+    return {
+      status: "result",
+      executionMode: "wait",
+      agentCallId: record.agentCallId,
+      taskId: record.taskId,
+      state: record.state,
+      artifacts: record.artifacts,
+      ...(record.statusMessage === undefined
+        ? {}
+        : { statusMessage: record.statusMessage })
+    };
   }
 
   submit(request: AgentCallRequest): Promise<AgentCallReceipt> {
@@ -107,6 +146,7 @@ export class AgentCallService implements AgentCallSubmitter {
       skillId: capability.id,
       capabilityName: capability.name,
       input: request.input,
+      executionMode: request.executionMode,
       state: submitted.state,
       artifacts: cloneArtifacts(submitted.artifacts),
       ...(submitted.statusMessage === undefined
@@ -122,6 +162,7 @@ export class AgentCallService implements AgentCallSubmitter {
 
     return {
       status: "accepted",
+      executionMode: request.executionMode,
       agentCallId,
       taskId: submitted.taskId,
       state: submitted.state
@@ -137,6 +178,60 @@ export class AgentCallService implements AgentCallSubmitter {
     return agentCallId === undefined
       ? undefined
       : this.getByAgentCallId(agentCallId);
+  }
+
+  async waitForOutcome(
+    agentCallId: AgentCallId,
+    signal?: AbortSignal
+  ): Promise<AgentCallRecord> {
+    const current = this.requireRecord(agentCallId);
+    if (isAgentCallOutcomeState(current.state)) {
+      return this.requireRecordClone(agentCallId);
+    }
+
+    const watcher = this.activeWatchers.get(agentCallId);
+    if (!watcher) {
+      throw new Error(`AgentCall ${agentCallId} has no active watcher`);
+    }
+
+    let resolveOutcome!: (record: AgentCallRecord) => void;
+    const outcomePromise = new Promise<AgentCallRecord>((resolve) => {
+      resolveOutcome = resolve;
+    });
+    const waiter: AgentCallOutcomeWaiter = (record) => {
+      resolveOutcome(cloneRecord(record)!);
+    };
+    const waiters = this.outcomeWaiters.get(agentCallId) ?? new Set();
+    waiters.add(waiter);
+    this.outcomeWaiters.set(agentCallId, waiters);
+
+    try {
+      const latest = this.requireRecord(agentCallId);
+      if (isAgentCallOutcomeState(latest.state)) {
+        return this.requireRecordClone(agentCallId);
+      }
+
+      return await waitWithSignal(
+        Promise.race([
+          outcomePromise,
+          watcher.promise.then(() => {
+            const outcome = this.requireRecord(agentCallId);
+            if (!isAgentCallOutcomeState(outcome.state)) {
+              throw new Error(
+                `AgentCall ${agentCallId} stopped before an outcome`
+              );
+            }
+            return this.requireRecordClone(agentCallId);
+          })
+        ]),
+        signal
+      );
+    } finally {
+      waiters.delete(waiter);
+      if (waiters.size === 0) {
+        this.outcomeWaiters.delete(agentCallId);
+      }
+    }
   }
 
   onTerminal(listener: AgentCallTerminalListener): () => void {
@@ -178,7 +273,26 @@ export class AgentCallService implements AgentCallSubmitter {
     for (const watcher of this.activeWatchers.values()) {
       watcher.controller.abort();
     }
+    await Promise.allSettled([...this.activeCancellations]);
     await this.waitForIdle();
+  }
+
+  private cancelAfterAbortedWait(agentCallId: AgentCallId): void {
+    const operation = this.cancel(agentCallId);
+    this.activeCancellations.add(operation);
+    void operation.then(
+      () => this.activeCancellations.delete(operation),
+      (cancelError) => {
+        this.activeCancellations.delete(operation);
+        this.reportBackgroundError(
+          new Error(
+            `Failed to cancel AgentCall ${agentCallId} after its wait was aborted`,
+            { cause: cancelError }
+          ),
+          agentCallId
+        );
+      }
+    );
   }
 
   private startWatcher(
@@ -189,7 +303,13 @@ export class AgentCallService implements AgentCallSubmitter {
     const promise = Promise.resolve()
       .then(async () => {
         try {
-          if (isAgentCallTerminalState(initial.state)) {
+          const initialIsConsumedOutcome =
+            isAgentCallOutcomeState(initial.state) &&
+            this.requireRecord(agentCallId).executionMode === "wait";
+          if (
+            isAgentCallTerminalState(initial.state) ||
+            initialIsConsumedOutcome
+          ) {
             await this.applySnapshot(agentCallId, initial);
             return;
           }
@@ -274,11 +394,23 @@ export class AgentCallService implements AgentCallSubmitter {
     };
     this.recordsByAgentCallId.set(agentCallId, updated);
 
+    if (isAgentCallOutcomeState(snapshot.state)) {
+      for (const waiter of this.outcomeWaiters.get(agentCallId) ?? []) {
+        waiter(updated);
+      }
+      if (updated.executionMode === "wait") {
+        this.activeWatchers.get(agentCallId)?.controller.abort();
+      }
+    }
+
     if (!isAgentCallTerminalState(snapshot.state)) {
       return;
     }
 
     this.terminalHandled.add(agentCallId);
+    if (updated.executionMode === "wait") {
+      return;
+    }
     this.activeWatchers.get(agentCallId)?.controller.abort();
     const results = await Promise.allSettled(
       [...this.terminalListeners].map((listener) =>
@@ -363,4 +495,39 @@ function cloneRecord(
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function waitWithSignal<T>(
+  promise: Promise<T>,
+  signal: AbortSignal | undefined
+): Promise<T> {
+  if (signal === undefined) {
+    return promise;
+  }
+  if (signal.aborted) {
+    return Promise.reject(abortReason(signal));
+  }
+
+  return new Promise<T>((resolve, reject) => {
+    const cleanup = () => signal.removeEventListener("abort", onAbort);
+    const onAbort = () => {
+      cleanup();
+      reject(abortReason(signal));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    void promise.then(
+      (value) => {
+        cleanup();
+        resolve(value);
+      },
+      (error) => {
+        cleanup();
+        reject(error);
+      }
+    );
+  });
+}
+
+function abortReason(signal: AbortSignal): unknown {
+  return signal.reason ?? new Error("AgentCall wait aborted");
 }

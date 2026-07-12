@@ -71,6 +71,7 @@ class MockTextModelProvider implements ModelProvider {
 describe("OpenAiAgentsRuntime", () => {
   test("passes HuanLink run correlation through the SDK RunContext", async () => {
     let seenOptions: unknown;
+    const abortController = new AbortController();
     const runtime = new OpenAiAgentsRuntime({
       agent: new Agent({
         name: "ContextAgent",
@@ -89,14 +90,16 @@ describe("OpenAiAgentsRuntime", () => {
       runId: "run_context_01",
       sessionId: "session_context_01",
       trigger: "agent_call_terminal",
-      input: "summarize a completed task"
+      input: "summarize a completed task",
+      signal: abortController.signal
     });
 
     expect(seenOptions).toMatchObject({
       context: {
         runId: "run_context_01",
         sessionId: "session_context_01",
-        trigger: "agent_call_terminal"
+        trigger: "agent_call_terminal",
+        signal: abortController.signal
       }
     });
   });

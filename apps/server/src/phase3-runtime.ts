@@ -56,7 +56,7 @@ export function createPhase3HuanLinkRuntime(
     new A2aAgentCallTransport({ origin: options.codexA2aOrigin });
   const agentCalls = new AgentCallService({ transport });
   const mainAgent = createPhase3MainAgentRuntime({
-    submitter: agentCalls,
+    invoker: agentCalls,
     codexSkillId: options.codexSkillId,
     runner: options.runner
   });

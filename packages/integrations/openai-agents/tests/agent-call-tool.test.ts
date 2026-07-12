@@ -1,6 +1,10 @@
 import { describe, expect, test, vi } from "vitest";
 
-import type { AgentCallSubmitter } from "@huanlink/core";
+import type {
+  AgentCallInvocationResult,
+  AgentCallInvoker,
+  TaskExecutionMode
+} from "@huanlink/core";
 import {
   Agent,
   Runner,
@@ -19,23 +23,51 @@ import {
   type OpenAiAgentsRunContext
 } from "../src/index.js";
 
-class ToolCallingModel implements Model {
+function assistantMessage(text: string): ModelResponse["output"][number] {
+  return {
+    id: "msg-agent-call-tool",
+    type: "message",
+    status: "completed",
+    role: "assistant",
+    content: [
+      {
+        type: "output_text",
+        text,
+        providerData: { annotations: [] }
+      }
+    ]
+  };
+}
+
+class ToolCallingThenReplyModel implements Model {
   readonly requests: ModelRequest[] = [];
+
+  constructor(private readonly executionMode?: TaskExecutionMode) {}
 
   async getResponse(request: ModelRequest): Promise<ModelResponse> {
     this.requests.push(request);
+    if (this.requests.length === 1) {
+      return {
+        usage: new Usage(),
+        output: [
+          {
+            type: "function_call",
+            callId: "tool-call-01",
+            name: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
+            arguments: JSON.stringify({
+              task: "add one focused validation and test it",
+              ...(this.executionMode === undefined
+                ? {}
+                : { executionMode: this.executionMode })
+            })
+          }
+        ]
+      };
+    }
+
     return {
       usage: new Usage(),
-      output: [
-        {
-          type: "function_call",
-          callId: "tool-call-01",
-          name: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
-          arguments: JSON.stringify({
-            task: "add one focused validation and test it"
-          })
-        }
-      ]
+      output: [assistantMessage("MainAgent continued after the AgentCall result.")]
     };
   }
 
@@ -54,24 +86,52 @@ class SingleModelProvider implements ModelProvider {
   }
 }
 
-describe("createCodexAgentCallTool", () => {
-  test("lets a real Runner accept an async Codex AgentCall without waiting for completion", async () => {
-    const submit = vi.fn<AgentCallSubmitter["submit"]>(async () => ({
+type Scenario = {
+  name: string;
+  requestedMode?: TaskExecutionMode;
+  expectedMode: TaskExecutionMode;
+  invocationResult: AgentCallInvocationResult;
+};
+
+const scenarios: Scenario[] = [
+  {
+    name: "defaults to background and lets the Runner continue after acceptance",
+    expectedMode: "background",
+    invocationResult: {
       status: "accepted",
-      agentCallId: "agent-call-tool-01",
-      taskId: "a2a-task-tool-01",
+      executionMode: "background",
+      agentCallId: "agent-call-tool-background",
+      taskId: "a2a-task-tool-background",
       state: "submitted"
-    }));
-    const model = new ToolCallingModel();
-    const tool = createCodexAgentCallTool({ submitter: { submit } });
+    }
+  },
+  {
+    name: "passes an explicit wait mode result back into the current Runner turn",
+    requestedMode: "wait",
+    expectedMode: "wait",
+    invocationResult: {
+      status: "result",
+      executionMode: "wait",
+      agentCallId: "agent-call-tool-wait",
+      taskId: "a2a-task-tool-wait",
+      state: "completed",
+      artifacts: [{ id: "artifact-wait", text: "wait-mode result" }]
+    }
+  }
+];
+
+describe("createCodexAgentCallTool", () => {
+  test.each(scenarios)("$name", async (scenario) => {
+    const invoke = vi.fn<AgentCallInvoker["invoke"]>(
+      async () => scenario.invocationResult
+    );
+    const model = new ToolCallingThenReplyModel(scenario.requestedMode);
+    const tool = createCodexAgentCallTool({ invoker: { invoke } });
     const agent = new Agent<OpenAiAgentsRunContext>({
       name: "HuanLink MainAgent",
       instructions: "Delegate code changes to Codex when appropriate.",
       model: "mock-tool-model",
-      tools: [tool],
-      toolUseBehavior: {
-        stopAtToolNames: [SUBMIT_CODEX_AGENT_CALL_TOOL_NAME]
-      }
+      tools: [tool]
     });
     const runtime = new OpenAiAgentsRuntime({
       agent,
@@ -80,26 +140,32 @@ describe("createCodexAgentCallTool", () => {
         tracingDisabled: true
       })
     });
+    const abortController = new AbortController();
 
     const result = await runtime.run({
       runId: "run-tool-01",
       sessionId: "session-tool-01",
-      input: "please ask Codex to make the change"
+      input: "please ask Codex to make the change",
+      signal: abortController.signal
     });
 
-    expect(JSON.parse(result.output)).toEqual({
-      status: "accepted",
-      agentCallId: "agent-call-tool-01",
-      taskId: "a2a-task-tool-01",
-      state: "submitted"
-    });
-    expect(submit).toHaveBeenCalledWith({
+    expect(result.output).toBe("MainAgent continued after the AgentCall result.");
+    expect(invoke).toHaveBeenCalledWith({
       runId: "run-tool-01",
       sessionId: "session-tool-01",
       contextId: "session-tool-01",
       skillId: "codex-code-task",
-      input: "add one focused validation and test it"
+      input: "add one focused validation and test it",
+      executionMode: scenario.expectedMode,
+      signal: abortController.signal
     });
-    expect(model.requests).toHaveLength(1);
+    expect(model.requests).toHaveLength(2);
+    const continuationInput = JSON.stringify(model.requests[1]?.input);
+    expect(continuationInput).toContain(
+      `\\\"executionMode\\\":\\\"${scenario.expectedMode}\\\"`
+    );
+    expect(continuationInput).toContain(
+      `\\\"status\\\":\\\"${scenario.invocationResult.status}\\\"`
+    );
   });
 });
