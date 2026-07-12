@@ -17,7 +17,11 @@ const ENV_KEYS = [
   "HUANLINK_AGENT_DEFAULT_MAX_STEPS",
   "HUANLINK_LOG_LEVEL",
   "HUANLINK_CODEX_A2A_ORIGIN",
-  "HUANLINK_CODEX_A2A_SKILL_ID"
+  "HUANLINK_CODEX_A2A_SKILL_ID",
+  "HUANLINK_ONEBOT_WS_URL",
+  "HUANLINK_ONEBOT_ACCESS_TOKEN",
+  "HUANLINK_ONEBOT_GROUP_ID",
+  "HUANLINK_ONEBOT_COMMAND_PREFIX"
 ] as const;
 
 let originalCwd: string;
@@ -129,6 +133,88 @@ describe("loadCodexA2aRuntimeConfigFromEnv", () => {
   });
 });
 
+describe("loadPhase4QqRuntimeConfigFromEnv", () => {
+  test("is exported from the server package", () => {
+    expect(typeof server.loadPhase4QqRuntimeConfigFromEnv).toBe("function");
+  });
+
+  test("loads real OneBot 11 WebSocket and Codex A2A settings", () => {
+    process.env.HUANLINK_ONEBOT_WS_URL = "wss://qq-gateway.example.test/";
+    process.env.HUANLINK_ONEBOT_ACCESS_TOKEN = "onebot-secret";
+    process.env.HUANLINK_ONEBOT_GROUP_ID = "12345678901234567890";
+    process.env.HUANLINK_ONEBOT_COMMAND_PREFIX = "!huanlink";
+    process.env.HUANLINK_CODEX_A2A_ORIGIN = "http://127.0.0.1:4100";
+    process.env.HUANLINK_CODEX_A2A_SKILL_ID = "codex-code-task";
+
+    expect(server.loadPhase4QqRuntimeConfigFromEnv()).toEqual({
+      oneBot11: {
+        url: "wss://qq-gateway.example.test/",
+        accessToken: "onebot-secret",
+        groupId: "12345678901234567890",
+        commandPrefix: "!huanlink"
+      },
+      codexA2a: {
+        origin: "http://127.0.0.1:4100",
+        skillId: "codex-code-task"
+      }
+    });
+  });
+
+  test("uses Demo defaults and omits an empty access token", () => {
+    process.env.HUANLINK_ONEBOT_GROUP_ID = "20002000";
+    process.env.HUANLINK_ONEBOT_ACCESS_TOKEN = "   ";
+    process.chdir(tempRoot);
+
+    expect(server.loadPhase4QqRuntimeConfigFromEnv()).toEqual({
+      oneBot11: {
+        url: "ws://127.0.0.1:3001/",
+        groupId: "20002000",
+        commandPrefix: "/huanlink"
+      },
+      codexA2a: {
+        origin: "http://127.0.0.1:4000",
+        skillId: "codex-code-task"
+      }
+    });
+  });
+
+  test.each(["http://127.0.0.1:3001/", "not-a-url"])(
+    "rejects unsupported OneBot WebSocket URL %s",
+    (url) => {
+      process.env.HUANLINK_ONEBOT_GROUP_ID = "20002000";
+      process.env.HUANLINK_ONEBOT_WS_URL = url;
+
+      expect(() => server.loadPhase4QqRuntimeConfigFromEnv()).toThrow(
+        /HUANLINK_ONEBOT_WS_URL/
+      );
+    }
+  );
+
+  test.each([undefined, "", "0", "-1", "1.5", "01"])(
+    "rejects invalid target group ID %s",
+    (groupId) => {
+      if (groupId === undefined) {
+        delete process.env.HUANLINK_ONEBOT_GROUP_ID;
+      } else {
+        process.env.HUANLINK_ONEBOT_GROUP_ID = groupId;
+      }
+
+      expect(() => server.loadPhase4QqRuntimeConfigFromEnv()).toThrow(
+        /HUANLINK_ONEBOT_GROUP_ID/
+      );
+    }
+  );
+
+  test("rejects an empty command prefix", () => {
+    process.env.HUANLINK_ONEBOT_GROUP_ID = "20002000";
+    process.env.HUANLINK_ONEBOT_COMMAND_PREFIX = "   ";
+
+    expect(() => server.loadPhase4QqRuntimeConfigFromEnv()).toThrow(
+      /HUANLINK_ONEBOT_COMMAND_PREFIX/
+    );
+  });
+});
+
 function getLoader(): LoadRuntimeConfigFromEnv {
   expect(typeof server.loadRuntimeConfigFromEnv).toBe("function");
 
@@ -150,7 +236,13 @@ function snapshotEnv(): Record<(typeof ENV_KEYS)[number], string | undefined> {
       process.env.HUANLINK_AGENT_DEFAULT_MAX_STEPS,
     HUANLINK_LOG_LEVEL: process.env.HUANLINK_LOG_LEVEL,
     HUANLINK_CODEX_A2A_ORIGIN: process.env.HUANLINK_CODEX_A2A_ORIGIN,
-    HUANLINK_CODEX_A2A_SKILL_ID: process.env.HUANLINK_CODEX_A2A_SKILL_ID
+    HUANLINK_CODEX_A2A_SKILL_ID: process.env.HUANLINK_CODEX_A2A_SKILL_ID,
+    HUANLINK_ONEBOT_WS_URL: process.env.HUANLINK_ONEBOT_WS_URL,
+    HUANLINK_ONEBOT_ACCESS_TOKEN:
+      process.env.HUANLINK_ONEBOT_ACCESS_TOKEN,
+    HUANLINK_ONEBOT_GROUP_ID: process.env.HUANLINK_ONEBOT_GROUP_ID,
+    HUANLINK_ONEBOT_COMMAND_PREFIX:
+      process.env.HUANLINK_ONEBOT_COMMAND_PREFIX
   };
 }
 

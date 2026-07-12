@@ -44,9 +44,53 @@ const codexA2aRuntimeConfigEnvSchema = z.object({
     .default("codex-code-task")
 });
 
+const phase4QqRuntimeConfigEnvSchema = z.object({
+  HUANLINK_ONEBOT_WS_URL: z
+    .string()
+    .trim()
+    .url()
+    .refine((value) => {
+      try {
+        const protocol = new URL(value).protocol;
+        return protocol === "ws:" || protocol === "wss:";
+      } catch {
+        return false;
+      }
+    }, "must use ws or wss")
+    .default("ws://127.0.0.1:3001/"),
+  HUANLINK_ONEBOT_ACCESS_TOKEN: z.preprocess(
+    (value) =>
+      typeof value === "string" && value.trim().length === 0
+        ? undefined
+        : value,
+    z.string().trim().min(1).optional()
+  ),
+  HUANLINK_ONEBOT_GROUP_ID: z
+    .string()
+    .trim()
+    .regex(/^[1-9]\d*$/, "must be a positive integer string"),
+  HUANLINK_ONEBOT_COMMAND_PREFIX: z
+    .string()
+    .trim()
+    .min(1)
+    .default("/huanlink")
+});
+
 export type CodexA2aRuntimeConfig = {
   origin: string;
   skillId: string;
+};
+
+export type OneBot11QqRuntimeConfig = {
+  url: string;
+  accessToken?: string;
+  groupId: string;
+  commandPrefix: string;
+};
+
+export type Phase4QqRuntimeConfig = {
+  oneBot11: OneBot11QqRuntimeConfig;
+  codexA2a: CodexA2aRuntimeConfig;
 };
 
 // 启动时一次性读取环境变量，并映射成 core 可消费的 RuntimeConfig。
@@ -86,6 +130,40 @@ export function loadCodexA2aRuntimeConfigFromEnv(input: {
   envFilePath?: string;
 } = {}): CodexA2aRuntimeConfig {
   loadEnvFile(input.envFilePath);
+  return parseCodexA2aRuntimeConfigFromProcessEnv();
+}
+
+export function loadPhase4QqRuntimeConfigFromEnv(input: {
+  envFilePath?: string;
+} = {}): Phase4QqRuntimeConfig {
+  loadEnvFile(input.envFilePath);
+  const parsed = phase4QqRuntimeConfigEnvSchema.safeParse({
+    HUANLINK_ONEBOT_WS_URL: process.env.HUANLINK_ONEBOT_WS_URL,
+    HUANLINK_ONEBOT_ACCESS_TOKEN:
+      process.env.HUANLINK_ONEBOT_ACCESS_TOKEN,
+    HUANLINK_ONEBOT_GROUP_ID: process.env.HUANLINK_ONEBOT_GROUP_ID,
+    HUANLINK_ONEBOT_COMMAND_PREFIX:
+      process.env.HUANLINK_ONEBOT_COMMAND_PREFIX
+  });
+
+  if (!parsed.success) {
+    throw new Error(formatEnvValidationError(parsed.error));
+  }
+
+  return {
+    oneBot11: {
+      url: parsed.data.HUANLINK_ONEBOT_WS_URL,
+      ...(parsed.data.HUANLINK_ONEBOT_ACCESS_TOKEN === undefined
+        ? {}
+        : { accessToken: parsed.data.HUANLINK_ONEBOT_ACCESS_TOKEN }),
+      groupId: parsed.data.HUANLINK_ONEBOT_GROUP_ID,
+      commandPrefix: parsed.data.HUANLINK_ONEBOT_COMMAND_PREFIX
+    },
+    codexA2a: parseCodexA2aRuntimeConfigFromProcessEnv()
+  };
+}
+
+function parseCodexA2aRuntimeConfigFromProcessEnv(): CodexA2aRuntimeConfig {
   const parsed = codexA2aRuntimeConfigEnvSchema.safeParse({
     HUANLINK_CODEX_A2A_ORIGIN: process.env.HUANLINK_CODEX_A2A_ORIGIN,
     HUANLINK_CODEX_A2A_SKILL_ID: process.env.HUANLINK_CODEX_A2A_SKILL_ID

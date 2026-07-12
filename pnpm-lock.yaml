@@ -42,6 +42,9 @@ importers:
       '@huanlink/integration-a2a-client':
         specifier: workspace:*
         version: link:../../packages/integrations/a2a-client
+      '@huanlink/integration-onebot11':
+        specifier: workspace:*
+        version: link:../../packages/integrations/onebot11
       '@huanlink/integration-openai-agents':
         specifier: workspace:*
         version: link:../../packages/integrations/openai-agents

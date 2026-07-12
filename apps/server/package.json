@@ -17,12 +17,14 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "clean": "rimraf --glob dist \"*.tsbuildinfo\" \"*.tsbuildinfo.*\"",
+    "start": "node dist/main.js",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
     "@huanlink/core": "workspace:*",
     "@huanlink/integration-a2a-client": "workspace:*",
+    "@huanlink/integration-onebot11": "workspace:*",
     "@huanlink/integration-openai-agents": "workspace:*",
     "@openai/agents": "^0.12.0",
     "zod": "^4.4.3"

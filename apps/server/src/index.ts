@@ -1,7 +1,10 @@
 export {
   loadRuntimeConfigFromEnv,
   loadCodexA2aRuntimeConfigFromEnv,
-  type CodexA2aRuntimeConfig
+  loadPhase4QqRuntimeConfigFromEnv,
+  type CodexA2aRuntimeConfig,
+  type OneBot11QqRuntimeConfig,
+  type Phase4QqRuntimeConfig
 } from "./runtime-config.js";
 export * from "./main-agent-runtime.js";
 export * from "./agent-call-reentry.js";
