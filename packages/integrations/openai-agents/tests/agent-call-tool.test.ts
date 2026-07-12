@@ -42,7 +42,7 @@ function assistantMessage(text: string): ModelResponse["output"][number] {
 class ToolCallingThenReplyModel implements Model {
   readonly requests: ModelRequest[] = [];
 
-  constructor(private readonly executionMode?: TaskExecutionMode) {}
+  constructor(private readonly executionMode?: string) {}
 
   async getResponse(request: ModelRequest): Promise<ModelResponse> {
     this.requests.push(request);
@@ -170,4 +170,44 @@ describe("createCodexAgentCallTool", () => {
       `\\\"status\\\":\\\"${scenario.invocationResult.status}\\\"`
     );
   });
+
+  test.each(["background", "wait"] as const)(
+    "rejects the legacy %s execution mode before invoking AgentCall",
+    async (legacyMode) => {
+      const invoke = vi.fn<AgentCallInvoker["invoke"]>(async () => ({
+        status: "accepted",
+        executionMode: "async",
+        agentCallId: "legacy-mode-should-not-be-invoked",
+        taskId: "legacy-mode-should-not-be-submitted",
+        state: "submitted"
+      }));
+      const model = new ToolCallingThenReplyModel(legacyMode);
+      const tool = createCodexAgentCallTool({ invoker: { invoke } });
+      const agent = new Agent<OpenAiAgentsRunContext>({
+        name: "HuanLink MainAgent",
+        instructions: "Delegate code changes to Codex when appropriate.",
+        model: "mock-tool-model",
+        tools: [tool]
+      });
+      const runtime = new OpenAiAgentsRuntime({
+        agent,
+        runner: new Runner({
+          modelProvider: new SingleModelProvider(model),
+          tracingDisabled: true
+        })
+      });
+
+      await runtime.run({
+        runId: `run-tool-legacy-${legacyMode}`,
+        sessionId: "session-tool-legacy-mode",
+        input: `try the legacy ${legacyMode} execution mode`
+      });
+
+      expect(invoke).not.toHaveBeenCalled();
+      expect(model.requests).toHaveLength(2);
+      const continuationInput = JSON.stringify(model.requests[1]?.input);
+      expect(continuationInput).toContain("InvalidToolInputError");
+      expect(continuationInput).toContain("Invalid JSON input for tool");
+    }
+  );
 });
