@@ -514,7 +514,7 @@ Pi 提供的是参考：
 
 ### 8.1 已完成能力，不重复建设
 
-根据 [`23-a2a-first-real-demo-plan.md`](./23-a2a-first-real-demo-plan.md)、[`24-codex-a2a-adapter-v1-product-capabilities-draft.md`](./24-codex-a2a-adapter-v1-product-capabilities-draft.md) 和当前 `apps/codex-a2a-adapter`：
+根据 [`23-a2a-first-real-demo-plan.md`](./23-a2a-first-real-demo-plan.md)、[`24-huanlink-v1-product-requirements-draft.md`](./24-huanlink-v1-product-requirements-draft.md) 和当前 `apps/codex-a2a-adapter`：
 
 - 已有标准 A2A Agent Card 和协议端点；
 - 已接真实 Codex `app-server`；
@@ -747,7 +747,7 @@ type ObservationState =
 ### 12.3 HuanLink 当前代码与文档
 
 - [`docs/dev/23-a2a-first-real-demo-plan.md`](./23-a2a-first-real-demo-plan.md)
-- [`docs/dev/24-codex-a2a-adapter-v1-product-capabilities-draft.md`](./24-codex-a2a-adapter-v1-product-capabilities-draft.md)
+- [`docs/dev/24-huanlink-v1-product-requirements-draft.md`](./24-huanlink-v1-product-requirements-draft.md)
 - `apps/codex-a2a-adapter/src/codex-task-executor.ts`
 - `apps/codex-a2a-adapter/src/codex-app-server-client.ts`
 - `apps/codex-a2a-adapter/src/workspace-guard.ts`
