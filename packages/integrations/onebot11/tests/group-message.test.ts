@@ -121,6 +121,21 @@ describe("parseOneBot11GroupMessage", () => {
     expect(parseOneBot11GroupMessage(frame, options)?.trigger).toBeUndefined();
   });
 
+  it("does not assemble a command token across a non-text segment", () => {
+    const frame = groupMessage({
+      message: [
+        { type: "text", data: { text: "/huan" } },
+        { type: "image", data: { file: "separator.jpg" } },
+        { type: "text", data: { text: "link run" } },
+      ],
+    });
+
+    expect(parseOneBot11GroupMessage(frame, options)).toMatchObject({
+      text: "/huanlink run",
+    });
+    expect(parseOneBot11GroupMessage(frame, options)?.trigger).toBeUndefined();
+  });
+
   it("prefers mention when mention and command are both present", () => {
     const frame = groupMessage({
       message: [
@@ -132,6 +147,22 @@ describe("parseOneBot11GroupMessage", () => {
     expect(parseOneBot11GroupMessage(frame, options)?.trigger).toEqual({
       kind: "mention",
       text: "fix this",
+    });
+  });
+
+  it("does not strip a command assembled across a non-text segment from a mention", () => {
+    const frame = groupMessage({
+      message: [
+        { type: "at", data: { qq: "10001" } },
+        { type: "text", data: { text: "/huan" } },
+        { type: "image", data: { file: "separator.jpg" } },
+        { type: "text", data: { text: "link run" } },
+      ],
+    });
+
+    expect(parseOneBot11GroupMessage(frame, options)?.trigger).toEqual({
+      kind: "mention",
+      text: "/huanlink run",
     });
   });
 
@@ -166,6 +197,31 @@ describe("parseOneBot11GroupMessage", () => {
     expect(
       parseOneBot11GroupMessage(groupMessage(overrides), options),
     ).toBeUndefined();
+  });
+
+  it.each(["self_id", "group_id", "user_id", "message_id"])(
+    "ignores an unsafe numeric %s",
+    (field) => {
+      expect(
+        parseOneBot11GroupMessage(
+          groupMessage({ [field]: Number.MAX_SAFE_INTEGER + 1 }),
+          options,
+        ),
+      ).toBeUndefined();
+    },
+  );
+
+  it("ignores an unsafe numeric at target id", () => {
+    const frame = groupMessage({
+      message: [
+        {
+          type: "at",
+          data: { qq: Number.MAX_SAFE_INTEGER + 1 },
+        },
+      ],
+    });
+
+    expect(parseOneBot11GroupMessage(frame, options)).toBeUndefined();
   });
 
   it("prefers a non-empty card, then nickname, then user id for sender name", () => {

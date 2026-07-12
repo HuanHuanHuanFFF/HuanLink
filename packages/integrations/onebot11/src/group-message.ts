@@ -7,6 +7,8 @@ type JsonObject = Record<string, unknown>;
 type ParsedSegments = {
   text: string;
   textWithoutSelfMention: string;
+  commandCandidate: string;
+  mentionCommandCandidate: string;
   mentionsSelf: boolean;
 };
 
@@ -69,6 +71,10 @@ function parseSegments(
 ): ParsedSegments | undefined {
   const rendered: string[] = [];
   const withoutSelfMention: string[] = [];
+  const commandCandidate: string[] = [];
+  const mentionCommandCandidate: string[] = [];
+  let commandCandidateOpen = true;
+  let mentionCommandCandidateOpen = true;
   let mentionsSelf = false;
 
   for (const rawSegment of input) {
@@ -84,6 +90,12 @@ function parseSegments(
       }
       rendered.push(data.text);
       withoutSelfMention.push(data.text);
+      if (commandCandidateOpen) {
+        commandCandidate.push(data.text);
+      }
+      if (mentionCommandCandidateOpen) {
+        mentionCommandCandidate.push(data.text);
+      }
       continue;
     }
 
@@ -94,17 +106,28 @@ function parseSegments(
       }
       const visibleMention = `@<${targetId}>`;
       rendered.push(visibleMention);
+      commandCandidateOpen = false;
       if (targetId === selfId) {
         mentionsSelf = true;
+        if (mentionCommandCandidate.join("").trim().length > 0) {
+          mentionCommandCandidateOpen = false;
+        }
       } else {
         withoutSelfMention.push(visibleMention);
+        mentionCommandCandidateOpen = false;
       }
+      continue;
     }
+
+    commandCandidateOpen = false;
+    mentionCommandCandidateOpen = false;
   }
 
   return {
     text: rendered.join("").trimStart(),
     textWithoutSelfMention: withoutSelfMention.join("").trim(),
+    commandCandidate: commandCandidate.join(""),
+    mentionCommandCandidate: mentionCommandCandidate.join(""),
     mentionsSelf,
   };
 }
@@ -114,18 +137,25 @@ function buildTrigger(
   commandPrefix: string,
 ): InboundChannelMessage["trigger"] {
   if (segments.mentionsSelf) {
+    const hasCommand =
+      stripCommandPrefix(segments.mentionCommandCandidate, commandPrefix) !==
+      undefined;
     return {
       kind: "mention",
-      text:
-        stripCommandPrefix(segments.textWithoutSelfMention, commandPrefix) ??
-        segments.textWithoutSelfMention,
+      text: hasCommand
+        ? removeCommandPrefix(segments.textWithoutSelfMention, commandPrefix)
+        : segments.textWithoutSelfMention,
     };
   }
 
-  const commandText = stripCommandPrefix(segments.text, commandPrefix);
-  return commandText === undefined
+  const hasCommand =
+    stripCommandPrefix(segments.commandCandidate, commandPrefix) !== undefined;
+  return !hasCommand
     ? undefined
-    : { kind: "command", text: commandText };
+    : {
+        kind: "command",
+        text: removeCommandPrefix(segments.text, commandPrefix),
+      };
 }
 
 function stripCommandPrefix(
@@ -143,6 +173,10 @@ function stripCommandPrefix(
   }
 
   return candidate.slice(commandPrefix.length).trim();
+}
+
+function removeCommandPrefix(input: string, commandPrefix: string): string {
+  return input.trimStart().slice(commandPrefix.length).trim();
 }
 
 function parseSenderName(input: unknown, fallback: string): string {
@@ -173,7 +207,7 @@ function normalizeId(input: unknown): string | undefined {
     const normalized = input.trim();
     return normalized.length === 0 ? undefined : normalized;
   }
-  if (typeof input === "number" && Number.isFinite(input) && Number.isInteger(input)) {
+  if (typeof input === "number" && Number.isSafeInteger(input)) {
     return String(input);
   }
   return undefined;
