@@ -5,14 +5,49 @@ import {
 } from "@huanlink/core";
 import { z } from "zod";
 
-const RUNTIME_LOG_LEVELS = ["debug", "info", "warn", "error"] as const satisfies readonly RuntimeLogLevel[];
+const RUNTIME_LOG_LEVELS = [
+  "debug",
+  "info",
+  "warn",
+  "error"
+] as const satisfies readonly RuntimeLogLevel[];
 
 const runtimeConfigEnvSchema = z.object({
   HUANLINK_EVENT_LOG_BASE_DIR: z.string().trim().min(1).optional(),
-  HUANLINK_EVENT_LOG_NEXT_SEQ_CACHE_SIZE: z.coerce.number().int().positive().optional(),
+  HUANLINK_EVENT_LOG_NEXT_SEQ_CACHE_SIZE: z.coerce
+    .number()
+    .int()
+    .positive()
+    .optional(),
   HUANLINK_AGENT_DEFAULT_MAX_STEPS: z.coerce.number().int().positive().optional(),
   HUANLINK_LOG_LEVEL: z.enum(RUNTIME_LOG_LEVELS).optional()
 });
+
+const codexA2aRuntimeConfigEnvSchema = z.object({
+  HUANLINK_CODEX_A2A_ORIGIN: z
+    .string()
+    .trim()
+    .url()
+    .refine((value) => {
+      try {
+        const protocol = new URL(value).protocol;
+        return protocol === "http:" || protocol === "https:";
+      } catch {
+        return false;
+      }
+    }, "must use http or https")
+    .default("http://127.0.0.1:4000"),
+  HUANLINK_CODEX_A2A_SKILL_ID: z
+    .string()
+    .trim()
+    .min(1)
+    .default("codex-code-task")
+});
+
+export type CodexA2aRuntimeConfig = {
+  origin: string;
+  skillId: string;
+};
 
 // 启动时一次性读取环境变量，并映射成 core 可消费的 RuntimeConfig。
 export function loadRuntimeConfigFromEnv(input: {
@@ -45,6 +80,25 @@ export function loadRuntimeConfigFromEnv(input: {
       level: parsed.data.HUANLINK_LOG_LEVEL
     }
   });
+}
+
+export function loadCodexA2aRuntimeConfigFromEnv(input: {
+  envFilePath?: string;
+} = {}): CodexA2aRuntimeConfig {
+  loadEnvFile(input.envFilePath);
+  const parsed = codexA2aRuntimeConfigEnvSchema.safeParse({
+    HUANLINK_CODEX_A2A_ORIGIN: process.env.HUANLINK_CODEX_A2A_ORIGIN,
+    HUANLINK_CODEX_A2A_SKILL_ID: process.env.HUANLINK_CODEX_A2A_SKILL_ID
+  });
+
+  if (!parsed.success) {
+    throw new Error(formatEnvValidationError(parsed.error));
+  }
+
+  return {
+    origin: parsed.data.HUANLINK_CODEX_A2A_ORIGIN,
+    skillId: parsed.data.HUANLINK_CODEX_A2A_SKILL_ID
+  };
 }
 
 // 默认读取 cwd 下的 .env；文件缺失时沿用进程环境和 core 默认值。

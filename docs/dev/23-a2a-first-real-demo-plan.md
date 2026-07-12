@@ -276,6 +276,15 @@ Phase 2 实际核验记录（2026-07-12）：
 - HuanLink 能追踪 `AgentCallId <-> A2A taskId`。
 - Task 完成时能触发新的 MainAgent turn。
 
+Phase 3 实际核验记录（2026-07-12）：
+
+- 已新增独立 `packages/integrations/a2a-client`，精确使用 `@a2a-js/sdk@1.0.0-beta.0`：通过 Agent Card 发现并校验 A2A v1.0、streaming 和目标 skill，以 `SendMessage(returnImmediately: true)` 创建 Task，在后台使用 `SubscribeToTask`/`GetTask` 跟踪终态和完整 Artifact，并映射 `CancelTask`。首次发现失败会重新建连；订阅断流或终态可见性短暂滞后会做有界重试，不会静默丢失 Task。
+- Core 新增协议无关的 `AgentCallService`，维护 `AgentCallId <-> taskId` 双向关联，提交只等待远端受理，随后由受监管 watcher 更新状态；支持取消、显式关闭、暂停态保留、重复终态去重和后台错误出口。Core 与构建后的 integration 公共声明均未引用 A2A SDK 类型。
+- OpenAI Agents integration 使用真实 `tool()` 暴露 `submit_codex_agent_call`，由 SDK `RunContext` 注入 `runId/sessionId`，业务参数只有代码任务文本。MainAgent 固定使用 Demo 模型 `gpt-5.4-mini`；首次 run 在 tool 返回 accepted receipt 后结束，不等待远端任务。
+- `apps/server` 已组装真实 OpenAI Agents Runner、A2A transport 和 AgentCall 生命周期。远端进入 `completed/failed/canceled/rejected` 后，会读取完成时的最新上下文，为同一 session 创建新的 runId 并串行触发一次 fresh MainAgent turn；再入时委派 tool 被禁用，回流失败会记录并通过后台错误回调暴露。
+- 黑盒 smoke 使用标准 A2A HTTP 服务、官方 A2A Client 和真实 OpenAI Agents Runner（确定性测试 Model）：远端 gate 未释放时首次 run 已返回 accepted 与 taskId，释放后完整 Artifact 触发且只触发一次新 turn。该测试只验收 Phase 3 的 HuanLink 原生编排，不冒充 Phase 4 的真实 QQ 或 Phase 5 的真实模型、Codex 代码修改闭环。
+- 全仓默认测试共 26 个测试文件、132 个测试通过；`corepack.cmd pnpm typecheck` 与 `corepack.cmd pnpm build` 均通过。
+
 ### Phase 4：接入真实 QQ 群
 
 目标：

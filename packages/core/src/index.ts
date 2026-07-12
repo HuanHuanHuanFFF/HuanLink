@@ -26,3 +26,6 @@ export * from "./replay/types.js";
 export * from "./replay/create-run-view.js";
 export * from "./replay/run-view-reader.js";
 export * from "./replay/event-log-run-view-reader.js";
+export * from "./agent-call/types.js";
+export * from "./agent-call/agent-call-service.js";
+export * from "./orchestration/agent-turn-scheduler.js";

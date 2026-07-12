@@ -5,3 +5,6 @@ export type RunId = string;
 
 // 一段会话的唯一标识。
 export type SessionId = string;
+
+// 一次外部 Agent 异步调用的唯一标识。
+export type AgentCallId = string;

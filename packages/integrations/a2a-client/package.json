@@ -1,5 +1,5 @@
 {
-  "name": "@huanlink/server",
+  "name": "@huanlink/integration-a2a-client",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -11,20 +11,15 @@
       "import": "./dist/index.js"
     }
   },
-  "files": [
-    "dist"
-  ],
+  "files": ["dist"],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "clean": "rimraf --glob dist \"*.tsbuildinfo\" \"*.tsbuildinfo.*\"",
-    "test": "vitest run",
-    "typecheck": "tsc -p tsconfig.json"
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
   },
   "dependencies": {
-    "@huanlink/core": "workspace:*",
-    "@huanlink/integration-a2a-client": "workspace:*",
-    "@huanlink/integration-openai-agents": "workspace:*",
-    "@openai/agents": "^0.12.0",
-    "zod": "^4.4.3"
+    "@a2a-js/sdk": "1.0.0-beta.0",
+    "@huanlink/core": "workspace:*"
   }
 }

@@ -2,7 +2,10 @@
 import type {
   AgentRuntime,
   AgentRuntimeInput,
-  AgentRuntimeResult
+  AgentRuntimeResult,
+  AgentRuntimeTrigger,
+  RunId,
+  SessionId
 } from "@huanlink/core";
 import { Agent, Runner } from "@openai/agents";
 
@@ -11,8 +14,17 @@ export type OpenAiAgentsRunner = {
   run(
     agent: Agent<any, any>,
     input: string,
-    options?: { signal?: AbortSignal }
+    options?: {
+      signal?: AbortSignal;
+      context?: OpenAiAgentsRunContext;
+    }
   ): Promise<{ finalOutput: unknown }>;
+};
+
+export type OpenAiAgentsRunContext = {
+  runId: RunId;
+  sessionId: SessionId;
+  trigger: AgentRuntimeTrigger;
 };
 
 // 描述 OpenAI Agents 适配运行时的构造参数。
@@ -35,7 +47,12 @@ export class OpenAiAgentsRuntime implements AgentRuntime {
   // 调用真实 Runner，并把最终文本输出收敛为 Core 结果。
   async run(input: AgentRuntimeInput): Promise<AgentRuntimeResult> {
     const result = await this.runner.run(this.agent, input.input, {
-      signal: input.signal
+      signal: input.signal,
+      context: {
+        runId: input.runId,
+        sessionId: input.sessionId,
+        trigger: input.trigger ?? "user"
+      }
     });
 
     if (typeof result.finalOutput !== "string") {

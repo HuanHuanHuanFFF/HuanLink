@@ -15,7 +15,9 @@ const ENV_KEYS = [
   "HUANLINK_EVENT_LOG_BASE_DIR",
   "HUANLINK_EVENT_LOG_NEXT_SEQ_CACHE_SIZE",
   "HUANLINK_AGENT_DEFAULT_MAX_STEPS",
-  "HUANLINK_LOG_LEVEL"
+  "HUANLINK_LOG_LEVEL",
+  "HUANLINK_CODEX_A2A_ORIGIN",
+  "HUANLINK_CODEX_A2A_SKILL_ID"
 ] as const;
 
 let originalCwd: string;
@@ -45,7 +47,7 @@ describe("loadRuntimeConfigFromEnv", () => {
     const envFilePath = path.join(tempRoot, ".env");
 
     await writeFile(
-        envFilePath,
+      envFilePath,
       [
         "HUANLINK_EVENT_LOG_BASE_DIR=.runtime-events",
         "HUANLINK_EVENT_LOG_NEXT_SEQ_CACHE_SIZE=64",
@@ -98,6 +100,35 @@ describe("loadRuntimeConfigFromEnv", () => {
   });
 });
 
+describe("loadCodexA2aRuntimeConfigFromEnv", () => {
+  test("loads the standard Agent Card origin and target skill", () => {
+    process.env.HUANLINK_CODEX_A2A_ORIGIN = "http://127.0.0.1:4100";
+    process.env.HUANLINK_CODEX_A2A_SKILL_ID = "codex-code-task";
+
+    expect(server.loadCodexA2aRuntimeConfigFromEnv()).toEqual({
+      origin: "http://127.0.0.1:4100",
+      skillId: "codex-code-task"
+    });
+  });
+
+  test("uses the local Demo Adapter defaults", () => {
+    process.chdir(tempRoot);
+
+    expect(server.loadCodexA2aRuntimeConfigFromEnv()).toEqual({
+      origin: "http://127.0.0.1:4000",
+      skillId: "codex-code-task"
+    });
+  });
+
+  test("rejects an invalid Adapter origin at startup", () => {
+    process.env.HUANLINK_CODEX_A2A_ORIGIN = "not-a-url";
+
+    expect(() => server.loadCodexA2aRuntimeConfigFromEnv()).toThrow(
+      /HUANLINK_CODEX_A2A_ORIGIN/
+    );
+  });
+});
+
 function getLoader(): LoadRuntimeConfigFromEnv {
   expect(typeof server.loadRuntimeConfigFromEnv).toBe("function");
 
@@ -117,7 +148,9 @@ function snapshotEnv(): Record<(typeof ENV_KEYS)[number], string | undefined> {
       process.env.HUANLINK_EVENT_LOG_NEXT_SEQ_CACHE_SIZE,
     HUANLINK_AGENT_DEFAULT_MAX_STEPS:
       process.env.HUANLINK_AGENT_DEFAULT_MAX_STEPS,
-    HUANLINK_LOG_LEVEL: process.env.HUANLINK_LOG_LEVEL
+    HUANLINK_LOG_LEVEL: process.env.HUANLINK_LOG_LEVEL,
+    HUANLINK_CODEX_A2A_ORIGIN: process.env.HUANLINK_CODEX_A2A_ORIGIN,
+    HUANLINK_CODEX_A2A_SKILL_ID: process.env.HUANLINK_CODEX_A2A_SKILL_ID
   };
 }
 

@@ -69,6 +69,38 @@ class MockTextModelProvider implements ModelProvider {
 }
 
 describe("OpenAiAgentsRuntime", () => {
+  test("passes HuanLink run correlation through the SDK RunContext", async () => {
+    let seenOptions: unknown;
+    const runtime = new OpenAiAgentsRuntime({
+      agent: new Agent({
+        name: "ContextAgent",
+        instructions: "Return text.",
+        model: "mock-text-model"
+      }),
+      runner: {
+        run: async (_agent, _input, options) => {
+          seenOptions = options;
+          return { finalOutput: "context observed" };
+        }
+      }
+    });
+
+    await runtime.run({
+      runId: "run_context_01",
+      sessionId: "session_context_01",
+      trigger: "agent_call_terminal",
+      input: "summarize a completed task"
+    });
+
+    expect(seenOptions).toMatchObject({
+      context: {
+        runId: "run_context_01",
+        sessionId: "session_context_01",
+        trigger: "agent_call_terminal"
+      }
+    });
+  });
+
   // 验证真实 SDK 主循环能被适配为 Core 文本结果。
   test("runs a real Agent and Runner through a custom ModelProvider", async () => {
     const runtime = new OpenAiAgentsRuntime({
