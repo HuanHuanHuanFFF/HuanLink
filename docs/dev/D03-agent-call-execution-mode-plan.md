@@ -8,7 +8,7 @@
 
 **Tech Stack:** TypeScript、Vitest、OpenAI Agents JS、A2A JS SDK、pnpm workspace
 
-**Status（2026-07-12）：** 已由代码提交 `add7bed` 实现并完成复审；全仓 26 个测试文件、139 个测试通过，typecheck 与 build 通过。
+**Status（2026-07-12）：** 初始能力由 `add7bed` 实现；命名修订由代码提交 `c93d542` 与测试提交 `0992915` 完成并通过独立规格/质量复审。全仓 26 个测试文件、141 个测试通过，typecheck 与 build 通过。
 
 **命名修订（2026-07-12）：** 保留调用控制字段 `executionMode`，将未发布取值直接改为 `"async" | "blocking"`；不兼容旧取值 `"background" | "wait"`。本计划中的接口、测试和说明统一使用新取值。
 

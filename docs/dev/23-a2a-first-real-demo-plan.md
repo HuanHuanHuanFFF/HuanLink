@@ -279,11 +279,11 @@ Phase 2 实际核验记录（2026-07-12）：
 Phase 3 实际核验记录（2026-07-12）：
 
 - 已新增独立 `packages/integrations/a2a-client`，精确使用 `@a2a-js/sdk@1.0.0-beta.0`：通过 Agent Card 发现并校验 A2A v1.0、streaming 和目标 skill，以 `SendMessage(returnImmediately: true)` 创建 Task，在后台使用 `SubscribeToTask`/`GetTask` 跟踪终态和完整 Artifact，并映射 `CancelTask`。首次发现失败会重新建连；订阅断流或终态可见性短暂滞后会做有界重试，不会静默丢失 Task。
-- Core 新增协议无关的 `AgentCallService`，维护 `AgentCallId <-> taskId` 双向关联，并支持 `executionMode: "background" | "wait"`。`background` 只等待远端受理并由 watcher 跟踪终态；`wait` 在当前 turn 等到 terminal 或暂停 outcome，且不再触发重复回流。调用取消会立即结束等待、停止 watcher 并异步映射到远端 `CancelTask`；显式关闭会等待该取消收尾。Core 与构建后的 integration 公共声明均未引用 A2A SDK 类型。
-- OpenAI Agents integration 使用真实 `tool()` 暴露 `submit_codex_agent_call`，由 SDK `RunContext` 注入 `runId/sessionId` 和调用取消信号。业务任务参数仍只有代码任务文本，`executionMode` 是 HuanLink 调用控制字段；默认使用 `background`，用户明确要求等待时可选择 `wait`。MainAgent 固定使用 Demo 模型 `gpt-5.4-mini`。
-- `apps/server` 已组装真实 OpenAI Agents Runner、A2A transport 和 AgentCall 生命周期。`background` 受理后 MainAgent 会在同一 turn 继续生成自然确认，远端进入 `completed/failed/canceled/rejected` 后再读取最新上下文，为同一 session 串行触发一次 fresh turn；`wait` 则把 outcome 交回当前 turn，不产生第二次终态回流。再入时委派 tool 被禁用，回流失败会记录并通过后台错误回调暴露。
-- 黑盒 smoke 使用标准 A2A HTTP 服务、官方 A2A Client 和真实 OpenAI Agents Runner（确定性测试 Model）：`background` 验证当前 turn 自然确认、完整 Artifact 和单次终态回流；`wait` 验证当前 turn 确实等待远端结果且不会再入。该测试只验收 Phase 3 的 HuanLink 原生编排，不冒充 Phase 4 的真实 QQ 或 Phase 5 的真实模型、Codex 代码修改闭环。
-- 全仓默认测试共 26 个测试文件、139 个测试通过；`corepack.cmd pnpm typecheck` 与 `corepack.cmd pnpm build` 均通过。
+- Core 新增协议无关的 `AgentCallService`，维护 `AgentCallId <-> taskId` 双向关联，并支持 `executionMode: "async" | "blocking"`。`async` 只等待远端受理并由 watcher 跟踪终态；`blocking` 在当前 turn 等到 terminal 或暂停 outcome，且不再触发重复回流。调用取消会立即结束等待、停止 watcher 并异步映射到远端 `CancelTask`；显式关闭会等待该取消收尾。Core 与构建后的 integration 公共声明均未引用 A2A SDK 类型。
+- OpenAI Agents integration 使用真实 `tool()` 暴露 `submit_codex_agent_call`，由 SDK `RunContext` 注入 `runId/sessionId` 和调用取消信号。业务任务参数仍只有代码任务文本，`executionMode` 是 HuanLink 调用控制字段；默认使用 `async`，用户明确要求等待时可选择 `blocking`。旧值 `background/wait` 会在 Tool 参数校验阶段被拒绝。MainAgent 固定使用 Demo 模型 `gpt-5.4-mini`。
+- `apps/server` 已组装真实 OpenAI Agents Runner、A2A transport 和 AgentCall 生命周期。`async` 受理后 MainAgent 会在同一 turn 继续生成自然确认，远端进入 `completed/failed/canceled/rejected` 后再读取最新上下文，为同一 session 串行触发一次 fresh turn；`blocking` 则把 outcome 交回当前 turn，不产生第二次终态回流。再入时委派 tool 被禁用，回流失败会记录并通过后台错误回调暴露。
+- 黑盒 smoke 使用标准 A2A HTTP 服务、官方 A2A Client 和真实 OpenAI Agents Runner（确定性测试 Model）：`async` 验证当前 turn 自然确认、完整 Artifact 和单次终态回流；`blocking` 验证当前 turn 确实等待远端结果且不会再入。该测试只验收 Phase 3 的 HuanLink 原生编排，不冒充 Phase 4 的真实 QQ 或 Phase 5 的真实模型、Codex 代码修改闭环。
+- 全仓默认测试共 26 个测试文件、141 个测试通过；`corepack.cmd pnpm typecheck` 与 `corepack.cmd pnpm build` 均通过。
 
 ### Phase 4：接入真实 QQ 群
 
