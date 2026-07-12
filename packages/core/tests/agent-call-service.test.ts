@@ -28,6 +28,60 @@ function task(
 }
 
 describe("AgentCallService", () => {
+  test("lists defensive copies of records for only the requested run", async () => {
+    let taskSequence = 0;
+    let agentCallSequence = 0;
+    const transport: AgentCallTransport = {
+      discoverCapability: async (skillId) => ({ id: skillId, name: skillId }),
+      submitTask: async () => {
+        taskSequence += 1;
+        return task("completed", {
+          taskId: `a2a-task-${taskSequence}`,
+          artifacts: [
+            { id: `artifact-${taskSequence}`, text: `result-${taskSequence}` }
+          ]
+        });
+      },
+      async *watchTask() {},
+      cancelTask: async (taskId) => task("canceled", { taskId })
+    };
+    const service = new AgentCallService({
+      transport,
+      createId: () => {
+        agentCallSequence += 1;
+        return `agent-call-${agentCallSequence}`;
+      }
+    });
+    const submit = (runId: string) =>
+      service.submit({
+        runId,
+        sessionId: "session-list",
+        skillId: "codex-code-task",
+        input: `input for ${runId}`,
+        executionMode: "async"
+      });
+
+    await submit("run-target");
+    await submit("run-other");
+    await submit("run-target");
+
+    const listed = service.listByRunId("run-target");
+    expect(listed.map(({ agentCallId }) => agentCallId)).toEqual([
+      "agent-call-1",
+      "agent-call-3"
+    ]);
+    listed[0]!.input = "mutated input";
+    listed[0]!.artifacts[0]!.text = "mutated result";
+
+    expect(service.listByRunId("run-target")[0]).toMatchObject({
+      input: "input for run-target",
+      artifacts: [{ id: "artifact-1", text: "result-1" }]
+    });
+    expect(service.listByRunId("missing-run")).toEqual([]);
+
+    await service.close();
+  });
+
   test("returns an accepted result for an async invocation before completion", async () => {
     const releaseCompletion = deferred();
     const terminalListener = vi.fn();

@@ -30,3 +30,5 @@ export * from "./agent-call/types.js";
 export * from "./agent-call/agent-call-service.js";
 export * from "./orchestration/agent-turn-scheduler.js";
 export * from "./tasks/types.js";
+export * from "./channels/types.js";
+export * from "./conversations/in-memory-conversation-store.js";

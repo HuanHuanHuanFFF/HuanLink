@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import type { AgentCallId } from "../shared/ids.js";
+import type { AgentCallId, RunId } from "../shared/ids.js";
 import {
   isAgentCallOutcomeState,
   isAgentCallTerminalState,
@@ -178,6 +178,12 @@ export class AgentCallService implements AgentCallSubmitter, AgentCallInvoker {
     return agentCallId === undefined
       ? undefined
       : this.getByAgentCallId(agentCallId);
+  }
+
+  listByRunId(runId: RunId): AgentCallRecord[] {
+    return [...this.recordsByAgentCallId.values()]
+      .filter((record) => record.runId === runId)
+      .map((record) => cloneRecord(record)!);
   }
 
   async waitForOutcome(
