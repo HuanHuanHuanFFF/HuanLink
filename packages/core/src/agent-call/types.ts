@@ -95,9 +95,9 @@ export type AgentCallReceipt = {
   state: AgentCallTaskState;
 };
 
-export type AgentCallWaitResult = {
+export type AgentCallBlockingResult = {
   status: "result";
-  executionMode: "wait";
+  executionMode: "blocking";
   agentCallId: AgentCallId;
   taskId: string;
   state: AgentCallTaskState;
@@ -105,7 +105,9 @@ export type AgentCallWaitResult = {
   statusMessage?: string;
 };
 
-export type AgentCallInvocationResult = AgentCallReceipt | AgentCallWaitResult;
+export type AgentCallInvocationResult =
+  | AgentCallReceipt
+  | AgentCallBlockingResult;
 
 export type AgentCallRecord = {
   agentCallId: AgentCallId;

@@ -95,27 +95,29 @@ type Scenario = {
 
 const scenarios: Scenario[] = [
   {
-    name: "defaults to background and lets the Runner continue after acceptance",
-    expectedMode: "background",
+    name: "defaults to async and lets the Runner continue after acceptance",
+    expectedMode: "async",
     invocationResult: {
       status: "accepted",
-      executionMode: "background",
-      agentCallId: "agent-call-tool-background",
-      taskId: "a2a-task-tool-background",
+      executionMode: "async",
+      agentCallId: "agent-call-tool-async",
+      taskId: "a2a-task-tool-async",
       state: "submitted"
     }
   },
   {
-    name: "passes an explicit wait mode result back into the current Runner turn",
-    requestedMode: "wait",
-    expectedMode: "wait",
+    name: "passes an explicit blocking result back into the current Runner turn",
+    requestedMode: "blocking",
+    expectedMode: "blocking",
     invocationResult: {
       status: "result",
-      executionMode: "wait",
-      agentCallId: "agent-call-tool-wait",
-      taskId: "a2a-task-tool-wait",
+      executionMode: "blocking",
+      agentCallId: "agent-call-tool-blocking",
+      taskId: "a2a-task-tool-blocking",
       state: "completed",
-      artifacts: [{ id: "artifact-wait", text: "wait-mode result" }]
+      artifacts: [
+        { id: "artifact-blocking", text: "blocking-mode result" }
+      ]
     }
   }
 ];

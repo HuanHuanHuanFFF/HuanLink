@@ -19,7 +19,7 @@ const parameters = z.object({
   executionMode: z
     .enum(TASK_EXECUTION_MODES)
     .optional()
-    .describe("Use background unless the user explicitly asks to wait.")
+    .describe("Use async unless the user explicitly asks to block until completion.")
 });
 
 export type CreateCodexAgentCallToolOptions = {
@@ -35,12 +35,12 @@ export function createCodexAgentCallTool(
   return tool<typeof parameters, OpenAiAgentsRunContext>({
     name: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
     description:
-      "Submit a coding task to the remote Codex agent. Background mode returns an accepted task ID; wait mode returns the observed task outcome.",
+      "Submit a coding task to the remote Codex agent. Async mode returns an accepted task ID; blocking mode returns the observed task outcome.",
     parameters,
     isEnabled: ({ runContext }) =>
       runContext.context.trigger !== "agent_call_terminal",
     execute: async (
-      { task, executionMode = "background" },
+      { task, executionMode = "async" },
       runContext,
       details
     ) => {

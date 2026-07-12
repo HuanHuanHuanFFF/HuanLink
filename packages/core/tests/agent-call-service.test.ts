@@ -28,7 +28,7 @@ function task(
 }
 
 describe("AgentCallService", () => {
-  test("returns an accepted result for a background invocation before completion", async () => {
+  test("returns an accepted result for an async invocation before completion", async () => {
     const releaseCompletion = deferred();
     const terminalListener = vi.fn();
     const transport: AgentCallTransport = {
@@ -45,31 +45,39 @@ describe("AgentCallService", () => {
     };
     const service = new AgentCallService({
       transport,
-      createId: () => "agent-call-background"
+      createId: () => "agent-call-async"
     });
     service.onTerminal(terminalListener);
 
-    const result = await service.invoke({
-      runId: "run-background",
-      sessionId: "session-background",
+    const invocation = service.invoke({
+      runId: "run-async",
+      sessionId: "session-async",
       skillId: "codex-code-task",
-      input: "run in background",
-      executionMode: "background"
+      input: "run asynchronously",
+      executionMode: "async"
     });
+    const firstSignal = await Promise.race([
+      invocation.then(() => "accepted" as const),
+      new Promise<"still-running">((resolve) =>
+        setImmediate(() => resolve("still-running"))
+      )
+    ]);
+    releaseCompletion.resolve();
+    const result = await invocation;
 
+    expect(firstSignal).toBe("accepted");
     expect(result).toMatchObject({
       status: "accepted",
-      executionMode: "background",
-      agentCallId: "agent-call-background"
+      executionMode: "async",
+      agentCallId: "agent-call-async"
     });
     expect(terminalListener).not.toHaveBeenCalled();
 
-    releaseCompletion.resolve();
     await service.waitForIdle();
     expect(terminalListener).toHaveBeenCalledTimes(1);
   });
 
-  test("waits for an outcome and does not notify background terminal listeners", async () => {
+  test("blocks for an outcome without notifying async terminal listeners", async () => {
     const watchStarted = deferred();
     const releaseCompletion = deferred();
     const terminalListener = vi.fn();
@@ -84,25 +92,27 @@ describe("AgentCallService", () => {
         yield task("working");
         await releaseCompletion.promise;
         yield task("completed", {
-          artifacts: [{ id: "wait-result", text: "completed while waiting" }]
+          artifacts: [
+            { id: "blocking-result", text: "completed while blocking" }
+          ]
         });
       },
       cancelTask: async () => task("canceled")
     };
     const service = new AgentCallService({
       transport,
-      createId: () => "agent-call-wait"
+      createId: () => "agent-call-blocking"
     });
     service.onTerminal(terminalListener);
     let invocationSettled = false;
 
     const invocation = service
       .invoke({
-        runId: "run-wait",
-        sessionId: "session-wait",
+        runId: "run-blocking",
+        sessionId: "session-blocking",
         skillId: "codex-code-task",
-        input: "wait for completion",
-        executionMode: "wait"
+        input: "block until completion",
+        executionMode: "blocking"
       })
       .finally(() => {
         invocationSettled = true;
@@ -114,15 +124,17 @@ describe("AgentCallService", () => {
     releaseCompletion.resolve();
     await expect(invocation).resolves.toMatchObject({
       status: "result",
-      executionMode: "wait",
-      agentCallId: "agent-call-wait",
+      executionMode: "blocking",
+      agentCallId: "agent-call-blocking",
       state: "completed",
-      artifacts: [{ id: "wait-result", text: "completed while waiting" }]
+      artifacts: [
+        { id: "blocking-result", text: "completed while blocking" }
+      ]
     });
     expect(terminalListener).not.toHaveBeenCalled();
   });
 
-  test("returns an input-required pause to a waiting invocation", async () => {
+  test("returns an input-required pause to a blocking invocation", async () => {
     const subscriptionHeldOpen = deferred();
     const releaseSubscription = deferred();
     const terminalListener = vi.fn();
@@ -142,18 +154,18 @@ describe("AgentCallService", () => {
     };
     const service = new AgentCallService({
       transport,
-      createId: () => "agent-call-wait-paused"
+      createId: () => "agent-call-blocking-paused"
     });
     service.onTerminal(terminalListener);
     let invocationSettled = false;
 
     const invocation = service
       .invoke({
-        runId: "run-wait-paused",
-        sessionId: "session-wait-paused",
+        runId: "run-blocking-paused",
+        sessionId: "session-blocking-paused",
         skillId: "codex-code-task",
-        input: "wait until input is needed",
-        executionMode: "wait"
+        input: "block until input is needed",
+        executionMode: "blocking"
       })
       .finally(() => {
         invocationSettled = true;
@@ -165,7 +177,7 @@ describe("AgentCallService", () => {
 
     await expect(invocation).resolves.toMatchObject({
       status: "result",
-      executionMode: "wait",
+      executionMode: "blocking",
       state: "input-required",
       statusMessage: "approval is required"
     });
@@ -177,7 +189,7 @@ describe("AgentCallService", () => {
     expect(terminalListener).not.toHaveBeenCalled();
   });
 
-  test("does not subscribe when a waiting invocation is accepted in a paused state", async () => {
+  test("does not subscribe when a blocking invocation is accepted in a paused state", async () => {
     const watchTask = vi.fn(async function* () {
       yield task("working");
     });
@@ -190,20 +202,20 @@ describe("AgentCallService", () => {
     };
     const service = new AgentCallService({
       transport,
-      createId: () => "agent-call-wait-initially-paused"
+      createId: () => "agent-call-blocking-initially-paused"
     });
 
     await expect(
       service.invoke({
-        runId: "run-wait-initially-paused",
-        sessionId: "session-wait-initially-paused",
+        runId: "run-blocking-initially-paused",
+        sessionId: "session-blocking-initially-paused",
         skillId: "codex-code-task",
         input: "return the initial auth request",
-        executionMode: "wait"
+        executionMode: "blocking"
       })
     ).resolves.toMatchObject({
       status: "result",
-      executionMode: "wait",
+      executionMode: "blocking",
       state: "auth-required",
       statusMessage: "sign in is required"
     });
@@ -212,7 +224,7 @@ describe("AgentCallService", () => {
     expect(watchTask).not.toHaveBeenCalled();
   });
 
-  test("stops waiting when the caller aborts without waiting for the remote outcome", async () => {
+  test("stops a blocking invocation when the caller aborts before the remote outcome", async () => {
     const watchStarted = deferred();
     const releaseCompletion = deferred();
     const cancelStarted = deferred();
@@ -236,7 +248,7 @@ describe("AgentCallService", () => {
     };
     const service = new AgentCallService({
       transport,
-      createId: () => "agent-call-wait-aborted"
+      createId: () => "agent-call-blocking-aborted"
     });
     const controller = new AbortController();
     const canceled = new Error("MainAgent turn canceled");
@@ -244,11 +256,11 @@ describe("AgentCallService", () => {
 
     const invocation = service
       .invoke({
-        runId: "run-wait-aborted",
-        sessionId: "session-wait-aborted",
+        runId: "run-blocking-aborted",
+        sessionId: "session-blocking-aborted",
         skillId: "codex-code-task",
-        input: "stop waiting when the caller cancels",
-        executionMode: "wait",
+        input: "cancel the blocking invocation with its caller",
+        executionMode: "blocking",
         signal: controller.signal
       })
       .finally(() => {
@@ -311,12 +323,12 @@ describe("AgentCallService", () => {
       sessionId: "session-01",
       skillId: "codex-code-task",
       input: "make a focused code change",
-      executionMode: "background"
+      executionMode: "async"
     });
 
     expect(receipt).toEqual({
       status: "accepted",
-      executionMode: "background",
+      executionMode: "async",
       agentCallId: "agent-call-01",
       taskId: "a2a-task-01",
       state: "submitted"
@@ -341,7 +353,7 @@ describe("AgentCallService", () => {
     });
   });
 
-  test("converts a background watcher failure into one failed terminal record", async () => {
+  test("converts an async watcher failure into one failed terminal record", async () => {
     const terminalListener = vi.fn();
     const transport: AgentCallTransport = {
       discoverCapability: async (skillId) => ({
@@ -365,7 +377,7 @@ describe("AgentCallService", () => {
       sessionId: "session-02",
       skillId: "codex-code-task",
       input: "run a code task",
-      executionMode: "background"
+      executionMode: "async"
     });
     await service.waitForIdle();
 
@@ -399,7 +411,7 @@ describe("AgentCallService", () => {
       sessionId: "session-paused",
       skillId: "codex-code-task",
       input: "pause for approval",
-      executionMode: "background"
+      executionMode: "async"
     });
     await service.waitForIdle();
 
@@ -438,7 +450,7 @@ describe("AgentCallService", () => {
       sessionId: "session-03",
       skillId: "codex-code-task",
       input: "cancel me",
-      executionMode: "background"
+      executionMode: "async"
     });
 
     const canceled = await service.cancel(receipt.agentCallId);
@@ -474,7 +486,7 @@ describe("AgentCallService", () => {
       sessionId: "session-close-race",
       skillId: "codex-code-task",
       input: "do not outlive shutdown",
-      executionMode: "background"
+      executionMode: "async"
     });
     await submitStarted.promise;
     const closing = service.close();
@@ -510,7 +522,7 @@ describe("AgentCallService", () => {
       sessionId: "session-listener-error",
       skillId: "codex-code-task",
       input: "complete then fail re-entry",
-      executionMode: "background"
+      executionMode: "async"
     });
     await service.waitForIdle();
 

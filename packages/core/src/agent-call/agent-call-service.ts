@@ -56,7 +56,7 @@ export class AgentCallService implements AgentCallSubmitter, AgentCallInvoker {
 
   async invoke(request: AgentCallRequest): Promise<AgentCallInvocationResult> {
     const receipt = await this.submit(request);
-    if (request.executionMode === "background") {
+    if (request.executionMode === "async") {
       return receipt;
     }
 
@@ -72,7 +72,7 @@ export class AgentCallService implements AgentCallSubmitter, AgentCallInvoker {
     }
     return {
       status: "result",
-      executionMode: "wait",
+      executionMode: "blocking",
       agentCallId: record.agentCallId,
       taskId: record.taskId,
       state: record.state,
@@ -305,7 +305,7 @@ export class AgentCallService implements AgentCallSubmitter, AgentCallInvoker {
         try {
           const initialIsConsumedOutcome =
             isAgentCallOutcomeState(initial.state) &&
-            this.requireRecord(agentCallId).executionMode === "wait";
+            this.requireRecord(agentCallId).executionMode === "blocking";
           if (
             isAgentCallTerminalState(initial.state) ||
             initialIsConsumedOutcome
@@ -398,7 +398,7 @@ export class AgentCallService implements AgentCallSubmitter, AgentCallInvoker {
       for (const waiter of this.outcomeWaiters.get(agentCallId) ?? []) {
         waiter(updated);
       }
-      if (updated.executionMode === "wait") {
+      if (updated.executionMode === "blocking") {
         this.activeWatchers.get(agentCallId)?.controller.abort();
       }
     }
@@ -408,7 +408,7 @@ export class AgentCallService implements AgentCallSubmitter, AgentCallInvoker {
     }
 
     this.terminalHandled.add(agentCallId);
-    if (updated.executionMode === "wait") {
+    if (updated.executionMode === "blocking") {
       return;
     }
     this.activeWatchers.get(agentCallId)?.controller.abort();

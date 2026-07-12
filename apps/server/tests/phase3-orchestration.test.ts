@@ -143,7 +143,7 @@ class DelegateThenSummarizeModel implements Model {
   }
 }
 
-class WaitThenReplyModel implements Model {
+class BlockingThenReplyModel implements Model {
   readonly requests: ModelRequest[] = [];
 
   async getResponse(request: ModelRequest): Promise<ModelResponse> {
@@ -154,11 +154,11 @@ class WaitThenReplyModel implements Model {
         output: [
           {
             type: "function_call",
-            callId: "phase3-wait-tool-call",
+            callId: "phase3-blocking-tool-call",
             name: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
             arguments: JSON.stringify({
               task: "make a controlled Phase 3 code change",
-              executionMode: "wait"
+              executionMode: "blocking"
             })
           }
         ]
@@ -221,7 +221,7 @@ afterEach(async () => {
 });
 
 describe("Phase 3 HuanLink orchestration", () => {
-  test("wait mode returns the remote result in the current turn without re-entry", async () => {
+  test("blocking mode returns the remote result in the current turn without re-entry", async () => {
     const remoteStarted = deferred();
     const remoteCompletion = deferred();
     const executor = new ControlledTaskExecutor({
@@ -233,7 +233,7 @@ describe("Phase 3 HuanLink orchestration", () => {
     const server = await startAdapterServer({ executor, port: 0 });
     servers.push(server);
 
-    const model = new WaitThenReplyModel();
+    const model = new BlockingThenReplyModel();
     const onReentry = vi.fn();
     const runtime = createPhase3HuanLinkRuntime({
       codexA2aOrigin: server.origin,
@@ -247,9 +247,9 @@ describe("Phase 3 HuanLink orchestration", () => {
     let initialRunSettled = false;
     const initialRun = runtime
       .runMainAgent({
-        runId: "run-phase3-wait",
+        runId: "run-phase3-blocking",
         sessionId: "session-phase3",
-        input: "delegate this task and wait for completion"
+        input: "delegate this task and block until completion"
       })
       .finally(() => {
         initialRunSettled = true;
@@ -275,7 +275,7 @@ describe("Phase 3 HuanLink orchestration", () => {
     expect(continuationInput).toContain(CONTROLLED_RESPONSE);
   });
 
-  test("accepts an A2A AgentCall immediately and starts one fresh MainAgent turn on completion", async () => {
+  test("accepts an async A2A AgentCall immediately and starts one fresh MainAgent turn on completion", async () => {
     const remoteCompletion = deferred();
     const executor = new ControlledTaskExecutor({
       waitBeforeComplete: async () => remoteCompletion.promise
@@ -306,7 +306,10 @@ describe("Phase 3 HuanLink orchestration", () => {
     const accepted = acceptedAgentCall(model.requests[1]);
 
     expect(first.output).toBe("Codex task was accepted.");
-    expect(accepted).toMatchObject({ status: "accepted" });
+    expect(accepted).toMatchObject({
+      status: "accepted",
+      executionMode: "async"
+    });
     expect(runtime.agentCalls.getByAgentCallId(accepted.agentCallId)).toMatchObject({
       taskId: accepted.taskId,
       sessionId: "session-phase3",
