@@ -8,6 +8,8 @@
 
 **Tech Stack:** TypeScript、Vitest、OpenAI Agents JS、A2A JS SDK、pnpm workspace
 
+**Status（2026-07-12）：** 已由代码提交 `add7bed` 实现并完成复审；全仓 26 个测试文件、139 个测试通过，typecheck 与 build 通过。
+
 ---
 
 ## 文件职责
