@@ -68,7 +68,11 @@ const phase4QqRuntimeConfigEnvSchema = z.object({
   HUANLINK_ONEBOT_GROUP_ID: z
     .string()
     .trim()
-    .regex(/^[1-9]\d*$/, "must be a positive integer string"),
+    .regex(/^[1-9]\d*$/, "must be a positive integer string")
+    .refine(
+      (value) => Number.isSafeInteger(Number(value)),
+      "must be a safe positive integer string"
+    ),
   HUANLINK_ONEBOT_COMMAND_PREFIX: z
     .string()
     .trim()

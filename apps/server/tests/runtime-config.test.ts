@@ -141,7 +141,7 @@ describe("loadPhase4QqRuntimeConfigFromEnv", () => {
   test("loads real OneBot 11 WebSocket and Codex A2A settings", () => {
     process.env.HUANLINK_ONEBOT_WS_URL = "wss://qq-gateway.example.test/";
     process.env.HUANLINK_ONEBOT_ACCESS_TOKEN = "onebot-secret";
-    process.env.HUANLINK_ONEBOT_GROUP_ID = "12345678901234567890";
+    process.env.HUANLINK_ONEBOT_GROUP_ID = "1234567890";
     process.env.HUANLINK_ONEBOT_COMMAND_PREFIX = "!huanlink";
     process.env.HUANLINK_CODEX_A2A_ORIGIN = "http://127.0.0.1:4100";
     process.env.HUANLINK_CODEX_A2A_SKILL_ID = "codex-code-task";
@@ -150,7 +150,7 @@ describe("loadPhase4QqRuntimeConfigFromEnv", () => {
       oneBot11: {
         url: "wss://qq-gateway.example.test/",
         accessToken: "onebot-secret",
-        groupId: "12345678901234567890",
+        groupId: "1234567890",
         commandPrefix: "!huanlink"
       },
       codexA2a: {
@@ -190,7 +190,15 @@ describe("loadPhase4QqRuntimeConfigFromEnv", () => {
     }
   );
 
-  test.each([undefined, "", "0", "-1", "1.5", "01"])(
+  test.each([
+    undefined,
+    "",
+    "0",
+    "-1",
+    "1.5",
+    "01",
+    "9007199254740992"
+  ])(
     "rejects invalid target group ID %s",
     (groupId) => {
       if (groupId === undefined) {

@@ -205,12 +205,30 @@ describe("ForwardWebSocketOneBot11Channel", () => {
     expect(request).toMatchObject({
       action: "send_group_msg",
       params: {
-        group_id: "20002",
+        group_id: 20002,
         message: [{ type: "text", data: { text: "已受理" } }],
       },
     });
     expect(request?.echo).toMatch(/^send-group:/);
   });
+
+  test.each(["0", "01", "1.5", "9007199254740992", "not-a-group"])(
+    "rejects a non-standard or unsafe outgoing group ID %s",
+    async (groupId) => {
+      const { server, url } = await startServer();
+      const requests: JsonObject[] = [];
+      server.on("connection", (socket) => {
+        socket.on("message", (data) => requests.push(readFrame(data)));
+      });
+      const channel = createChannel(url);
+      await channel.start();
+
+      await expect(channel.sendText(groupId, "must not send")).rejects.toThrow(
+        /safe positive integer/i,
+      );
+      expect(requests).toEqual([]);
+    },
+  );
 
   test("pairs concurrent action responses by echo even when responses arrive in reverse order", async () => {
     const { server, url } = await startServer();

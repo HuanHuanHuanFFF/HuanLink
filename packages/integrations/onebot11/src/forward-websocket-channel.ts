@@ -136,11 +136,20 @@ export class ForwardWebSocketOneBot11Channel implements ChannelAdapter {
       );
     }
 
+    const groupId = parseOutgoingGroupId(conversationId);
+    if (groupId === undefined) {
+      return Promise.reject(
+        new Error(
+          "OneBot 11 group ID must be a safe positive integer string",
+        ),
+      );
+    }
+
     const echo = "send-group:" + randomUUID();
     const payload = JSON.stringify({
       action: "send_group_msg",
       params: {
-        group_id: conversationId,
+        group_id: groupId,
         message: [{ type: "text", data: { text } }],
       },
       echo,
@@ -519,4 +528,12 @@ function nonEmptyString(input: unknown): string | undefined {
 
 function normalizeError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
+}
+
+function parseOutgoingGroupId(input: string): number | undefined {
+  if (!/^[1-9]\d*$/u.test(input)) {
+    return undefined;
+  }
+  const parsed = Number(input);
+  return Number.isSafeInteger(parsed) ? parsed : undefined;
 }
