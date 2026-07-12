@@ -67,6 +67,19 @@ importers:
         specifier: workspace:*
         version: link:../../core
 
+  packages/integrations/onebot11:
+    dependencies:
+      '@huanlink/core':
+        specifier: workspace:*
+        version: link:../../core
+      ws:
+        specifier: 8.21.0
+        version: 8.21.0
+    devDependencies:
+      '@types/ws':
+        specifier: 8.18.1
+        version: 8.18.1
+
   packages/integrations/openai-agents:
     dependencies:
       '@huanlink/core':
