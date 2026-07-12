@@ -6,3 +6,4 @@ export {
 export * from "./main-agent-runtime.js";
 export * from "./agent-call-reentry.js";
 export * from "./phase3-runtime.js";
+export * from "./phase4-qq-runtime.js";
