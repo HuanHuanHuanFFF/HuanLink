@@ -13,6 +13,7 @@ import type {
 } from "./types.js";
 
 type PendingAction = {
+  socket: WebSocket;
   resolve: () => void;
   reject: (error: Error) => void;
   timeout: NodeJS.Timeout;
@@ -40,6 +41,7 @@ export class ForwardWebSocketOneBot11Channel implements ChannelAdapter {
   private reconnectAttempt = 0;
   private running = false;
   private closing = false;
+  private startOperation: Promise<void> | undefined;
   private closeOperation: Promise<void> | undefined;
 
   constructor(options: ForwardWebSocketOneBot11ChannelOptions) {
@@ -72,18 +74,19 @@ export class ForwardWebSocketOneBot11Channel implements ChannelAdapter {
     this.onError = options.onError ?? (() => undefined);
   }
 
-  async start(): Promise<void> {
+  start(): Promise<void> {
     if (this.closing) {
-      throw new Error("OneBot 11 channel is closed");
+      return Promise.reject(new Error("OneBot 11 channel is closed"));
+    }
+    if (this.startOperation !== undefined) {
+      return this.startOperation;
     }
     if (this.running) {
-      return;
+      return Promise.resolve();
     }
 
     this.running = true;
-    try {
-      await this.connect();
-    } catch (error) {
+    const operation = this.connect().catch((error: unknown) => {
       this.running = false;
       const failedSocket = this.socket;
       this.socket = undefined;
@@ -91,10 +94,28 @@ export class ForwardWebSocketOneBot11Channel implements ChannelAdapter {
         failedSocket !== undefined &&
         failedSocket.readyState !== WebSocket.CLOSED
       ) {
-        failedSocket.terminate();
+        try {
+          failedSocket.terminate();
+        } catch {
+          // The connection failure remains the useful startup error.
+        }
       }
       throw this.sanitizeConnectionError(error);
-    }
+    });
+    this.startOperation = operation;
+    void operation.then(
+      () => {
+        if (this.startOperation === operation) {
+          this.startOperation = undefined;
+        }
+      },
+      () => {
+        if (this.startOperation === operation) {
+          this.startOperation = undefined;
+        }
+      },
+    );
+    return operation;
   }
 
   onMessage(listener: ChannelMessageListener): () => void {
@@ -132,7 +153,7 @@ export class ForwardWebSocketOneBot11Channel implements ChannelAdapter {
           new Error("OneBot 11 action " + echo + " timed out"),
         );
       }, this.requestTimeoutMs);
-      this.pendingActions.set(echo, { resolve, reject, timeout });
+      this.pendingActions.set(echo, { socket, resolve, reject, timeout });
 
       try {
         socket.send(payload, (error) => {
@@ -257,7 +278,8 @@ export class ForwardWebSocketOneBot11Channel implements ChannelAdapter {
         if (isCurrent) {
           this.socket = undefined;
         }
-        this.rejectAllPending(
+        this.rejectPendingForSocket(
+          socket,
           new Error(
             "OneBot 11 WebSocket closed before API response (" +
               code +
@@ -423,6 +445,14 @@ export class ForwardWebSocketOneBot11Channel implements ChannelAdapter {
   private rejectAllPending(error: Error): void {
     for (const echo of [...this.pendingActions.keys()]) {
       this.rejectAction(echo, error);
+    }
+  }
+
+  private rejectPendingForSocket(socket: WebSocket, error: Error): void {
+    for (const [echo, pending] of [...this.pendingActions.entries()]) {
+      if (pending.socket === socket) {
+        this.rejectAction(echo, error);
+      }
     }
   }
 

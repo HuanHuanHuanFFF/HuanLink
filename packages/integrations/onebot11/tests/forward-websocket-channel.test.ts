@@ -3,7 +3,7 @@ import type { AddressInfo } from "node:net";
 
 import type { InboundChannelMessage } from "@huanlink/core";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { WebSocketServer, type WebSocket } from "ws";
+import { WebSocket, WebSocketServer } from "ws";
 
 import { ForwardWebSocketOneBot11Channel } from "../src/index.js";
 
@@ -327,6 +327,49 @@ describe("ForwardWebSocketOneBot11Channel", () => {
     expect(sockets).toHaveLength(1);
   });
 
+  test("shares an in-flight start and rejects every caller when the handshake fails", async () => {
+    const handshakeStarted = deferred();
+    const releaseHandshake = deferred();
+    const server = new WebSocketServer({
+      port: 0,
+      verifyClient: (_info, done) => {
+        handshakeStarted.resolve();
+        void releaseHandshake.promise.then(() =>
+          done(false, 503, "Service Unavailable"),
+        );
+      },
+    });
+    servers.push(server);
+    await once(server, "listening");
+    const address = server.address() as AddressInfo;
+    const channel = createChannel(`ws://127.0.0.1:${address.port}/`);
+
+    const firstStart = channel.start();
+    await handshakeStarted.promise;
+    const secondStart = channel.start();
+    let secondSettled = false;
+    void secondStart.then(
+      () => {
+        secondSettled = true;
+      },
+      () => {
+        secondSettled = true;
+      },
+    );
+
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const secondSettledBeforeHandshake = secondSettled;
+    const results = Promise.allSettled([firstStart, secondStart]);
+    releaseHandshake.resolve();
+
+    expect(secondStart).toBe(firstStart);
+    expect(secondSettledBeforeHandshake).toBe(false);
+    await expect(results).resolves.toMatchObject([
+      { status: "rejected", reason: expect.any(Error) },
+      { status: "rejected", reason: expect.any(Error) },
+    ]);
+  });
+
   test("reports an initial handshake failure without leaking the access token", async () => {
     const server = new WebSocketServer({
       port: 0,
@@ -347,5 +390,52 @@ describe("ForwardWebSocketOneBot11Channel", () => {
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toMatch(/401|handshake|connect/i);
     expect((error as Error).message).not.toContain(token);
+  });
+
+  test("does not let a stale socket close reject a new socket action", async () => {
+    const { server, url } = await startServer();
+    const serverSockets: WebSocket[] = [];
+    const framesByConnection: JsonObject[][] = [];
+    server.on("connection", (socket) => {
+      const index = serverSockets.push(socket) - 1;
+      framesByConnection[index] = [];
+      socket.on("message", (data) => {
+        framesByConnection[index]!.push(readFrame(data));
+      });
+    });
+    const channel = createChannel(url, { reconnectDelaysMs: [0] });
+    await channel.start();
+    const internals = channel as unknown as {
+      socket: WebSocket | undefined;
+      scheduleReconnect(): void;
+    };
+    const staleSocket = internals.socket!;
+
+    internals.socket = undefined;
+    internals.scheduleReconnect();
+    await waitFor(() => serverSockets.length === 2, "a replacement socket");
+    await waitFor(
+      () => internals.socket?.readyState === WebSocket.OPEN,
+      "the replacement client to open",
+    );
+
+    const pending = channel.sendText("20002", "new socket action");
+    void pending.catch(() => undefined);
+    await waitFor(
+      () => framesByConnection[1]?.length === 1,
+      "the replacement socket action",
+    );
+    staleSocket.emit("close", 1006, Buffer.from("late close"));
+    const frame = framesByConnection[1]![0]!;
+    serverSockets[1]!.send(
+      JSON.stringify({
+        status: "ok",
+        retcode: 0,
+        data: { message_id: 3 },
+        echo: frame.echo,
+      }),
+    );
+
+    await expect(pending).resolves.toBeUndefined();
   });
 });
