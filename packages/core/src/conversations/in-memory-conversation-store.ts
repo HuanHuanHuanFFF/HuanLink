@@ -11,6 +11,12 @@ export type InMemoryConversationStoreOptions = {
 type Conversation = {
   route: ChannelConversationRoute;
   messages: InboundChannelMessage[];
+  timeline: ConversationTimelineEntry[];
+};
+
+type ConversationTimelineEntry = {
+  senderName: string;
+  text: string;
 };
 
 const DEFAULT_MAX_MESSAGES_PER_SESSION = 50;
@@ -36,19 +42,26 @@ export class InMemoryConversationStore {
     if (existing === undefined) {
       this.conversations.set(sessionId, {
         route,
-        messages: [cloneMessage(message)]
+        messages: [cloneMessage(message)],
+        timeline: [timelineEntryFromInbound(message)]
       });
       return;
     }
 
     assertSameRoute(sessionId, existing.route, route);
     existing.messages.push(cloneMessage(message));
-    if (existing.messages.length > this.maxMessagesPerSession) {
-      existing.messages.splice(
-        0,
-        existing.messages.length - this.maxMessagesPerSession
-      );
+    trimToLatest(existing.messages, this.maxMessagesPerSession);
+    existing.timeline.push(timelineEntryFromInbound(message));
+    trimToLatest(existing.timeline, this.maxMessagesPerSession);
+  }
+
+  appendOutbound(sessionId: SessionId, text: string): void {
+    const existing = this.conversations.get(sessionId);
+    if (existing === undefined) {
+      throw new Error(`Unknown conversation session ${sessionId}`);
     }
+    existing.timeline.push({ senderName: "HuanLink", text });
+    trimToLatest(existing.timeline, this.maxMessagesPerSession);
   }
 
   getMessages(sessionId: SessionId): InboundChannelMessage[] {
@@ -61,9 +74,21 @@ export class InMemoryConversationStore {
   }
 
   formatLatestContext(sessionId: SessionId): string {
-    return (this.conversations.get(sessionId)?.messages ?? [])
-      .map((message) => `${message.senderName}: ${message.text}`)
+    return (this.conversations.get(sessionId)?.timeline ?? [])
+      .map((entry) => `${entry.senderName}: ${entry.text}`)
       .join("\n");
+  }
+}
+
+function timelineEntryFromInbound(
+  message: InboundChannelMessage
+): ConversationTimelineEntry {
+  return { senderName: message.senderName, text: message.text };
+}
+
+function trimToLatest<T>(entries: T[], maximum: number): void {
+  if (entries.length > maximum) {
+    entries.splice(0, entries.length - maximum);
   }
 }
 

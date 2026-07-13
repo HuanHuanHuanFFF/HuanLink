@@ -122,6 +122,53 @@ describe("InMemoryConversationStore", () => {
     expect(store.formatLatestContext("unknown")).toBe("");
   });
 
+  test("formats inbound and HuanLink outbound entries in their append order", () => {
+    const store = new InMemoryConversationStore();
+    store.append(
+      "session-a",
+      message("first", { senderName: "Alice", text: "please inspect it" })
+    );
+    store.appendOutbound("session-a", "I accepted the task.");
+    store.append(
+      "session-a",
+      message("second", { senderName: "Bob", text: "use the safer option" })
+    );
+    store.appendOutbound("session-a", "The task is complete.");
+
+    expect(store.formatLatestContext("session-a")).toBe(
+      [
+        "Alice: please inspect it",
+        "HuanLink: I accepted the task.",
+        "Bob: use the safer option",
+        "HuanLink: The task is complete."
+      ].join("\n")
+    );
+    expect(
+      store.getMessages("session-a").map(({ messageId }) => messageId)
+    ).toEqual(["first", "second"]);
+  });
+
+  test("trims the mixed context window without consuming the inbound window", () => {
+    const store = new InMemoryConversationStore({ maxMessagesPerSession: 2 });
+    store.append(
+      "session-a",
+      message("first", { senderName: "Alice", text: "first request" })
+    );
+    store.appendOutbound("session-a", "first reply");
+    store.append(
+      "session-a",
+      message("second", { senderName: "Bob", text: "second request" })
+    );
+    store.appendOutbound("session-a", "second reply");
+
+    expect(store.formatLatestContext("session-a")).toBe(
+      "Bob: second request\nHuanLink: second reply"
+    );
+    expect(
+      store.getMessages("session-a").map(({ messageId }) => messageId)
+    ).toEqual(["first", "second"]);
+  });
+
   test("returns defensive copies including nested trigger and route data", () => {
     const store = new InMemoryConversationStore();
     store.append(
