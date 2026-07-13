@@ -72,7 +72,8 @@ describe("createDeepSeekMainAgentModelBinding", () => {
     );
     expect(requests[0]?.body).toMatchObject({
       model: "deepseek-v4-flash",
-      thinking: { type: "disabled" },
+      thinking: { type: "enabled" },
+      reasoning_effort: "high",
       tools: [
         {
           type: "function",

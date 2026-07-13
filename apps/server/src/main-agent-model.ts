@@ -46,7 +46,8 @@ export function createDeepSeekMainAgentModelBinding(
       providerData: {
         providerOptions: {
           deepseek: {
-            thinking: { type: "disabled" }
+            thinking: { type: "enabled" },
+            reasoningEffort: "high"
           }
         }
       }
