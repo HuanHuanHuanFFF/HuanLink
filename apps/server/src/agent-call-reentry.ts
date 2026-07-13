@@ -1,4 +1,19 @@
-import type { AgentCallRecord } from "@huanlink/core";
+import type {
+  AgentCallArtifact,
+  AgentCallInputQuestion,
+  AgentCallRecord
+} from "@huanlink/core";
+
+export type AgentCallPausedPayload = {
+  taskId: string;
+  a2aTaskId: string;
+  contextId?: string;
+  state: "input-required";
+  statusMessage?: string;
+  questions: AgentCallInputQuestion[];
+  artifacts: AgentCallArtifact[];
+  latestContext: string;
+};
 
 export function buildAgentCallReentryInput(
   agentCall: AgentCallRecord,
@@ -25,4 +40,56 @@ export function buildAgentCallReentryInput(
     latestContext || "(none)",
     "Respond with a concise result for the user. Do not submit another AgentCall."
   ].join("\n");
+}
+
+export function buildAgentCallPausedPayload(
+  agentCall: AgentCallRecord,
+  latestContext: string
+): AgentCallPausedPayload {
+  if (agentCall.state !== "input-required") {
+    throw new Error(
+      `AgentCall ${agentCall.agentCallId} must be input-required before paused re-entry`
+    );
+  }
+
+  return {
+    taskId: agentCall.agentCallId,
+    a2aTaskId: agentCall.taskId,
+    ...(agentCall.contextId === undefined
+      ? {}
+      : { contextId: agentCall.contextId }),
+    state: agentCall.state,
+    ...(agentCall.statusMessage === undefined
+      ? {}
+      : { statusMessage: agentCall.statusMessage }),
+    questions: cloneQuestions(agentCall.questions ?? []),
+    artifacts: agentCall.artifacts.map((artifact) => ({ ...artifact })),
+    latestContext
+  };
+}
+
+export function buildAgentCallPausedReentryInput(
+  paused: AgentCallPausedPayload
+): string {
+  return [
+    "A previously accepted remote AgentCall requires user input before it can continue.",
+    "Paused task payload:",
+    JSON.stringify(paused, null, 2),
+    "Use get_task_status if the current state needs confirmation.",
+    "If the available conversation context already supplies complete answers to every pending question, call continue_task for this same task.",
+    "If a material choice is missing or ambiguous, ask the QQ user a concise question and wait for their answer.",
+    "Never submit a replacement AgentCall for this paused task."
+  ].join("\n");
+}
+
+function cloneQuestions(
+  questions: AgentCallInputQuestion[]
+): AgentCallInputQuestion[] {
+  return questions.map((question) => ({
+    ...question,
+    options:
+      question.options === null
+        ? null
+        : question.options.map((option) => ({ ...option }))
+  }));
 }

@@ -39,9 +39,9 @@ export interface Phase4QqRuntime {
   close(): Promise<void>;
 }
 
-type ReceiptGate = {
-  promise: Promise<void>;
-  resolve: () => void;
+type SessionEgressReservation = {
+  previous: Promise<void>;
+  release: () => void;
 };
 
 export function createPhase4QqRuntime(
@@ -54,7 +54,7 @@ export function createPhase4QqRuntime(
 
   const conversations = options.store ?? new InMemoryConversationStore();
   const createRunId = options.createRunId ?? randomUUID;
-  const receiptGates = new Map<RunId, ReceiptGate>();
+  const egressTails = new Map<SessionId, Promise<void>>();
   const activeOperations = new Set<Promise<void>>();
   const activeControllers = new Set<AbortController>();
   const reportBackgroundError = createBackgroundErrorReporter(
@@ -74,13 +74,19 @@ export function createPhase4QqRuntime(
       ? {}
       : { transport: options.transport }),
     createRunId,
+    beforeReentry: async ({ sessionId, signal }) => {
+      const reservation = reserveSessionEgress(egressTails, sessionId);
+      try {
+        await waitWithSignal(reservation.previous, signal);
+        return reservation.release;
+      } catch (error) {
+        reservation.release();
+        throw error;
+      }
+    },
     getLatestContext: (sessionId) =>
       conversations.formatLatestContext(sessionId),
     onReentry: async (result) => {
-      const gate = receiptGates.get(result.agentCall.runId);
-      if (gate !== undefined) {
-        await gate.promise;
-      }
       const route = conversations.getRoute(result.sessionId);
       if (route === undefined) {
         throw new Error(`No channel route for session ${result.sessionId}`);
@@ -91,6 +97,10 @@ export function createPhase4QqRuntime(
         );
       }
       await options.channel.sendText(route.conversationId, result.output);
+      if (closed) {
+        return;
+      }
+      conversations.appendOutbound(result.sessionId, result.output);
     },
     onBackgroundError: reportBackgroundError
   });
@@ -106,14 +116,18 @@ export function createPhase4QqRuntime(
       return;
     }
 
+    let reservation: SessionEgressReservation | undefined;
     try {
       const sessionId = sessionIdFor(message);
-      const priorContext = conversations.formatLatestContext(sessionId);
-      conversations.append(sessionId, message);
       if (message.trigger !== undefined) {
-        superviseTrigger(message, sessionId, priorContext);
+        reservation = reserveSessionEgress(egressTails, sessionId);
+      }
+      conversations.append(sessionId, message);
+      if (reservation !== undefined) {
+        superviseTrigger(message, sessionId, reservation);
       }
     } catch (error) {
+      reservation?.release();
       reportBackgroundError(normalizeError(error), undefined);
     }
   };
@@ -121,14 +135,14 @@ export function createPhase4QqRuntime(
   const superviseTrigger = (
     message: InboundChannelMessage,
     sessionId: SessionId,
-    priorContext: string
+    reservation: SessionEgressReservation
   ): void => {
     const controller = new AbortController();
     activeControllers.add(controller);
     const operation = handleTrigger(
       message,
       sessionId,
-      priorContext,
+      reservation,
       controller.signal
     );
     activeOperations.add(operation);
@@ -146,27 +160,26 @@ export function createPhase4QqRuntime(
   const handleTrigger = async (
     message: InboundChannelMessage,
     sessionId: SessionId,
-    priorContext: string,
+    reservation: SessionEgressReservation,
     signal: AbortSignal
   ): Promise<void> => {
     const runId = createRunId();
-    const gate = createReceiptGate();
-    receiptGates.set(runId, gate);
     try {
+      await reservation.previous;
+      signal.throwIfAborted();
+      const latestContext = conversations.formatLatestContext(sessionId);
       const result = await phase3.runMainAgent({
         runId,
         sessionId,
-        input: buildInitialInput(message, priorContext),
+        input: buildInitialInput(message, latestContext),
         signal
       });
       const agentCalls = phase3.agentCalls.listByRunId(runId);
       const reply = appendTaskIds(result.output, agentCalls);
       await options.channel.sendText(message.conversationId, reply);
+      conversations.appendOutbound(sessionId, reply);
     } finally {
-      gate.resolve();
-      if (receiptGates.get(runId) === gate) {
-        receiptGates.delete(runId);
-      }
+      reservation.release();
     }
   };
 
@@ -298,12 +311,65 @@ function appendTaskIds(output: string, agentCalls: AgentCallRecord[]): string {
   return `${output}\n\n${taskIds.join("\n")}`;
 }
 
-function createReceiptGate(): ReceiptGate {
+function reserveSessionEgress(
+  tails: Map<SessionId, Promise<void>>,
+  sessionId: SessionId
+): SessionEgressReservation {
+  const previous = tails.get(sessionId) ?? Promise.resolve();
   let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
+  const tail = new Promise<void>((done) => {
     resolve = done;
   });
-  return { promise, resolve };
+  tails.set(sessionId, tail);
+  let released = false;
+
+  return {
+    previous,
+    release() {
+      if (released) {
+        return;
+      }
+      released = true;
+      resolve();
+      void tail.then(() => {
+        if (tails.get(sessionId) === tail) {
+          tails.delete(sessionId);
+        }
+      });
+    }
+  };
+}
+
+function waitWithSignal(
+  operation: Promise<void>,
+  signal: AbortSignal
+): Promise<void> {
+  if (signal.aborted) {
+    void operation.catch(() => undefined);
+    return Promise.reject(abortReason(signal));
+  }
+  return new Promise<void>((resolve, reject) => {
+    const cleanup = () => signal.removeEventListener("abort", onAbort);
+    const onAbort = () => {
+      cleanup();
+      reject(abortReason(signal));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    void operation.then(
+      () => {
+        cleanup();
+        resolve();
+      },
+      (error) => {
+        cleanup();
+        reject(error);
+      }
+    );
+  });
+}
+
+function abortReason(signal: AbortSignal): unknown {
+  return signal.reason ?? new Error("Phase 4 re-entry wait aborted");
 }
 
 function createBackgroundErrorReporter(

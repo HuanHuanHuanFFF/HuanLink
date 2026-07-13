@@ -1,6 +1,7 @@
 import { describe, expect, test, vi } from "vitest";
 
-import type { AgentCallInvoker } from "@huanlink/core";
+import type { AgentCallContinuator, AgentCallInvoker } from "@huanlink/core";
+import { CONTINUE_TASK_TOOL_NAME } from "@huanlink/integration-openai-agents";
 
 import {
   createDeepSeekMainAgentModelBinding,
@@ -36,6 +37,11 @@ describe("createDeepSeekMainAgentModelBinding", () => {
       taskId: "a2a-task-deepseek",
       state: "submitted"
     }));
+    const continueTask = vi.fn<AgentCallContinuator["continueTask"]>(
+      async () => {
+        throw new Error("Unexpected task continuation in this test");
+      }
+    );
     const modelBinding = createDeepSeekMainAgentModelBinding({
       config: {
         provider: "deepseek",
@@ -51,6 +57,7 @@ describe("createDeepSeekMainAgentModelBinding", () => {
         getByAgentCallId: () => undefined,
         getByTaskId: () => undefined
       },
+      taskContinuator: { continueTask },
       modelBinding
     });
 
@@ -90,6 +97,13 @@ describe("createDeepSeekMainAgentModelBinding", () => {
           type: "function",
           function: {
             name: "get_task_status",
+            strict: true
+          }
+        },
+        {
+          type: "function",
+          function: {
+            name: CONTINUE_TASK_TOOL_NAME,
             strict: true
           }
         }

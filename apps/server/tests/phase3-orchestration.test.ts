@@ -10,14 +10,18 @@ import {
   type StreamEvent
 } from "@openai/agents";
 import {
+  CONTINUE_TASK_TOOL_NAME,
   GET_TASK_STATUS_TOOL_NAME,
-  SUBMIT_CODEX_AGENT_CALL_TOOL_NAME
+  SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
+  type OpenAiAgentsRunner
 } from "@huanlink/integration-openai-agents";
 import type {
+  AgentCallBackgroundErrorListener,
   AgentCallInvocationResult,
   AgentCallReceipt,
   AgentCallTaskState,
-  AgentCallTransport
+  AgentCallTransport,
+  AgentCallTransportContinueRequest
 } from "@huanlink/core";
 
 import {
@@ -265,6 +269,66 @@ class SubmitThenQueryStatusModel implements Model {
   }
 }
 
+class DelegateContinueThenSummarizeModel implements Model {
+  readonly requests: ModelRequest[] = [];
+
+  async getResponse(request: ModelRequest): Promise<ModelResponse> {
+    this.requests.push(request);
+    if (this.requests.length === 1) {
+      return {
+        usage: new Usage(),
+        output: [
+          {
+            type: "function_call",
+            callId: "phase3-submit-before-input",
+            name: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
+            arguments: JSON.stringify({ task: "start one resumable task" })
+          }
+        ]
+      };
+    }
+    if (this.requests.length === 2) {
+      return {
+        usage: new Usage(),
+        output: [assistantMessage("Task accepted before input is required.")]
+      };
+    }
+    if (this.requests.length === 3) {
+      const accepted = acceptedAgentCall(this.requests[1]);
+      return {
+        usage: new Usage(),
+        output: [
+          {
+            type: "function_call",
+            callId: "phase3-continue-input-required",
+            name: CONTINUE_TASK_TOOL_NAME,
+            arguments: JSON.stringify({
+              taskId: accepted.agentCallId,
+              answers: [{ questionId: "approach", answers: ["Safe"] }]
+            })
+          }
+        ]
+      };
+    }
+    if (this.requests.length === 4) {
+      return {
+        usage: new Usage(),
+        output: [assistantMessage("The original paused task was continued.")]
+      };
+    }
+    return {
+      usage: new Usage(),
+      output: [assistantMessage("The continued task completed.")]
+    };
+  }
+
+  async *getStreamedResponse(
+    _request: ModelRequest
+  ): AsyncIterable<StreamEvent> {
+    throw new Error("Streaming is not used in this test");
+  }
+}
+
 class SingleModelProvider implements ModelProvider {
   constructor(private readonly model: Model) {}
 
@@ -332,6 +396,137 @@ function pendingTransport() {
   return { transport, submitTask };
 }
 
+function pausedTransport() {
+  const submitTask = vi.fn<AgentCallTransport["submitTask"]>(
+    async (request) => ({
+      taskId: "a2a-task-input-required",
+      contextId: request.contextId,
+      state: "working",
+      artifacts: []
+    })
+  );
+  const transport: AgentCallTransport = {
+    discoverCapability: async (skillId) => ({
+      id: skillId,
+      name: "Codex code task"
+    }),
+    submitTask,
+    async *watchTask(taskId) {
+      yield {
+        taskId,
+        contextId: "a2a-context-input-required",
+        state: "input-required",
+        statusMessage: "A material choice is required",
+        questions: [
+          {
+            header: "Approach",
+            id: "approach",
+            isOther: false,
+            isSecret: false,
+            options: [
+              {
+                label: "Safe",
+                description: "Preserve the existing public contract."
+              }
+            ],
+            question: "Which approach should Codex use?"
+          }
+        ],
+        artifacts: [
+          {
+            id: "artifact-before-choice",
+            name: "Current analysis",
+            description: "What Codex learned before pausing.",
+            text: "The safer approach keeps compatibility."
+          }
+        ]
+      };
+    },
+    continueTask: rejectUnexpectedContinuation,
+    cancelTask: async (taskId) => ({
+      taskId,
+      state: "canceled",
+      artifacts: []
+    })
+  };
+  return { transport, submitTask };
+}
+
+function resumablePausedTransport() {
+  const taskId = "a2a-task-resumable";
+  const submitTask = vi.fn<AgentCallTransport["submitTask"]>(
+    async (request) => ({
+      taskId,
+      contextId: request.contextId,
+      state: "working",
+      artifacts: []
+    })
+  );
+  const continueTask = vi.fn<AgentCallTransport["continueTask"]>(
+    async (request: AgentCallTransportContinueRequest) => ({
+      taskId: request.taskId,
+      contextId: request.contextId,
+      state: "working",
+      artifacts: []
+    })
+  );
+  let watchCount = 0;
+  const transport: AgentCallTransport = {
+    discoverCapability: async (skillId) => ({
+      id: skillId,
+      name: "Codex code task"
+    }),
+    submitTask,
+    async *watchTask(currentTaskId) {
+      watchCount += 1;
+      if (watchCount === 1) {
+        yield {
+          taskId: currentTaskId,
+          contextId: "a2a-context-resumable",
+          state: "input-required",
+          statusMessage: "Choose an approach",
+          questions: [
+            {
+              header: "Approach",
+              id: "approach",
+              isOther: false,
+              isSecret: false,
+              options: [
+                {
+                  label: "Safe",
+                  description: "Preserve the current contract."
+                }
+              ],
+              question: "Which approach should Codex use?"
+            }
+          ],
+          artifacts: []
+        };
+        return;
+      }
+
+      yield {
+        taskId: currentTaskId,
+        contextId: "a2a-context-resumable",
+        state: "completed",
+        artifacts: [
+          {
+            id: "artifact-resumed",
+            text: "The safe approach was completed."
+          }
+        ]
+      };
+    },
+    continueTask,
+    cancelTask: async (currentTaskId) => ({
+      taskId: currentTaskId,
+      state: "canceled",
+      artifacts: []
+    })
+  };
+  return { transport, submitTask, continueTask, taskId };
+}
+
 function waitForAbort(signal: AbortSignal): Promise<void> {
   if (signal.aborted) {
     return Promise.resolve();
@@ -347,6 +542,201 @@ afterEach(async () => {
 });
 
 describe("Phase 3 HuanLink orchestration", () => {
+  test("starts one structured fresh MainAgent turn when an async AgentCall requires input", async () => {
+    const model = new DelegateThenSummarizeModel();
+    const { transport, submitTask } = pausedTransport();
+    const onReentry = vi.fn((_result: Phase3ReentryResult) => undefined);
+    const latestContext = [
+      "Alice: please update the parser",
+      "HuanLink: Codex task accepted.",
+      "Bob: preserve compatibility"
+    ].join("\n");
+    const runtime = createPhase3HuanLinkRuntime({
+      codexA2aOrigin: "http://127.0.0.1:1",
+      transport,
+      runner: new Runner({
+        modelProvider: new SingleModelProvider(model),
+        tracingDisabled: true
+      }),
+      createRunId: () => "run-phase3-input-required",
+      getLatestContext: () => latestContext,
+      onReentry
+    });
+    runtimes.push(runtime);
+
+    await runtime.runMainAgent({
+      runId: "run-phase3-input-required-initial",
+      sessionId: "session-phase3-input-required",
+      input: "delegate a task that needs one material choice"
+    });
+    const accepted = acceptedAgentCall(model.requests[1]);
+    await runtime.agentCalls.waitForIdle();
+    expect(onReentry).toHaveBeenCalledTimes(1);
+    const [result] = onReentry.mock.calls[0]!;
+
+    expect(result).toMatchObject({
+      runId: "run-phase3-input-required",
+      sessionId: "session-phase3-input-required",
+      trigger: "agent_call_input_required",
+      reason: "input-required",
+      latestContext,
+      agentCall: {
+        agentCallId: accepted.agentCallId,
+        taskId: accepted.taskId,
+        contextId: "a2a-context-input-required",
+        state: "input-required"
+      },
+      paused: {
+        taskId: accepted.agentCallId,
+        a2aTaskId: accepted.taskId,
+        contextId: "a2a-context-input-required",
+        state: "input-required",
+        statusMessage: "A material choice is required",
+        questions: [
+          {
+            id: "approach",
+            options: [
+              {
+                label: "Safe",
+                description: "Preserve the existing public contract."
+              }
+            ]
+          }
+        ],
+        artifacts: [
+          {
+            id: "artifact-before-choice",
+            text: "The safer approach keeps compatibility."
+          }
+        ],
+        latestContext
+      }
+    });
+    expect(result.input).toContain('"questions"');
+    expect(result.input).toContain('"options"');
+    expect(result.input).toContain("Bob: preserve compatibility");
+    expect(submitTask).toHaveBeenCalledTimes(1);
+    expect(model.requests).toHaveLength(3);
+    expect(model.requests[0]?.tools.map(({ name }) => name)).toEqual([
+      SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
+      GET_TASK_STATUS_TOOL_NAME,
+      CONTINUE_TASK_TOOL_NAME
+    ]);
+    expect(model.requests[2]?.tools.map(({ name }) => name)).toEqual([
+      GET_TASK_STATUS_TOOL_NAME,
+      CONTINUE_TASK_TOOL_NAME
+    ]);
+    expect(model.requests[2]?.systemInstructions).toContain(
+      "continue_task for this same task"
+    );
+    expect(model.requests[2]?.systemInstructions).toContain(
+      "ask the QQ user"
+    );
+    expect(model.requests[2]?.systemInstructions).toContain("/huanlink");
+    expect(model.requests[2]?.systemInstructions).toContain("@HuanLink");
+    expect(model.requests[2]?.systemInstructions).toContain(
+      "never submit a replacement AgentCall"
+    );
+  });
+
+  test("continues the original paused task when session context already contains the answer", async () => {
+    const model = new DelegateContinueThenSummarizeModel();
+    const { transport, submitTask, continueTask, taskId } =
+      resumablePausedTransport();
+    const reentries: Phase3ReentryResult[] = [];
+    const bothReentries = deferred();
+    const reentryRunIds = [
+      "run-phase3-auto-continue",
+      "run-phase3-auto-continue-terminal"
+    ];
+    const runtime = createPhase3HuanLinkRuntime({
+      codexA2aOrigin: "http://127.0.0.1:1",
+      transport,
+      runner: new Runner({
+        modelProvider: new SingleModelProvider(model),
+        tracingDisabled: true
+      }),
+      createRunId: () => reentryRunIds.shift() ?? "run-phase3-extra",
+      getLatestContext: () =>
+        "Alice: use the Safe option and preserve the existing contract",
+      onReentry: (result) => {
+        reentries.push(result);
+        if (reentries.length === 2) {
+          bothReentries.resolve();
+        }
+      }
+    });
+    runtimes.push(runtime);
+
+    await runtime.runMainAgent({
+      runId: "run-phase3-auto-continue-initial",
+      sessionId: "session-phase3-auto-continue",
+      input: "delegate a task whose answer is already authorized"
+    });
+    const accepted = acceptedAgentCall(model.requests[1]);
+    await bothReentries.promise;
+    await runtime.agentCalls.waitForIdle();
+
+    expect(submitTask).toHaveBeenCalledTimes(1);
+    expect(continueTask).toHaveBeenCalledTimes(1);
+    expect(continueTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskId,
+        contextId: "a2a-context-resumable",
+        answers: { approach: ["Safe"] }
+      })
+    );
+    expect(reentries.map(({ reason }) => reason)).toEqual([
+      "input-required",
+      "terminal"
+    ]);
+    expect(
+      reentries.map(({ agentCall }) => ({
+        taskId: agentCall.agentCallId,
+        a2aTaskId: agentCall.taskId
+      }))
+    ).toEqual([
+      { taskId: accepted.agentCallId, a2aTaskId: accepted.taskId },
+      { taskId: accepted.agentCallId, a2aTaskId: accepted.taskId }
+    ]);
+    expect(runtime.agentCalls.listByRunId("run-phase3-auto-continue-initial"))
+      .toHaveLength(1);
+    expect(runtime.agentCalls.listByRunId("run-phase3-auto-continue")).toEqual(
+      []
+    );
+    expect(model.requests).toHaveLength(5);
+  });
+
+  test("does not start a duplicate paused re-entry for the first blocking pause", async () => {
+    const model = new BlockingThenReplyModel();
+    const { transport, submitTask } = pausedTransport();
+    const onReentry = vi.fn();
+    const runtime = createPhase3HuanLinkRuntime({
+      codexA2aOrigin: "http://127.0.0.1:1",
+      transport,
+      runner: new Runner({
+        modelProvider: new SingleModelProvider(model),
+        tracingDisabled: true
+      }),
+      onReentry
+    });
+    runtimes.push(runtime);
+
+    await runtime.runMainAgent({
+      runId: "run-phase3-blocking-input-required",
+      sessionId: "session-phase3-blocking-input-required",
+      input: "delegate and wait for the first material choice"
+    });
+    await runtime.agentCalls.waitForIdle();
+
+    expect(submitTask).toHaveBeenCalledTimes(1);
+    expect(onReentry).not.toHaveBeenCalled();
+    expect(model.requests).toHaveLength(2);
+    expect(JSON.stringify(model.requests[1]?.input)).toContain(
+      "input-required"
+    );
+  });
+
   test("queries an existing session task without submitting another AgentCall", async () => {
     const model = new SubmitThenQueryStatusModel();
     const { transport, submitTask } = pendingTransport();
@@ -499,6 +889,8 @@ describe("Phase 3 HuanLink orchestration", () => {
     expect(completed).toMatchObject({
       runId: "run-phase3-reentry",
       sessionId: "session-phase3",
+      trigger: "agent_call_terminal",
+      reason: "terminal",
       latestContext,
       output: "Codex task finished and is ready to report.",
       agentCall: {
@@ -544,6 +936,8 @@ describe("Phase 3 HuanLink orchestration", () => {
       expect(result).toMatchObject({
         runId: `run-phase3-${state}`,
         sessionId: "session-phase3",
+        trigger: "agent_call_terminal",
+        reason: "terminal",
         latestContext: `latest context for ${state}`,
         agentCall: {
           agentCallId: accepted.agentCallId,
@@ -598,6 +992,94 @@ describe("Phase 3 HuanLink orchestration", () => {
     expect(model.requests).toHaveLength(3);
   });
 
+  test("releases the re-entry reservation exactly once when the re-entry model fails", async () => {
+    const model = new DelegateThenSummarizeModel(() => {
+      throw new Error("re-entry model failed");
+    });
+    const cleanup = vi.fn();
+    const beforeReentry = vi.fn(async () => cleanup);
+    const onReentry = vi.fn();
+    const observed = deferred<Error>();
+    const runtime = createPhase3HuanLinkRuntime({
+      codexA2aOrigin: "http://127.0.0.1:1",
+      transport: terminalTransport("completed"),
+      runner: new Runner({
+        modelProvider: new SingleModelProvider(model),
+        tracingDisabled: true
+      }),
+      beforeReentry,
+      onReentry,
+      onBackgroundError: (error) => observed.resolve(error)
+    });
+    runtimes.push(runtime);
+
+    await runtime.runMainAgent({
+      runId: "run-phase3-reentry-model-failure",
+      sessionId: "session-phase3",
+      input: "delegate and release the re-entry reservation on failure"
+    });
+    const failure = await observed.promise;
+
+    expect(failure.message).toContain("re-entry model failed");
+    expect(beforeReentry).toHaveBeenCalledTimes(1);
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(onReentry).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ["input-required", () => pausedTransport().transport],
+    ["terminal", () => terminalTransport("completed")]
+  ] as const)(
+    "aborts a hanging %s re-entry without reporting a shutdown error",
+    async (_kind, createTransport) => {
+      const model = new DelegateThenSummarizeModel();
+      const initialRunner = new Runner({
+        modelProvider: new SingleModelProvider(model),
+        tracingDisabled: true
+      });
+      const reentryStarted = deferred<AbortSignal | undefined>();
+      const manualRelease = deferred();
+      let runnerCalls = 0;
+      const hangingRunner: OpenAiAgentsRunner = {
+        async run(agent, input, options) {
+          runnerCalls += 1;
+          if (runnerCalls === 1) {
+            return initialRunner.run(agent, input, options);
+          }
+          reentryStarted.resolve(options?.signal);
+          await waitForReleaseOrAbort(manualRelease.promise, options?.signal);
+          throw new Error("manually released hanging Phase 3 re-entry");
+        }
+      };
+      const onBackgroundError = vi.fn<AgentCallBackgroundErrorListener>();
+      const runtime = createPhase3HuanLinkRuntime({
+        codexA2aOrigin: "http://127.0.0.1:1",
+        transport: createTransport(),
+        runner: hangingRunner,
+        onBackgroundError
+      });
+      runtimes.push(runtime);
+
+      await runtime.runMainAgent({
+        runId: `run-phase3-hanging-${_kind}`,
+        sessionId: "session-phase3-hanging-close",
+        input: `delegate one ${_kind} task`
+      });
+      const reentrySignal = await reentryStarted.promise;
+
+      const closeOperation = runtime.close();
+      try {
+        await expect(settlesWithin(closeOperation, 1_000)).resolves.toBe(true);
+      } finally {
+        manualRelease.resolve();
+        await Promise.allSettled([closeOperation]);
+      }
+
+      expect(reentrySignal?.aborted).toBe(true);
+      expect(onBackgroundError).not.toHaveBeenCalled();
+    }
+  );
+
   test("reports a MainAgent re-entry failure through the background error callback", async () => {
     const model = new DelegateThenSummarizeModel();
     const observed = deferred<{
@@ -636,3 +1118,46 @@ describe("Phase 3 HuanLink orchestration", () => {
     expect(failure.notificationError).toContain("QQ egress is unavailable");
   });
 });
+
+async function settlesWithin(
+  operation: Promise<unknown>,
+  timeoutMs: number
+): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      operation.then(() => true),
+      new Promise<false>((resolve) => {
+        timer = setTimeout(() => resolve(false), timeoutMs);
+      })
+    ]);
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+  }
+}
+
+function waitForReleaseOrAbort(
+  release: Promise<void>,
+  signal: AbortSignal | undefined
+): Promise<void> {
+  if (signal === undefined) {
+    return release;
+  }
+  if (signal.aborted) {
+    return Promise.reject(signal.reason);
+  }
+  return new Promise<void>((resolve, reject) => {
+    const cleanup = () => signal.removeEventListener("abort", onAbort);
+    const onAbort = () => {
+      cleanup();
+      reject(signal.reason);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    void release.then(() => {
+      cleanup();
+      resolve();
+    });
+  });
+}

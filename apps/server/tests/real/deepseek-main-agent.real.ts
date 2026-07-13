@@ -43,6 +43,11 @@ describe("real DeepSeek MainAgent smoke", () => {
         getByAgentCallId,
         getByTaskId
       },
+      taskContinuator: {
+        continueTask: vi.fn(async () => {
+          throw new Error("Unexpected task continuation in this smoke test");
+        })
+      },
       modelBinding: createDeepSeekMainAgentModelBinding({
         config: {
           provider: "deepseek",

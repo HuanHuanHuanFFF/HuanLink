@@ -124,6 +124,23 @@ class CloseReleasesSendChannel extends ControlledChannel {
   }
 }
 
+class RejectFirstSendChannel extends ControlledChannel {
+  private attempts = 0;
+
+  override async sendText(
+    conversationId: string,
+    text: string
+  ): Promise<void> {
+    const output = { conversationId, text };
+    this.sendCalls.push(output);
+    this.attempts += 1;
+    if (this.attempts === 1) {
+      throw new Error("first QQ send failed");
+    }
+    this.sent.push(output);
+  }
+}
+
 class DeferredStartChannel extends ControlledChannel {
   readonly startEntered = deferred();
   readonly startRelease = deferred();
@@ -284,6 +301,58 @@ class ControlledTransport implements AgentCallTransport {
   }
 }
 
+class PausingTransport implements AgentCallTransport {
+  readonly submitted = deferred<AgentCallTransportSubmitRequest>();
+  readonly pausePublished = deferred();
+  readonly taskId = "a2a-task-paused-phase4";
+
+  async discoverCapability(skillId: string) {
+    return { id: skillId, name: "Codex" };
+  }
+
+  async submitTask(request: AgentCallTransportSubmitRequest) {
+    this.submitted.resolve(request);
+    return {
+      taskId: this.taskId,
+      contextId: "a2a-context-paused-phase4",
+      state: "working" as const,
+      artifacts: []
+    };
+  }
+
+  async *watchTask(taskId: string) {
+    this.pausePublished.resolve();
+    yield {
+      taskId,
+      contextId: "a2a-context-paused-phase4",
+      state: "input-required" as const,
+      statusMessage: "A material choice is required",
+      questions: [
+        {
+          header: "Approach",
+          id: "approach",
+          isOther: false,
+          isSecret: false,
+          options: [
+            {
+              label: "Safe",
+              description: "Preserve the existing contract."
+            }
+          ],
+          question: "Which approach should Codex use?"
+        }
+      ],
+      artifacts: []
+    };
+  }
+
+  continueTask = rejectUnexpectedContinuation;
+
+  async cancelTask(taskId: string) {
+    return { taskId, state: "canceled" as const, artifacts: [] };
+  }
+}
+
 function idleTransport(): AgentCallTransport {
   return {
     discoverCapability: async (skillId) => ({ id: skillId, name: "Codex" }),
@@ -365,6 +434,17 @@ describe("Phase 4 QQ orchestration", () => {
     expect(channel.sent[0]?.text).toBe(
       "MainAgent used the injected model binding."
     );
+    expect(runtime.conversations.formatLatestContext(SESSION_ID)).toBe(
+      [
+        "Alice: message bound-model",
+        "HuanLink: MainAgent used the injected model binding."
+      ].join("\n")
+    );
+    expect(
+      runtime.conversations.getMessages(SESSION_ID).map(({ messageId }) =>
+        messageId
+      )
+    ).toEqual(["bound-model"]);
     expect(model.requests).toHaveLength(1);
   });
 
@@ -437,6 +517,52 @@ describe("Phase 4 QQ orchestration", () => {
     await waitForSendCount(channel, 1);
   });
 
+  test("builds a waiting user turn from context captured after the previous egress", async () => {
+    const channel = new ControlledChannel(true);
+    const inputs: string[] = [];
+    const outputs = ["first reply", "second reply"];
+    const captureRunner: OpenAiAgentsRunner = {
+      run: async (_agent, input) => {
+        inputs.push(input);
+        return { finalOutput: outputs[inputs.length - 1] ?? "extra reply" };
+      }
+    };
+    const runtime = createPhase4QqRuntime({
+      channel,
+      targetConversationId: TARGET_GROUP,
+      codexA2aOrigin: "http://127.0.0.1:1",
+      transport: idleTransport(),
+      runner: captureRunner,
+      createRunId: runIds("run-user-first", "run-user-second")
+    });
+    runtimes.push(runtime);
+
+    await runtime.start();
+    await channel.emit(
+      message("user-first", {
+        text: "/huanlink first request",
+        trigger: { kind: "command", text: "first request" }
+      })
+    );
+    await vi.waitFor(() => expect(channel.sendCalls).toHaveLength(1));
+    await channel.emit(
+      message("user-second", {
+        text: "@<10001> second request",
+        trigger: { kind: "mention", text: "second request" }
+      })
+    );
+
+    try {
+      expect(inputs).toHaveLength(1);
+    } finally {
+      channel.firstSendRelease.resolve();
+    }
+    await waitForSendCount(channel, 2);
+
+    expect(inputs[1]).toContain("HuanLink: first reply");
+    expect(inputs[1]).toContain("Current explicit request:\nsecond request");
+  });
+
   test("acknowledges a triggered code task with mechanical HuanLink and A2A task IDs", async () => {
     const channel = new ControlledChannel();
     const store = new InMemoryConversationStore();
@@ -486,7 +612,9 @@ describe("Phase 4 QQ orchestration", () => {
     const initialInput = JSON.stringify(model.requests[0]?.input);
     expect(initialInput).toContain("keep the API stable");
     expect(initialInput).toContain("update the adapter");
-    expect(initialInput).not.toContain("@<10001>");
+    expect(initialInput).toContain(
+      "Current explicit request:\\nupdate the adapter"
+    );
 
     transport.completion.resolve();
     await waitForSendCount(channel, 2);
@@ -539,6 +667,19 @@ describe("Phase 4 QQ orchestration", () => {
     expect(channel.sent[1]?.text).toBe(
       "Codex task completed with the latest context."
     );
+    const contextAfterCompletion = runtime.conversations.formatLatestContext(
+      SESSION_ID
+    );
+    expect(contextAfterCompletion).toContain(
+      `HuanLink: ${channel.sent[0]!.text}`
+    );
+    expect(contextAfterCompletion).toContain(
+      `HuanLink: ${channel.sent[1]!.text}`
+    );
+    expect(contextAfterCompletion.indexOf(`HuanLink: ${channel.sent[0]!.text}`))
+      .toBeLessThan(
+        contextAfterCompletion.indexOf(`HuanLink: ${channel.sent[1]!.text}`)
+      );
     const terminalInput = JSON.stringify(model.requests[2]?.input);
     expect(terminalInput).toContain(
       "also preserve number-or-string group IDs"
@@ -603,12 +744,56 @@ describe("Phase 4 QQ orchestration", () => {
       })
     );
     await vi.waitFor(() => expect(channel.sendCalls).toHaveLength(1));
-    await vi.waitFor(() => expect(model.requests).toHaveLength(3));
-
-    expect(channel.sendCalls).toHaveLength(1);
-    channel.firstSendRelease.resolve();
+    try {
+      expect(model.requests).toHaveLength(2);
+      expect(channel.sendCalls).toHaveLength(1);
+    } finally {
+      channel.firstSendRelease.resolve();
+    }
     await waitForSendCount(channel, 2);
 
+    expect(model.requests).toHaveLength(3);
+    expect(channel.sent[0]?.text).toContain("HuanLink taskId:");
+    expect(channel.sent[1]?.text).toBe(
+      "Codex task completed with the latest context."
+    );
+  });
+
+  test("waits for the initial receipt to be sent and recorded before paused re-entry starts", async () => {
+    const channel = new ControlledChannel(true);
+    const model = new DelegateThenSummarizeModel();
+    const transport = new PausingTransport();
+    const runtime = createPhase4QqRuntime({
+      channel,
+      targetConversationId: TARGET_GROUP,
+      codexA2aOrigin: "http://127.0.0.1:1",
+      transport,
+      runner: runner(model),
+      createRunId: runIds("run-paused-initial", "run-paused-reentry")
+    });
+    runtimes.push(runtime);
+
+    await runtime.start();
+    await channel.emit(
+      message("pause-after-receipt", {
+        trigger: { kind: "command", text: "pause for one choice" }
+      })
+    );
+    await transport.pausePublished.promise;
+    await vi.waitFor(() => expect(channel.sendCalls).toHaveLength(1));
+
+    try {
+      expect(model.requests).toHaveLength(2);
+    } finally {
+      channel.firstSendRelease.resolve();
+    }
+    await waitForSendCount(channel, 2);
+    const [agentCall] = runtime.agentCalls.listByRunId("run-paused-initial");
+    const pausedInput = JSON.stringify(model.requests[2]?.input);
+
+    expect(pausedInput).toContain("Codex task accepted by MainAgent.");
+    expect(pausedInput).toContain(`HuanLink taskId: ${agentCall!.agentCallId}`);
+    expect(pausedInput).toContain(`A2A taskId: ${transport.taskId}`);
     expect(channel.sent[0]?.text).toContain("HuanLink taskId:");
     expect(channel.sent[1]?.text).toBe(
       "Codex task completed with the latest context."
@@ -642,6 +827,43 @@ describe("Phase 4 QQ orchestration", () => {
       "MainAgent failed before replying"
     );
     expect(channel.sent).toEqual([]);
+  });
+
+  test("does not record a failed send and releases the session for the next turn", async () => {
+    const channel = new RejectFirstSendChannel();
+    const onBackgroundError = vi.fn<AgentCallBackgroundErrorListener>();
+    const runtime = createPhase4QqRuntime({
+      channel,
+      targetConversationId: TARGET_GROUP,
+      codexA2aOrigin: "http://127.0.0.1:1",
+      transport: idleTransport(),
+      runner: runner(new BoundReplyModel()),
+      onBackgroundError
+    });
+    runtimes.push(runtime);
+
+    await runtime.start();
+    await channel.emit(
+      message("failed-send", {
+        trigger: { kind: "command", text: "this reply will fail" }
+      })
+    );
+    await vi.waitFor(() => expect(onBackgroundError).toHaveBeenCalledOnce());
+
+    expect(runtime.conversations.formatLatestContext(SESSION_ID)).toBe(
+      "Alice: message failed-send"
+    );
+
+    await channel.emit(
+      message("successful-send", {
+        trigger: { kind: "command", text: "this reply should pass" }
+      })
+    );
+    await waitForSendCount(channel, 1);
+
+    expect(runtime.conversations.formatLatestContext(SESSION_ID)).toContain(
+      "HuanLink: MainAgent used the injected model binding."
+    );
   });
 
   test("aborts supervised runs and removes channel ingress during shutdown", async () => {
