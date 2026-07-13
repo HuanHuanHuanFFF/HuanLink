@@ -17,6 +17,7 @@ import {
   createPhase3HuanLinkRuntime,
   type Phase3HuanLinkRuntime
 } from "./phase3-runtime.js";
+import type { MainAgentModelBinding } from "./main-agent-runtime.js";
 
 export type CreatePhase4QqRuntimeOptions = {
   channel: ChannelAdapter;
@@ -24,6 +25,7 @@ export type CreatePhase4QqRuntimeOptions = {
   codexA2aOrigin: string;
   codexSkillId?: string;
   runner?: OpenAiAgentsRunner;
+  modelBinding?: MainAgentModelBinding;
   transport?: AgentCallTransport;
   createRunId?: () => RunId;
   store?: InMemoryConversationStore;
@@ -65,6 +67,9 @@ export function createPhase4QqRuntime(
       ? {}
       : { codexSkillId: options.codexSkillId }),
     ...(options.runner === undefined ? {} : { runner: options.runner }),
+    ...(options.modelBinding === undefined
+      ? {}
+      : { modelBinding: options.modelBinding }),
     ...(options.transport === undefined
       ? {}
       : { transport: options.transport }),

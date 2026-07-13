@@ -15,7 +15,10 @@ import { A2aAgentCallTransport } from "@huanlink/integration-a2a-client";
 import type { OpenAiAgentsRunner } from "@huanlink/integration-openai-agents";
 
 import { buildAgentCallReentryInput } from "./agent-call-reentry.js";
-import { createPhase3MainAgentRuntime } from "./main-agent-runtime.js";
+import {
+  createPhase3MainAgentRuntime,
+  type MainAgentModelBinding
+} from "./main-agent-runtime.js";
 
 export type Phase3ReentryResult = {
   runId: RunId;
@@ -30,6 +33,7 @@ export type CreatePhase3HuanLinkRuntimeOptions = {
   codexA2aOrigin: string;
   codexSkillId?: string;
   runner?: OpenAiAgentsRunner;
+  modelBinding?: MainAgentModelBinding;
   transport?: AgentCallTransport;
   createRunId?: () => RunId;
   getLatestContext?: (sessionId: SessionId) => Promise<string> | string;
@@ -58,7 +62,8 @@ export function createPhase3HuanLinkRuntime(
   const mainAgent = createPhase3MainAgentRuntime({
     invoker: agentCalls,
     codexSkillId: options.codexSkillId,
-    runner: options.runner
+    runner: options.runner,
+    modelBinding: options.modelBinding
   });
   const turns = new AgentTurnScheduler({ runtime: mainAgent });
   const createRunId = options.createRunId ?? randomUUID;

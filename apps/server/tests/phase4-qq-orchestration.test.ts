@@ -146,6 +146,24 @@ class IdleModel implements Model {
   }
 }
 
+class BoundReplyModel implements Model {
+  readonly requests: ModelRequest[] = [];
+
+  async getResponse(request: ModelRequest): Promise<ModelResponse> {
+    this.requests.push(request);
+    return {
+      usage: new Usage(),
+      output: [assistantMessage("MainAgent used the injected model binding.")]
+    };
+  }
+
+  async *getStreamedResponse(
+    _request: ModelRequest
+  ): AsyncIterable<StreamEvent> {
+    throw new Error("Streaming is not used in this test");
+  }
+}
+
 class DelegateThenSummarizeModel implements Model {
   readonly requests: ModelRequest[] = [];
 
@@ -317,6 +335,32 @@ afterEach(async () => {
 });
 
 describe("Phase 4 QQ orchestration", () => {
+  test("passes the production model binding through Phase 4 without a Runner override", async () => {
+    const channel = new ControlledChannel();
+    const model = new BoundReplyModel();
+    const runtime = createPhase4QqRuntime({
+      channel,
+      targetConversationId: TARGET_GROUP,
+      codexA2aOrigin: "http://127.0.0.1:1",
+      transport: idleTransport(),
+      modelBinding: { model }
+    });
+    runtimes.push(runtime);
+
+    await runtime.start();
+    await channel.emit(
+      message("bound-model", {
+        trigger: { kind: "command", text: "use the configured model" }
+      })
+    );
+    await waitForSendCount(channel, 1);
+
+    expect(channel.sent[0]?.text).toBe(
+      "MainAgent used the injected model binding."
+    );
+    expect(model.requests).toHaveLength(1);
+  });
+
   test("stores an ordinary target-group message without running MainAgent", async () => {
     const channel = new ControlledChannel();
     const store = new InMemoryConversationStore();

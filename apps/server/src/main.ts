@@ -1,5 +1,6 @@
 import { ForwardWebSocketOneBot11Channel } from "@huanlink/integration-onebot11";
 
+import { createDeepSeekMainAgentModelBinding } from "./main-agent-model.js";
 import { createPhase4QqRuntime } from "./phase4-qq-runtime.js";
 import { startRuntimeWithSignalShutdown } from "./phase4-process-lifecycle.js";
 import { loadPhase4QqRuntimeConfigFromEnv } from "./runtime-config.js";
@@ -11,6 +12,9 @@ await startPhase4QqServer().catch((error) => {
 
 async function startPhase4QqServer(): Promise<void> {
   const config = loadPhase4QqRuntimeConfigFromEnv();
+  const modelBinding = createDeepSeekMainAgentModelBinding({
+    config: config.mainAgentModel
+  });
   const channel = new ForwardWebSocketOneBot11Channel({
     url: config.oneBot11.url,
     ...(config.oneBot11.accessToken === undefined
@@ -26,6 +30,7 @@ async function startPhase4QqServer(): Promise<void> {
     targetConversationId: config.oneBot11.groupId,
     codexA2aOrigin: config.codexA2a.origin,
     codexSkillId: config.codexA2a.skillId,
+    modelBinding,
     onBackgroundError: (error, record) => {
       console.error(
         `Phase 4 QQ background failure${
