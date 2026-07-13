@@ -81,6 +81,7 @@
 - [x] RED：测试生产组装将模型绑定从 Phase 4 传入 Phase 3/MainAgent，同时保留测试 Runner 注入能力。
 - [x] 运行聚焦测试并确认因传递路径缺失而失败。
 - [x] GREEN：只增加 `modelBinding` 参数传递；`main.ts` 根据已校验配置创建 DeepSeek binding 后再连接 QQ。
+- [x] 启动脚本通过 `--env-file-if-exists=../../.env` 可选加载仓库根 `.env`；文件缺失时仍允许宿主环境直接注入配置。
 - [x] 运行 `corepack.cmd pnpm --filter @huanlink/server test`、`corepack.cmd pnpm --filter @huanlink/server typecheck`、`corepack.cmd pnpm --filter @huanlink/server build`。
 - [x] 单独提交：`feat(server): 注入 DeepSeek MainAgent 模型`。
 
@@ -92,13 +93,12 @@
 - 新增：`apps/server/tests/real/deepseek-main-agent.real.ts`
 - 修改：`apps/server/package.json`
 
-- [x] RED：添加 opt-in smoke，要求 `HUANLINK_REAL_DEEPSEEK_TEST=1` 和 `DEEPSEEK_API_KEY`；固定提示词要求模型调用真实 `submit_codex_agent_call`，但以本地记录型 `AgentCallInvoker` 截止，避免在该测试重复触发 Codex 改码。
-- [x] 未设置 opt-in 时测试必须安全跳过；设置 opt-in 但 Key 缺失时必须给出不含敏感值的明确错误。
-- [x] 添加 `test:real:deepseek` 脚本并运行非 opt-in 路径。
+- [x] RED：添加专用真实 smoke，要求 `DEEPSEEK_API_KEY`；固定提示词要求模型调用真实 `submit_codex_agent_call`，但以本地记录型 `AgentCallInvoker` 截止，避免在该测试重复触发 Codex 改码。
+- [x] 调用 `test:real:deepseek` 即代表明确 opt-in；Key 缺失时必须给出不含敏感值的明确错误并以非零状态退出，不允许跳过后假绿。
+- [x] 添加 `test:real:deepseek` 脚本并验证缺少 Key 的失败路径。
 - [ ] 用户填写 Key 后执行：
 
   ```powershell
-  $env:HUANLINK_REAL_DEEPSEEK_TEST='1'
   corepack.cmd pnpm --filter @huanlink/server test:real:deepseek
   ```
 
