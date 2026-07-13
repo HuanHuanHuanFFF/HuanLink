@@ -225,6 +225,15 @@ describe("loadPhase4QqRuntimeConfigFromEnv", () => {
     );
   });
 
+  test("reports a malformed DeepSeek base URL as a named validation error", () => {
+    process.env.HUANLINK_ONEBOT_GROUP_ID = "20002000";
+    process.env.HUANLINK_DEEPSEEK_BASE_URL = "not-a-url";
+
+    expect(() => server.loadPhase4QqRuntimeConfigFromEnv()).toThrow(
+      /HUANLINK_DEEPSEEK_BASE_URL/
+    );
+  });
+
   test("does not include the DeepSeek API key in validation errors", () => {
     const apiKey = "deepseek-secret-that-must-not-leak";
     process.env.HUANLINK_ONEBOT_GROUP_ID = "20002000";

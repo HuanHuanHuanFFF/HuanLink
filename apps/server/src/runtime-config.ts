@@ -55,7 +55,13 @@ const mainAgentModelRuntimeConfigEnvSchema = z.object({
     .string()
     .trim()
     .url()
-    .refine((value) => new URL(value).protocol === "https:", "must use https")
+    .refine((value) => {
+      try {
+        return new URL(value).protocol === "https:";
+      } catch {
+        return false;
+      }
+    }, "must use https")
     .default("https://api.deepseek.com/beta"),
   DEEPSEEK_API_KEY: z.string().trim().min(1)
 });

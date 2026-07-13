@@ -9,9 +9,7 @@ import {
   createPhase3MainAgentRuntime
 } from "../../src/index.js";
 
-const realTestEnabled = process.env.HUANLINK_REAL_DEEPSEEK_TEST === "1";
-
-describe.skipIf(!realTestEnabled)("real DeepSeek MainAgent smoke", () => {
+describe("real DeepSeek MainAgent smoke", () => {
   test("uses deepseek-v4-flash to call the existing Codex AgentCall tool", async () => {
     loadRepositoryEnvFile();
     const apiKey = process.env.DEEPSEEK_API_KEY?.trim();
