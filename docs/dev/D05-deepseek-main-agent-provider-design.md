@@ -15,6 +15,8 @@
 - 本阶段不使用 AI SDK 的 `ToolLoopAgent`、`generateText` 或 `streamText`，也不重写 `OpenAiAgentsRuntime` 的 agent loop。
 - 默认模型固定为 `deepseek-v4-flash`。
 - 使用 `https://api.deepseek.com/beta`。现有 `submit_codex_agent_call` 仍由 OpenAI Agents JS 定义严格 Zod 工具 schema，真实 smoke 必须验证 bridge 到 DeepSeek 的严格工具调用可用。
+- 固定使用 `@openai/agents-extensions@0.12.0`、`ai@6.0.224` 和 `@ai-sdk/deepseek@2.0.47`，与仓库现有 `@openai/agents@0.12.0` 保持同代兼容，不为本次接入升级整套 Agent SDK。
+- 当前 AI SDK bridge 转换 OpenAI Agents 工具时不会保留 `strict` 标记；在 DeepSeek AI SDK 模型外包一层仅修正工具描述的 model middleware，把现有函数工具恢复为 `strict: true`。该 middleware 不执行工具、不推进 turn，也不形成第二套 agent loop。
 - 默认关闭 DeepSeek 思考模式，优先降低 MainAgent 路由与回执延迟；模型提供方配置显式传递 `thinking: { type: "disabled" }`。
 - DeepSeek 只负责 MainAgent 的理解、工具选择和结果组织；Codex Adapter 的模型、认证和 app-server 调用保持不变。
 - AI SDK bridge 当前是 beta 能力，因此依赖版本必须明确固定，并以真实 DeepSeek 工具调用作为接入验收，不能只依赖类型检查。
@@ -61,7 +63,7 @@ DEEPSEEK_API_KEY=
 ## 验证与验收
 
 1. 单元测试覆盖配置默认值、缺失 Key、AI SDK 模型注入、思考模式关闭和敏感信息不泄漏。
-2. bridge 测试确认现有 OpenAI Agents Runner 与 RunContext 仍执行同一个 `submit_codex_agent_call`，不引入第二套 agent loop。
+2. bridge 测试确认现有 OpenAI Agents Runner 与 RunContext 仍执行同一个 `submit_codex_agent_call`，并检查发往 DeepSeek 的请求包含 `strict: true`，不引入第二套 agent loop。
 3. 保持现有 MainAgent/AgentCall 测试通过，并运行全仓 `test`、`typecheck`、`build`。
 4. 用户填写 Key 后，先运行可选启用的真实 DeepSeek smoke，确认 `deepseek-v4-flash` 经 bridge 真实调用 `submit_codex_agent_call`，而不是只生成说明文字。
 5. 再继续 Phase 4 真实 QQ smoke：群内触发后收到 task ID，Codex 终态结合最新上下文返回同一群。
