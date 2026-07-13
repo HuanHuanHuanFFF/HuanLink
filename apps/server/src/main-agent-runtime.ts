@@ -5,12 +5,18 @@ import {
   type OpenAiAgentsRunContext,
   type OpenAiAgentsRunner
 } from "@huanlink/integration-openai-agents";
-import { Agent } from "@openai/agents";
+import { Agent, type Model, type ModelSettings } from "@openai/agents";
+
+export type MainAgentModelBinding = {
+  model: string | Model;
+  modelSettings?: ModelSettings;
+};
 
 export type CreatePhase3MainAgentRuntimeOptions = {
   invoker: AgentCallInvoker;
   runner?: OpenAiAgentsRunner;
   codexSkillId?: string;
+  modelBinding?: MainAgentModelBinding;
 };
 
 export function createPhase3MainAgentRuntime(
@@ -30,7 +36,10 @@ export function createPhase3MainAgentRuntime(
       "After a blocking task returns, use its result in the current turn.",
       "When receiving an AgentCall terminal notification, summarize that result and the supplied latest context; do not delegate it again."
     ].join(" "),
-    model: "gpt-5.4-mini",
+    model: options.modelBinding?.model ?? "gpt-5.4-mini",
+    ...(options.modelBinding?.modelSettings === undefined
+      ? {}
+      : { modelSettings: options.modelBinding.modelSettings }),
     tools: [tool]
   });
 

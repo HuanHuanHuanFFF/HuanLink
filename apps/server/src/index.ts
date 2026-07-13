@@ -8,6 +8,7 @@ export {
   type Phase4QqRuntimeConfig
 } from "./runtime-config.js";
 export * from "./main-agent-runtime.js";
+export * from "./main-agent-model.js";
 export * from "./agent-call-reentry.js";
 export * from "./phase3-runtime.js";
 export * from "./phase4-qq-runtime.js";
