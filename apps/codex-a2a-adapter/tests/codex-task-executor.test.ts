@@ -161,6 +161,51 @@ async function waitForTaskState(
   return client.getTask(GetTaskRequest.fromJSON({ id: taskId }));
 }
 
+function scheduleCompletedTurn(
+  runtime: ControlledCodexRuntime,
+  items: Record<string, unknown>[],
+  diff?: string
+): void {
+  runtime.onStartTurn = () => {
+    setTimeout(() => {
+      runtime.emit({
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          turn: { id: "turn-1", status: "inProgress", items: [] }
+        }
+      });
+      for (const item of items) {
+        runtime.emit({
+          method: "item/completed",
+          params: { threadId: "thread-1", turnId: "turn-1", item }
+        });
+      }
+      if (diff !== undefined) {
+        runtime.emit({
+          method: "turn/diff/updated",
+          params: { threadId: "thread-1", turnId: "turn-1", diff }
+        });
+      }
+      runtime.emit({
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turn: { id: "turn-1", status: "completed", items: [] }
+        }
+      });
+    }, 0);
+  };
+}
+
+function artifactText(task: Task): string {
+  const content = task.artifacts[0]?.parts[0]?.content;
+  if (content?.$case !== "text") {
+    throw new Error("Expected a textual Codex result Artifact");
+  }
+  return content.value;
+}
+
 afterEach(async () => {
   await Promise.all(runningServers.splice(0).map((server) => server.close()));
 });
@@ -303,6 +348,222 @@ describe("CodexTaskExecutor", () => {
     expect(resultArtifact.parts[0]?.content).toEqual({
       $case: "text",
       value: expect.stringContaining("diff --git a/example.ts b/example.ts")
+    });
+  });
+
+  it("uses the non-empty final answer and never lets empty agent messages overwrite it", async () => {
+    const runtime = new ControlledCodexRuntime();
+    scheduleCompletedTurn(runtime, [
+      {
+        type: "agentMessage",
+        phase: "commentary",
+        text: "Working through the edge case."
+      },
+      { type: "agentMessage", phase: "commentary", text: "   " },
+      {
+        type: "agentMessage",
+        phase: "final_answer",
+        text: "Implemented the focused change."
+      },
+      { type: "agentMessage", phase: "final_answer", text: "" }
+    ]);
+    const { client } = await startClient(runtime);
+
+    const submitted = requireTask(
+      await client.sendMessage(createSendRequest("Complete without edits", true))
+    );
+    const completed = await waitForTaskState(
+      client,
+      submitted.id,
+      TaskState.TASK_STATE_COMPLETED
+    );
+
+    expect(artifactText(completed)).toContain(
+      "Summary:\nImplemented the focused change."
+    );
+    expect(artifactText(completed)).toContain(
+      "Last commentary:\nWorking through the edge case."
+    );
+    expect(runtime.startThreadCalls[0]?.developerInstructions).toContain(
+      "Make minor implementation or wording choices yourself instead of pausing to ask."
+    );
+  });
+
+  it("keeps phase-less agent messages compatible and ignores a later empty message", async () => {
+    const runtime = new ControlledCodexRuntime();
+    scheduleCompletedTurn(runtime, [
+      { type: "agentMessage", text: "Legacy app-server final answer." },
+      { type: "agentMessage", text: "  " }
+    ]);
+    const { client } = await startClient(runtime);
+
+    const submitted = requireTask(
+      await client.sendMessage(createSendRequest("Use legacy messages", true))
+    );
+    const completed = await waitForTaskState(
+      client,
+      submitted.id,
+      TaskState.TASK_STATE_COMPLETED
+    );
+
+    expect(artifactText(completed)).toContain(
+      "Summary:\nLegacy app-server final answer."
+    );
+  });
+
+  it("treats a null agent message phase as a legacy final answer", async () => {
+    const runtime = new ControlledCodexRuntime();
+    scheduleCompletedTurn(runtime, [
+      {
+        type: "agentMessage",
+        phase: null,
+        text: "Null-phase app-server final answer."
+      }
+    ]);
+    const { client } = await startClient(runtime);
+
+    const submitted = requireTask(
+      await client.sendMessage(createSendRequest("Use a null message phase", true))
+    );
+    const completed = await waitForTaskState(
+      client,
+      submitted.id,
+      TaskState.TASK_STATE_COMPLETED
+    );
+
+    expect(artifactText(completed)).toContain(
+      "Summary:\nNull-phase app-server final answer."
+    );
+  });
+
+  it("ignores unknown agent message phases without replacing or creating a result", async () => {
+    const runtimeWithFinal = new ControlledCodexRuntime();
+    scheduleCompletedTurn(runtimeWithFinal, [
+      {
+        type: "agentMessage",
+        phase: "final_answer",
+        text: "Known final answer."
+      },
+      {
+        type: "agentMessage",
+        phase: "unknown_phase",
+        text: "Unknown phase must be ignored."
+      }
+    ]);
+    const { client: clientWithFinal } = await startClient(runtimeWithFinal);
+
+    const submittedWithFinal = requireTask(
+      await clientWithFinal.sendMessage(
+        createSendRequest("Keep the known final answer", true)
+      )
+    );
+    const completed = await waitForTaskState(
+      clientWithFinal,
+      submittedWithFinal.id,
+      TaskState.TASK_STATE_COMPLETED
+    );
+
+    expect(artifactText(completed)).toContain("Summary:\nKnown final answer.");
+    expect(artifactText(completed)).not.toContain(
+      "Unknown phase must be ignored."
+    );
+
+    const unknownOnlyRuntime = new ControlledCodexRuntime();
+    scheduleCompletedTurn(unknownOnlyRuntime, [
+      {
+        type: "agentMessage",
+        phase: "unknown_phase",
+        text: "Unknown phase is not a meaningful result."
+      }
+    ]);
+    const { client: unknownOnlyClient } = await startClient(unknownOnlyRuntime);
+
+    const unknownOnlySubmitted = requireTask(
+      await unknownOnlyClient.sendMessage(
+        createSendRequest("Return only an unknown phase", true)
+      )
+    );
+    const failed = await waitForTaskState(
+      unknownOnlyClient,
+      unknownOnlySubmitted.id,
+      TaskState.TASK_STATE_FAILED
+    );
+
+    expect(failed.artifacts).toEqual([]);
+    expect(failed.status?.message?.parts[0]?.content).toEqual({
+      $case: "text",
+      value: "Codex turn completed without a final answer or any reported changes."
+    });
+  });
+
+  it("completes with reported changes even when Codex emits no final answer", async () => {
+    const runtime = new ControlledCodexRuntime();
+    scheduleCompletedTurn(
+      runtime,
+      [
+        {
+          type: "agentMessage",
+          phase: "commentary",
+          text: "Applied the requested edit."
+        },
+        { type: "agentMessage", phase: "final_answer", text: " " },
+        {
+          type: "fileChange",
+          status: "completed",
+          changes: [{ path: "apps/codex-a2a-adapter/src/example.ts" }]
+        }
+      ],
+      "diff --git a/example.ts b/example.ts"
+    );
+    const { client } = await startClient(runtime);
+
+    const submitted = requireTask(
+      await client.sendMessage(createSendRequest("Edit the example", true))
+    );
+    const completed = await waitForTaskState(
+      client,
+      submitted.id,
+      TaskState.TASK_STATE_COMPLETED
+    );
+    const result = artifactText(completed);
+
+    expect(result).toContain(
+      "Summary:\nCodex completed without a final answer."
+    );
+    expect(result).toContain(
+      "Last commentary:\nApplied the requested edit."
+    );
+    expect(result).toContain("apps/codex-a2a-adapter/src/example.ts");
+    expect(result).toContain("diff --git a/example.ts b/example.ts");
+  });
+
+  it("fails without an Artifact when Codex returns commentary but no answer or changes", async () => {
+    const runtime = new ControlledCodexRuntime();
+    scheduleCompletedTurn(runtime, [
+      {
+        type: "agentMessage",
+        phase: "commentary",
+        text: "Investigated the request but produced no result."
+      },
+      { type: "agentMessage", phase: "commentary", text: "" },
+      { type: "agentMessage", phase: "final_answer", text: "   " }
+    ]);
+    const { client } = await startClient(runtime);
+
+    const submitted = requireTask(
+      await client.sendMessage(createSendRequest("Return an honest result", true))
+    );
+    const failed = await waitForTaskState(
+      client,
+      submitted.id,
+      TaskState.TASK_STATE_FAILED
+    );
+
+    expect(failed.artifacts).toEqual([]);
+    expect(failed.status?.message?.parts[0]?.content).toEqual({
+      $case: "text",
+      value:
+        "Codex turn completed without a final answer or any reported changes. Last commentary: Investigated the request but produced no result."
     });
   });
 

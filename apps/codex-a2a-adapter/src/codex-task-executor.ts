@@ -35,9 +35,10 @@ interface InFlightExecution {
   contextId: string;
   diff: string;
   eventBus: ExecutionEventBus;
+  finalAnswer: string;
+  lastCommentary: string;
   resolveTerminal(): void;
   resolveTurnReady(): void;
-  summary: string;
   taskId: string;
   terminal: boolean;
   terminalPromise: Promise<void>;
@@ -369,7 +370,15 @@ export class CodexTaskExecutor implements AgentExecutor {
     execution.completionPending = true;
     try {
       await this.validateWorkspace(this.workspace, this.expectedBranch);
-      this.finish(execution, TaskState.TASK_STATE_COMPLETED);
+      if (hasMeaningfulResult(execution)) {
+        this.finish(execution, TaskState.TASK_STATE_COMPLETED);
+      } else {
+        this.finish(
+          execution,
+          TaskState.TASK_STATE_FAILED,
+          createEmptyResultFailure(execution)
+        );
+      }
     } catch (error) {
       this.finish(
         execution,
@@ -543,9 +552,10 @@ function createExecution(
     contextId: requestContext.contextId,
     diff: "",
     eventBus,
+    finalAnswer: "",
+    lastCommentary: "",
     resolveTerminal,
     resolveTurnReady,
-    summary: "",
     taskId: requestContext.taskId,
     terminal: false,
     terminalPromise,
@@ -573,7 +583,19 @@ function collectCompletedItem(
   item: Record<string, unknown>
 ): void {
   if (item.type === "agentMessage" && typeof item.text === "string") {
-    execution.summary = item.text;
+    const text = item.text.trim();
+    if (!text) {
+      return;
+    }
+    if (item.phase === "commentary") {
+      execution.lastCommentary = text;
+    } else if (
+      item.phase === "final_answer" ||
+      item.phase === undefined ||
+      item.phase === null
+    ) {
+      execution.finalAnswer = text;
+    }
     return;
   }
   if (
@@ -596,10 +618,15 @@ function createResultArtifact(execution: InFlightExecution): Artifact {
   const sections = [
     `Codex thread: ${execution.threadId ?? "unknown"}`,
     `Codex turn: ${execution.turnId ?? "unknown"}`,
-    `Summary:\n${execution.summary || "Codex completed without a final message."}`,
+    `Summary:\n${execution.finalAnswer || "Codex completed without a final answer."}`
+  ];
+  if (execution.lastCommentary) {
+    sections.push(`Last commentary:\n${execution.lastCommentary}`);
+  }
+  sections.push(
     `Changed files:\n${files.length > 0 ? files.map((file) => `- ${file}`).join("\n") : "- none reported"}`,
     `Diff:\n${execution.diff || "No unified diff was reported."}`
-  ];
+  );
   return {
     artifactId: `${execution.taskId}-codex-result`,
     name: "Codex code task result",
@@ -627,11 +654,28 @@ function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function hasMeaningfulResult(execution: InFlightExecution): boolean {
+  return (
+    execution.finalAnswer.length > 0 ||
+    execution.changedFiles.size > 0 ||
+    execution.diff.trim().length > 0
+  );
+}
+
+function createEmptyResultFailure(execution: InFlightExecution): string {
+  const failure =
+    "Codex turn completed without a final answer or any reported changes.";
+  return execution.lastCommentary
+    ? `${failure} Last commentary: ${execution.lastCommentary}`
+    : failure;
+}
+
 function createDeveloperInstructions(expectedBranch: string): string {
   return [
     "Work only in the configured HuanLink workspace.",
     `Stay on branch ${expectedBranch}.`,
     "Do not switch branches, commit, merge, or push.",
+    "Make minor implementation or wording choices yourself instead of pausing to ask.",
     "Make only the requested focused change and report the files and verification run."
   ].join(" ");
 }

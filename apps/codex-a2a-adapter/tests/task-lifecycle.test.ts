@@ -113,6 +113,7 @@ describe("Codex A2A adapter task lifecycle", () => {
       GetTaskRequest.fromJSON({ id: taskEvent.payload.value.id })
     );
     expect(persisted.status?.state).toBe(TaskState.TASK_STATE_COMPLETED);
+    expect(persisted.status?.message).toBeUndefined();
     expect(persisted.artifacts).toHaveLength(1);
     expect(persisted.artifacts[0]?.parts[0]?.content).toEqual({
       $case: "text",
