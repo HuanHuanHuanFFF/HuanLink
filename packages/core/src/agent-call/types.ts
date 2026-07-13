@@ -170,7 +170,19 @@ export interface AgentCallInvoker {
   invoke(request: AgentCallRequest): Promise<AgentCallInvocationResult>;
 }
 
+export interface AgentCallContinuator {
+  continueTask(
+    taskId: string,
+    answers: AgentCallInputAnswers,
+    signal?: AbortSignal
+  ): Promise<AgentCallRecord>;
+}
+
 export type AgentCallTerminalListener = (
+  record: AgentCallRecord
+) => Promise<void> | void;
+
+export type AgentCallPausedListener = (
   record: AgentCallRecord
 ) => Promise<void> | void;
 

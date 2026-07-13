@@ -5,6 +5,7 @@ import {
 import { tool } from "@openai/agents";
 import { z } from "zod";
 
+import { combineAbortSignals } from "./abort-signals.js";
 import type { OpenAiAgentsRunContext } from "./openai-agents-runtime.js";
 
 export const SUBMIT_CODEX_AGENT_CALL_TOOL_NAME =
@@ -37,8 +38,7 @@ export function createCodexAgentCallTool(
     description:
       "Submit a coding task to the remote Codex agent. Async mode returns an accepted task ID; blocking mode returns the observed task outcome.",
     parameters,
-    isEnabled: ({ runContext }) =>
-      runContext.context.trigger !== "agent_call_terminal",
+    isEnabled: ({ runContext }) => runContext.context.trigger === "user",
     execute: async (
       { task, executionMode = "async" },
       runContext,
@@ -66,19 +66,4 @@ export function createCodexAgentCallTool(
       );
     }
   });
-}
-
-function combineAbortSignals(
-  ...signals: Array<AbortSignal | undefined>
-): AbortSignal | undefined {
-  const available = signals.filter(
-    (signal): signal is AbortSignal => signal !== undefined
-  );
-  if (available.length === 0) {
-    return undefined;
-  }
-  if (available.length === 1) {
-    return available[0];
-  }
-  return AbortSignal.any(available);
 }

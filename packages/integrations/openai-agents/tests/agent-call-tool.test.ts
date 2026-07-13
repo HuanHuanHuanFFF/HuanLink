@@ -7,6 +7,7 @@ import type {
 } from "@huanlink/core";
 import {
   Agent,
+  RunContext,
   Runner,
   Usage,
   type Model,
@@ -210,4 +211,36 @@ describe("createCodexAgentCallTool", () => {
       expect(continuationInput).toContain("Invalid JSON input for tool");
     }
   );
+
+  test("is enabled only for user-triggered runs", async () => {
+    const tool = createCodexAgentCallTool({
+      invoker: {
+        invoke: vi.fn(async () => ({
+          status: "accepted" as const,
+          executionMode: "async" as const,
+          agentCallId: "unused-agent-call",
+          taskId: "unused-a2a-task",
+          state: "submitted" as const
+        }))
+      }
+    });
+    const agent = new Agent<OpenAiAgentsRunContext>({
+      name: "Tool availability",
+      instructions: "Test tool availability.",
+      model: "unused-model"
+    });
+    const isEnabled = (trigger: OpenAiAgentsRunContext["trigger"]) =>
+      tool.isEnabled(
+        new RunContext<OpenAiAgentsRunContext>({
+          runId: "run-tool-availability",
+          sessionId: "session-tool-availability",
+          trigger
+        }),
+        agent
+      );
+
+    await expect(isEnabled("user")).resolves.toBe(true);
+    await expect(isEnabled("agent_call_input_required")).resolves.toBe(false);
+    await expect(isEnabled("agent_call_terminal")).resolves.toBe(false);
+  });
 });

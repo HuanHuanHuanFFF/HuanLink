@@ -3,6 +3,7 @@ import { describe, expect, test, vi } from "vitest";
 import type { AgentCallReader, AgentCallRecord } from "@huanlink/core";
 import {
   Agent,
+  RunContext,
   Runner,
   Usage,
   type Model,
@@ -286,6 +287,52 @@ describe("createTaskStatusTool", () => {
     });
   });
 
+  test("returns structured questions for an input-required task", async () => {
+    const observed = await queryStatus(record.agentCallId, "session-current", {
+      byAgentCallId: {
+        ...record,
+        state: "input-required",
+        questions: [
+          {
+            id: "scope",
+            header: "Scope",
+            question: "Which files may be changed?",
+            isOther: false,
+            isSecret: false,
+            options: [
+              {
+                label: "Adapter only",
+                description: "Limit changes to the adapter."
+              }
+            ]
+          }
+        ]
+      }
+    });
+
+    expect(observed.result).toMatchObject({
+      status: "found",
+      task: {
+        state: "input-required",
+        questions: [
+          {
+            id: "scope",
+            header: "Scope",
+            question: "Which files may be changed?",
+            isOther: false,
+            isSecret: false,
+            options: [
+              {
+                label: "Adapter only",
+                description: "Limit changes to the adapter."
+              }
+            ]
+          }
+        ]
+      }
+    });
+  });
+
   test.each([
     {
       name: "an unknown ID",
@@ -312,5 +359,33 @@ describe("createTaskStatusTool", () => {
     expect(observed.result).toEqual({ status: "not-found", taskId: query });
     expect(observed.invoke).not.toHaveBeenCalled();
     expect(observed.submit).not.toHaveBeenCalled();
+  });
+
+  test("is enabled for user and input-required runs but disabled for terminal runs", async () => {
+    const tool = createTaskStatusTool({
+      reader: {
+        getByAgentCallId: () => undefined,
+        getByTaskId: () => undefined
+      }
+    });
+    const agent = new Agent<OpenAiAgentsRunContext>({
+      name: "Status availability",
+      instructions: "Test tool availability.",
+      model: "unused-model"
+    });
+    const context = (trigger: OpenAiAgentsRunContext["trigger"]) =>
+      new RunContext<OpenAiAgentsRunContext>({
+        runId: "run-status-availability",
+        sessionId: "session-current",
+        trigger
+      });
+
+    await expect(tool.isEnabled(context("user"), agent)).resolves.toBe(true);
+    await expect(
+      tool.isEnabled(context("agent_call_input_required"), agent)
+    ).resolves.toBe(true);
+    await expect(
+      tool.isEnabled(context("agent_call_terminal"), agent)
+    ).resolves.toBe(false);
   });
 });

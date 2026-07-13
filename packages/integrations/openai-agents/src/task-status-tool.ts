@@ -3,6 +3,7 @@ import { tool } from "@openai/agents";
 import { z } from "zod";
 
 import type { OpenAiAgentsRunContext } from "./openai-agents-runtime.js";
+import { resolveTaskRecord } from "./task-record-resolution.js";
 
 export const GET_TASK_STATUS_TOOL_NAME = "get_task_status" as const;
 
@@ -25,35 +26,28 @@ export function createTaskStatusTool(options: CreateTaskStatusToolOptions) {
       "Read the current status of an existing HuanLink task in this session without creating or changing any task.",
     parameters,
     isEnabled: ({ runContext }) =>
-      runContext.context.trigger !== "agent_call_terminal",
+      runContext.context.trigger === "user" ||
+      runContext.context.trigger === "agent_call_input_required",
     execute: ({ taskId }, runContext) => {
       if (!runContext) {
         throw new Error("Task status tool requires a HuanLink RunContext");
       }
 
-      const candidates = [
-        options.reader.getByAgentCallId(taskId),
-        options.reader.getByTaskId(taskId)
-      ].filter(
-        (candidate): candidate is AgentCallRecord =>
-          candidate !== undefined &&
-          candidate.sessionId === runContext.context.sessionId
+      const resolution = resolveTaskRecord(
+        options.reader,
+        taskId,
+        runContext.context.sessionId
       );
-      const recordsByAgentCallId = new Map(
-        candidates.map((candidate) => [candidate.agentCallId, candidate])
-      );
-      if (recordsByAgentCallId.size === 0) {
+      if (resolution.status === "not-found") {
         return JSON.stringify({ status: "not-found", taskId });
       }
-      if (recordsByAgentCallId.size > 1) {
+      if (resolution.status === "ambiguous") {
         return JSON.stringify({ status: "ambiguous", taskId });
       }
 
-      const record = recordsByAgentCallId.values().next().value!;
-
       return JSON.stringify({
         status: "found",
-        task: publicTaskStatus(record)
+        task: publicTaskStatus(resolution.record)
       });
     }
   });
@@ -73,6 +67,17 @@ function publicTaskStatus(record: AgentCallRecord) {
     ...(record.terminalNotificationError === undefined
       ? {}
       : { notificationError: record.terminalNotificationError }),
+    ...(record.questions === undefined
+      ? {}
+      : {
+          questions: record.questions.map((question) => ({
+            ...question,
+            options:
+              question.options === null
+                ? null
+                : question.options.map((option) => ({ ...option }))
+          }))
+        }),
     artifacts: record.artifacts.map((artifact) => ({ ...artifact }))
   };
 }

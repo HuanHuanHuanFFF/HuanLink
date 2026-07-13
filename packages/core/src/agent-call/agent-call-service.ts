@@ -4,11 +4,13 @@ import type { AgentCallId, RunId } from "../shared/ids.js";
 import {
   isAgentCallOutcomeState,
   isAgentCallTerminalState,
+  type AgentCallBackgroundErrorListener,
+  type AgentCallContinuator,
   type AgentCallInvocationResult,
   type AgentCallInputAnswers,
   type AgentCallInvoker,
+  type AgentCallPausedListener,
   type AgentCallRecord,
-  type AgentCallBackgroundErrorListener,
   type AgentCallReceipt,
   type AgentCallReader,
   type AgentCallRequest,
@@ -38,7 +40,11 @@ type ActiveContinuation = {
 type AgentCallOutcomeWaiter = (record: AgentCallRecord) => void;
 
 export class AgentCallService
-  implements AgentCallSubmitter, AgentCallInvoker, AgentCallReader
+  implements
+    AgentCallSubmitter,
+    AgentCallInvoker,
+    AgentCallReader,
+    AgentCallContinuator
 {
   private readonly transport: AgentCallTransport;
   private readonly createId: () => AgentCallId;
@@ -47,15 +53,22 @@ export class AgentCallService
   private readonly recordsByAgentCallId = new Map<AgentCallId, AgentCallRecord>();
   private readonly agentCallIdByTaskId = new Map<string, AgentCallId>();
   private readonly terminalHandled = new Set<AgentCallId>();
-  private readonly notifyTerminalAfterContinuation = new Set<AgentCallId>();
+  private readonly inputRequiredHandled = new Set<AgentCallId>();
+  private readonly notifyOutcomesAfterContinuation = new Set<AgentCallId>();
+  private readonly pausedListeners = new Set<AgentCallPausedListener>();
   private readonly terminalListeners = new Set<AgentCallTerminalListener>();
   private readonly backgroundErrorListeners =
     new Set<AgentCallBackgroundErrorListener>();
   private readonly activeSubmissions = new Set<Promise<AgentCallReceipt>>();
   private readonly activeWatchers = new Map<AgentCallId, ActiveWatcher>();
+  private readonly activePauseNotifications = new Set<Promise<void>>();
   private readonly activeContinuationByTaskId = new Map<
     string,
     ActiveContinuation
+  >();
+  private readonly activeCancellationByTaskId = new Map<
+    string,
+    Promise<AgentCallRecord>
   >();
   private readonly activeCancellations = new Set<Promise<AgentCallRecord>>();
   private readonly outcomeWaiters = new Map<
@@ -63,6 +76,7 @@ export class AgentCallService
     Set<AgentCallOutcomeWaiter>
   >();
   private closed = false;
+  private closeOperation?: Promise<void>;
 
   constructor(options: AgentCallServiceOptions) {
     this.transport = options.transport;
@@ -268,12 +282,46 @@ export class AgentCallService
     return () => this.terminalListeners.delete(listener);
   }
 
+  onPaused(listener: AgentCallPausedListener): () => void {
+    this.pausedListeners.add(listener);
+    return () => this.pausedListeners.delete(listener);
+  }
+
   onBackgroundError(listener: AgentCallBackgroundErrorListener): () => void {
     this.backgroundErrorListeners.add(listener);
     return () => this.backgroundErrorListeners.delete(listener);
   }
 
-  async cancel(agentCallId: AgentCallId): Promise<AgentCallRecord> {
+  cancel(agentCallId: AgentCallId): Promise<AgentCallRecord> {
+    const record = this.requireRecord(agentCallId);
+    const activeCancellation = this.activeCancellationByTaskId.get(
+      record.taskId
+    );
+    if (activeCancellation) {
+      return activeCancellation;
+    }
+    this.activeContinuationByTaskId.get(record.taskId)?.controller.abort();
+    const operation = Promise.resolve().then(() =>
+      this.performCancel(agentCallId, record.taskId)
+    );
+    this.activeCancellationByTaskId.set(record.taskId, operation);
+    this.activeCancellations.add(operation);
+    void operation.then(
+      () => this.finishCancellation(record.taskId, operation),
+      () => this.finishCancellation(record.taskId, operation)
+    );
+    return operation;
+  }
+
+  private async performCancel(
+    agentCallId: AgentCallId,
+    taskId: string
+  ): Promise<AgentCallRecord> {
+    const continuation = this.activeContinuationByTaskId.get(taskId);
+    if (continuation) {
+      continuation.controller.abort();
+      await Promise.allSettled([continuation.promise]);
+    }
     const record = this.requireRecord(agentCallId);
     const canceled = await this.transport.cancelTask(record.taskId);
     this.assertMatchingTask(record, canceled);
@@ -285,12 +333,27 @@ export class AgentCallService
     return this.requireRecordClone(agentCallId);
   }
 
+  private finishCancellation(
+    taskId: string,
+    operation: Promise<AgentCallRecord>
+  ): void {
+    if (this.activeCancellationByTaskId.get(taskId) === operation) {
+      this.activeCancellationByTaskId.delete(taskId);
+    }
+    this.activeCancellations.delete(operation);
+  }
+
   continueTask(
     taskId: string,
     answers: AgentCallInputAnswers,
     signal?: AbortSignal
   ): Promise<AgentCallRecord> {
     this.assertOpen();
+    if (this.activeCancellationByTaskId.has(taskId)) {
+      return Promise.reject(
+        new Error(`Remote task ${taskId} is being canceled`)
+      );
+    }
     if (this.activeContinuationByTaskId.has(taskId)) {
       return Promise.reject(
         new Error(`Remote task ${taskId} already has an active continuation`)
@@ -302,7 +365,12 @@ export class AgentCallService
         ? controller.signal
         : AbortSignal.any([signal, controller.signal]);
     const operation = Promise.resolve().then(() =>
-      this.performContinueTask(taskId, answers, continuationSignal)
+      this.performContinueTask(
+        taskId,
+        answers,
+        continuationSignal,
+        controller.signal
+      )
     );
     const activeContinuation = { controller, promise: operation };
     this.activeContinuationByTaskId.set(taskId, activeContinuation);
@@ -328,7 +396,8 @@ export class AgentCallService
   private async performContinueTask(
     taskId: string,
     answers: AgentCallInputAnswers,
-    signal: AbortSignal
+    signal: AbortSignal,
+    internalSignal: AbortSignal
   ): Promise<AgentCallRecord> {
     const agentCallId = this.agentCallIdByTaskId.get(taskId);
     if (agentCallId === undefined) {
@@ -345,11 +414,21 @@ export class AgentCallService
       previousWatcher.controller.abort();
       await previousWatcher.promise;
     }
+    signal.throwIfAborted();
     this.assertOpen();
+
+    const latestRecord = this.requireRecord(agentCallId);
+    if (latestRecord.state !== "input-required") {
+      throw new Error(
+        `Remote task ${taskId} must be input-required before it can continue`
+      );
+    }
 
     const continued = await this.transport.continueTask({
       taskId,
-      ...(record.contextId === undefined ? {} : { contextId: record.contextId }),
+      ...(latestRecord.contextId === undefined
+        ? {}
+        : { contextId: latestRecord.contextId }),
       messageId: this.createMessageId(),
       signal,
       answers: cloneAnswers(answers)
@@ -357,7 +436,8 @@ export class AgentCallService
     if (this.closed) {
       await this.rejectContinuationDuringShutdown(agentCallId, taskId);
     }
-    this.assertMatchingTask(record, continued);
+    internalSignal.throwIfAborted();
+    this.assertMatchingTask(latestRecord, continued);
     if (continued.state !== "working") {
       throw new Error(
         `Remote task ${taskId} continued in unexpected state ${continued.state}`
@@ -365,11 +445,12 @@ export class AgentCallService
     }
     await this.applySnapshot(agentCallId, continued);
     if (this.closed) {
-      this.recordsByAgentCallId.set(agentCallId, record);
+      this.recordsByAgentCallId.set(agentCallId, latestRecord);
       await this.rejectContinuationDuringShutdown(agentCallId, taskId);
     }
-    if (record.executionMode === "blocking") {
-      this.notifyTerminalAfterContinuation.add(agentCallId);
+    internalSignal.throwIfAborted();
+    if (latestRecord.executionMode === "blocking") {
+      this.notifyOutcomesAfterContinuation.add(agentCallId);
     }
     this.startWatcher(agentCallId, continued);
     return this.requireRecordClone(agentCallId);
@@ -396,18 +477,37 @@ export class AgentCallService
   }
 
   async waitForIdle(): Promise<void> {
-    while (this.activeWatchers.size > 0) {
-      await Promise.all(
-        [...this.activeWatchers.values()].map((watcher) => watcher.promise)
+    while (
+      this.activeWatchers.size > 0 ||
+      this.activePauseNotifications.size > 0 ||
+      this.activeContinuationByTaskId.size > 0 ||
+      this.activeCancellations.size > 0
+    ) {
+      await Promise.allSettled(
+        [
+          ...[...this.activeWatchers.values()].map(
+            (watcher) => watcher.promise
+          ),
+          ...this.activePauseNotifications,
+          ...[...this.activeContinuationByTaskId.values()].map(
+            (continuation) => continuation.promise
+          ),
+          ...this.activeCancellations
+        ]
       );
     }
   }
 
-  async close(): Promise<void> {
-    if (this.closed) {
-      return;
+  close(): Promise<void> {
+    if (this.closeOperation) {
+      return this.closeOperation;
     }
     this.closed = true;
+    this.closeOperation = Promise.resolve().then(() => this.drainClose());
+    return this.closeOperation;
+  }
+
+  private async drainClose(): Promise<void> {
     for (const continuation of this.activeContinuationByTaskId.values()) {
       continuation.controller.abort();
     }
@@ -420,26 +520,19 @@ export class AgentCallService
         (continuation) => continuation.promise
       )
     );
-    await Promise.allSettled([...this.activeCancellations]);
     await this.waitForIdle();
   }
 
   private cancelAfterAbortedWait(agentCallId: AgentCallId): void {
-    const operation = this.cancel(agentCallId);
-    this.activeCancellations.add(operation);
-    void operation.then(
-      () => this.activeCancellations.delete(operation),
-      (cancelError) => {
-        this.activeCancellations.delete(operation);
-        this.reportBackgroundError(
-          new Error(
-            `Failed to cancel AgentCall ${agentCallId} after its wait was aborted`,
-            { cause: cancelError }
-          ),
-          agentCallId
-        );
-      }
-    );
+    void this.cancel(agentCallId).catch((cancelError) => {
+      this.reportBackgroundError(
+        new Error(
+          `Failed to cancel AgentCall ${agentCallId} after its wait was aborted`,
+          { cause: cancelError }
+        ),
+        agentCallId
+      );
+    });
   }
 
   private startWatcher(
@@ -450,25 +543,19 @@ export class AgentCallService
     const promise = Promise.resolve()
       .then(async () => {
         try {
-          const initialIsConsumedOutcome =
-            isAgentCallOutcomeState(initial.state) &&
-            this.requireRecord(agentCallId).executionMode === "blocking";
-          if (
-            isAgentCallTerminalState(initial.state) ||
-            initialIsConsumedOutcome
-          ) {
+          if (isAgentCallOutcomeState(initial.state)) {
             await this.applySnapshot(agentCallId, initial);
             return;
           }
 
-          let sawTerminal = false;
+          let sawOutcome = false;
           for await (const snapshot of this.transport.watchTask(initial.taskId, {
             signal: controller.signal
           })) {
             this.assertMatchingTask(this.requireRecord(agentCallId), snapshot);
             await this.applySnapshot(agentCallId, snapshot);
-            if (isAgentCallTerminalState(snapshot.state)) {
-              sawTerminal = true;
+            if (isAgentCallOutcomeState(snapshot.state)) {
+              sawOutcome = true;
               break;
             }
           }
@@ -477,7 +564,7 @@ export class AgentCallService
           const isPaused =
             finalState === "input-required" || finalState === "auth-required";
           if (
-            !sawTerminal &&
+            !sawOutcome &&
             !isPaused &&
             !this.closed &&
             !controller.signal.aborted
@@ -487,7 +574,9 @@ export class AgentCallService
             );
           }
         } catch (error) {
-          if (this.terminalHandled.has(agentCallId)) {
+          if (
+            isAgentCallOutcomeState(this.requireRecord(agentCallId).state)
+          ) {
             this.reportBackgroundError(error, agentCallId);
             return;
           }
@@ -559,6 +648,21 @@ export class AgentCallService
     };
     this.recordsByAgentCallId.set(agentCallId, updated);
 
+    if (snapshot.state === "working") {
+      this.inputRequiredHandled.delete(agentCallId);
+    } else if (
+      snapshot.state === "input-required" &&
+      !this.inputRequiredHandled.has(agentCallId)
+    ) {
+      this.inputRequiredHandled.add(agentCallId);
+      if (
+        updated.executionMode === "async" ||
+        this.notifyOutcomesAfterContinuation.has(agentCallId)
+      ) {
+        this.notifyPaused(updated);
+      }
+    }
+
     if (isAgentCallOutcomeState(snapshot.state)) {
       for (const waiter of this.outcomeWaiters.get(agentCallId) ?? []) {
         waiter(updated);
@@ -574,7 +678,7 @@ export class AgentCallService
 
     this.terminalHandled.add(agentCallId);
     const notifyAfterContinuation =
-      this.notifyTerminalAfterContinuation.delete(agentCallId);
+      this.notifyOutcomesAfterContinuation.delete(agentCallId);
     if (updated.executionMode === "blocking" && !notifyAfterContinuation) {
       return;
     }
@@ -643,6 +747,25 @@ export class AgentCallService
         // Error observers must not create another unhandled background failure.
       }
     }
+  }
+
+  private notifyPaused(record: AgentCallRecord): void {
+    const operation = Promise.allSettled(
+      [...this.pausedListeners].map((listener) =>
+        Promise.resolve().then(() => listener(cloneRecord(record)!))
+      )
+    ).then((results) => {
+      for (const result of results) {
+        if (result.status === "rejected") {
+          this.reportBackgroundError(result.reason, record.agentCallId);
+        }
+      }
+    });
+    this.activePauseNotifications.add(operation);
+    void operation.then(
+      () => this.activePauseNotifications.delete(operation),
+      () => this.activePauseNotifications.delete(operation)
+    );
   }
 }
 

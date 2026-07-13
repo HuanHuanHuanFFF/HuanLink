@@ -2,35 +2,13 @@ import { describe, expect, test, vi } from "vitest";
 
 import {
   AgentCallService,
-  type AgentCallTaskSnapshot,
   type AgentCallTransport
 } from "../src/index.js";
-
-function deferred<T = void>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  const promise = new Promise<T>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
-
-function task(
-  state: AgentCallTaskSnapshot["state"],
-  overrides: Partial<AgentCallTaskSnapshot> = {}
-): AgentCallTaskSnapshot {
-  return {
-    taskId: "a2a-task-01",
-    contextId: "a2a-context-01",
-    state,
-    artifacts: [],
-    ...overrides
-  };
-}
-
-const rejectUnexpectedContinuation: AgentCallTransport["continueTask"] =
-  async () => {
-    throw new Error("Unexpected task continuation in this test");
-  };
+import {
+  deferred,
+  rejectUnexpectedContinuation,
+  task
+} from "./agent-call-test-helpers.js";
 
 describe("AgentCallService", () => {
   test("lists defensive copies of records for only the requested run", async () => {
@@ -206,10 +184,10 @@ describe("AgentCallService", () => {
       submitTask: async () => task("submitted"),
       async *watchTask(_taskId, options) {
         watcherSignal = options.signal;
+        subscriptionHeldOpen.resolve();
         yield task("input-required", {
           statusMessage: "approval is required"
         });
-        subscriptionHeldOpen.resolve();
         await releaseSubscription.promise;
       },
       continueTask: rejectUnexpectedContinuation,
