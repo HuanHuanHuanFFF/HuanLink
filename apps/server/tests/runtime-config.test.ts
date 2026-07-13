@@ -21,7 +21,11 @@ const ENV_KEYS = [
   "HUANLINK_ONEBOT_WS_URL",
   "HUANLINK_ONEBOT_ACCESS_TOKEN",
   "HUANLINK_ONEBOT_GROUP_ID",
-  "HUANLINK_ONEBOT_COMMAND_PREFIX"
+  "HUANLINK_ONEBOT_COMMAND_PREFIX",
+  "HUANLINK_MAIN_AGENT_PROVIDER",
+  "HUANLINK_MAIN_AGENT_MODEL",
+  "HUANLINK_DEEPSEEK_BASE_URL",
+  "DEEPSEEK_API_KEY"
 ] as const;
 
 let originalCwd: string;
@@ -33,6 +37,7 @@ beforeEach(async () => {
   tempRoot = await mkdtemp(path.join(os.tmpdir(), "huanlink-server-runtime-config-"));
   originalEnv = snapshotEnv();
   clearRuntimeConfigEnv();
+  process.env.DEEPSEEK_API_KEY = "test-deepseek-key";
 });
 
 afterEach(async () => {
@@ -145,6 +150,9 @@ describe("loadPhase4QqRuntimeConfigFromEnv", () => {
     process.env.HUANLINK_ONEBOT_COMMAND_PREFIX = "!huanlink";
     process.env.HUANLINK_CODEX_A2A_ORIGIN = "http://127.0.0.1:4100";
     process.env.HUANLINK_CODEX_A2A_SKILL_ID = "codex-code-task";
+    process.env.HUANLINK_MAIN_AGENT_PROVIDER = "deepseek";
+    process.env.HUANLINK_MAIN_AGENT_MODEL = "deepseek-v4-flash";
+    process.env.HUANLINK_DEEPSEEK_BASE_URL = "https://api.deepseek.com/beta";
 
     expect(server.loadPhase4QqRuntimeConfigFromEnv()).toEqual({
       oneBot11: {
@@ -156,6 +164,12 @@ describe("loadPhase4QqRuntimeConfigFromEnv", () => {
       codexA2a: {
         origin: "http://127.0.0.1:4100",
         skillId: "codex-code-task"
+      },
+      mainAgentModel: {
+        provider: "deepseek",
+        modelId: "deepseek-v4-flash",
+        baseURL: "https://api.deepseek.com/beta",
+        apiKey: "test-deepseek-key"
       }
     });
   });
@@ -174,8 +188,58 @@ describe("loadPhase4QqRuntimeConfigFromEnv", () => {
       codexA2a: {
         origin: "http://127.0.0.1:4000",
         skillId: "codex-code-task"
+      },
+      mainAgentModel: {
+        provider: "deepseek",
+        modelId: "deepseek-v4-flash",
+        baseURL: "https://api.deepseek.com/beta",
+        apiKey: "test-deepseek-key"
       }
     });
+  });
+
+  test("rejects startup when the DeepSeek API key is missing", () => {
+    process.env.HUANLINK_ONEBOT_GROUP_ID = "20002000";
+    delete process.env.DEEPSEEK_API_KEY;
+
+    expect(() => server.loadPhase4QqRuntimeConfigFromEnv()).toThrow(
+      /DEEPSEEK_API_KEY/
+    );
+  });
+
+  test("rejects unsupported MainAgent providers", () => {
+    process.env.HUANLINK_ONEBOT_GROUP_ID = "20002000";
+    process.env.HUANLINK_MAIN_AGENT_PROVIDER = "openai";
+
+    expect(() => server.loadPhase4QqRuntimeConfigFromEnv()).toThrow(
+      /HUANLINK_MAIN_AGENT_PROVIDER/
+    );
+  });
+
+  test("rejects a non-HTTPS DeepSeek base URL", () => {
+    process.env.HUANLINK_ONEBOT_GROUP_ID = "20002000";
+    process.env.HUANLINK_DEEPSEEK_BASE_URL = "http://api.deepseek.com/beta";
+
+    expect(() => server.loadPhase4QqRuntimeConfigFromEnv()).toThrow(
+      /HUANLINK_DEEPSEEK_BASE_URL/
+    );
+  });
+
+  test("does not include the DeepSeek API key in validation errors", () => {
+    const apiKey = "deepseek-secret-that-must-not-leak";
+    process.env.HUANLINK_ONEBOT_GROUP_ID = "20002000";
+    process.env.DEEPSEEK_API_KEY = apiKey;
+    process.env.HUANLINK_MAIN_AGENT_PROVIDER = "unsupported";
+
+    let thrown: unknown;
+    try {
+      server.loadPhase4QqRuntimeConfigFromEnv();
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).not.toContain(apiKey);
   });
 
   test.each(["http://127.0.0.1:3001/", "not-a-url"])(
@@ -250,7 +314,12 @@ function snapshotEnv(): Record<(typeof ENV_KEYS)[number], string | undefined> {
       process.env.HUANLINK_ONEBOT_ACCESS_TOKEN,
     HUANLINK_ONEBOT_GROUP_ID: process.env.HUANLINK_ONEBOT_GROUP_ID,
     HUANLINK_ONEBOT_COMMAND_PREFIX:
-      process.env.HUANLINK_ONEBOT_COMMAND_PREFIX
+      process.env.HUANLINK_ONEBOT_COMMAND_PREFIX,
+    HUANLINK_MAIN_AGENT_PROVIDER:
+      process.env.HUANLINK_MAIN_AGENT_PROVIDER,
+    HUANLINK_MAIN_AGENT_MODEL: process.env.HUANLINK_MAIN_AGENT_MODEL,
+    HUANLINK_DEEPSEEK_BASE_URL: process.env.HUANLINK_DEEPSEEK_BASE_URL,
+    DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY
   };
 }
 

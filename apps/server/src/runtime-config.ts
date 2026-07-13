@@ -44,6 +44,22 @@ const codexA2aRuntimeConfigEnvSchema = z.object({
     .default("codex-code-task")
 });
 
+const mainAgentModelRuntimeConfigEnvSchema = z.object({
+  HUANLINK_MAIN_AGENT_PROVIDER: z.literal("deepseek").default("deepseek"),
+  HUANLINK_MAIN_AGENT_MODEL: z
+    .string()
+    .trim()
+    .min(1)
+    .default("deepseek-v4-flash"),
+  HUANLINK_DEEPSEEK_BASE_URL: z
+    .string()
+    .trim()
+    .url()
+    .refine((value) => new URL(value).protocol === "https:", "must use https")
+    .default("https://api.deepseek.com/beta"),
+  DEEPSEEK_API_KEY: z.string().trim().min(1)
+});
+
 const phase4QqRuntimeConfigEnvSchema = z.object({
   HUANLINK_ONEBOT_WS_URL: z
     .string()
@@ -92,9 +108,17 @@ export type OneBot11QqRuntimeConfig = {
   commandPrefix: string;
 };
 
+export type MainAgentModelConfig = {
+  provider: "deepseek";
+  modelId: string;
+  baseURL: string;
+  apiKey: string;
+};
+
 export type Phase4QqRuntimeConfig = {
   oneBot11: OneBot11QqRuntimeConfig;
   codexA2a: CodexA2aRuntimeConfig;
+  mainAgentModel: MainAgentModelConfig;
 };
 
 // 启动时一次性读取环境变量，并映射成 core 可消费的 RuntimeConfig。
@@ -163,7 +187,8 @@ export function loadPhase4QqRuntimeConfigFromEnv(input: {
       groupId: parsed.data.HUANLINK_ONEBOT_GROUP_ID,
       commandPrefix: parsed.data.HUANLINK_ONEBOT_COMMAND_PREFIX
     },
-    codexA2a: parseCodexA2aRuntimeConfigFromProcessEnv()
+    codexA2a: parseCodexA2aRuntimeConfigFromProcessEnv(),
+    mainAgentModel: parseMainAgentModelConfigFromProcessEnv()
   };
 }
 
@@ -180,6 +205,28 @@ function parseCodexA2aRuntimeConfigFromProcessEnv(): CodexA2aRuntimeConfig {
   return {
     origin: parsed.data.HUANLINK_CODEX_A2A_ORIGIN,
     skillId: parsed.data.HUANLINK_CODEX_A2A_SKILL_ID
+  };
+}
+
+function parseMainAgentModelConfigFromProcessEnv(): MainAgentModelConfig {
+  const parsed = mainAgentModelRuntimeConfigEnvSchema.safeParse({
+    HUANLINK_MAIN_AGENT_PROVIDER:
+      process.env.HUANLINK_MAIN_AGENT_PROVIDER,
+    HUANLINK_MAIN_AGENT_MODEL: process.env.HUANLINK_MAIN_AGENT_MODEL,
+    HUANLINK_DEEPSEEK_BASE_URL:
+      process.env.HUANLINK_DEEPSEEK_BASE_URL,
+    DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY
+  });
+
+  if (!parsed.success) {
+    throw new Error(formatEnvValidationError(parsed.error));
+  }
+
+  return {
+    provider: parsed.data.HUANLINK_MAIN_AGENT_PROVIDER,
+    modelId: parsed.data.HUANLINK_MAIN_AGENT_MODEL,
+    baseURL: parsed.data.HUANLINK_DEEPSEEK_BASE_URL,
+    apiKey: parsed.data.DEEPSEEK_API_KEY
   };
 }
 

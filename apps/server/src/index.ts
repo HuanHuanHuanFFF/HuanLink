@@ -3,6 +3,7 @@ export {
   loadCodexA2aRuntimeConfigFromEnv,
   loadPhase4QqRuntimeConfigFromEnv,
   type CodexA2aRuntimeConfig,
+  type MainAgentModelConfig,
   type OneBot11QqRuntimeConfig,
   type Phase4QqRuntimeConfig
 } from "./runtime-config.js";
