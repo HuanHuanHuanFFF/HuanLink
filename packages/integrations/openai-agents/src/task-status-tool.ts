@@ -31,15 +31,25 @@ export function createTaskStatusTool(options: CreateTaskStatusToolOptions) {
         throw new Error("Task status tool requires a HuanLink RunContext");
       }
 
-      const record =
-        options.reader.getByAgentCallId(taskId) ??
-        options.reader.getByTaskId(taskId);
-      if (
-        record === undefined ||
-        record.sessionId !== runContext.context.sessionId
-      ) {
+      const candidates = [
+        options.reader.getByAgentCallId(taskId),
+        options.reader.getByTaskId(taskId)
+      ].filter(
+        (candidate): candidate is AgentCallRecord =>
+          candidate !== undefined &&
+          candidate.sessionId === runContext.context.sessionId
+      );
+      const recordsByAgentCallId = new Map(
+        candidates.map((candidate) => [candidate.agentCallId, candidate])
+      );
+      if (recordsByAgentCallId.size === 0) {
         return JSON.stringify({ status: "not-found", taskId });
       }
+      if (recordsByAgentCallId.size > 1) {
+        return JSON.stringify({ status: "ambiguous", taskId });
+      }
+
+      const record = recordsByAgentCallId.values().next().value!;
 
       return JSON.stringify({
         status: "found",
@@ -60,6 +70,9 @@ function publicTaskStatus(record: AgentCallRecord) {
     ...(record.statusMessage === undefined
       ? {}
       : { statusMessage: record.statusMessage }),
+    ...(record.terminalNotificationError === undefined
+      ? {}
+      : { notificationError: record.terminalNotificationError }),
     artifacts: record.artifacts.map((artifact) => ({ ...artifact }))
   };
 }

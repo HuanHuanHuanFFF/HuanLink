@@ -1,6 +1,6 @@
 import { fileURLToPath } from "node:url";
 
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 import type { AgentCallRequest } from "@huanlink/core";
 
@@ -25,22 +25,23 @@ describe("real DeepSeek MainAgent smoke", () => {
       process.env.HUANLINK_DEEPSEEK_BASE_URL?.trim() ||
       "https://api.deepseek.com/beta";
     const invocations: AgentCallRequest[] = [];
+    const invoke = vi.fn(async (request: AgentCallRequest) => {
+      invocations.push(request);
+      return {
+        status: "accepted" as const,
+        executionMode: request.executionMode,
+        agentCallId: "real-deepseek-agent-call",
+        taskId: "real-deepseek-a2a-task",
+        state: "submitted" as const
+      };
+    });
+    const getByAgentCallId = vi.fn(() => undefined);
+    const getByTaskId = vi.fn(() => undefined);
     const runtime = createPhase3MainAgentRuntime({
-      invoker: {
-        async invoke(request) {
-          invocations.push(request);
-          return {
-            status: "accepted",
-            executionMode: request.executionMode,
-            agentCallId: "real-deepseek-agent-call",
-            taskId: "real-deepseek-a2a-task",
-            state: "submitted"
-          };
-        }
-      },
+      invoker: { invoke },
       taskReader: {
-        getByAgentCallId: () => undefined,
-        getByTaskId: () => undefined
+        getByAgentCallId,
+        getByTaskId
       },
       modelBinding: createDeepSeekMainAgentModelBinding({
         config: {
@@ -63,6 +64,9 @@ describe("real DeepSeek MainAgent smoke", () => {
       ].join(" ")
     });
 
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(getByAgentCallId).not.toHaveBeenCalled();
+    expect(getByTaskId).not.toHaveBeenCalled();
     expect(invocations).toHaveLength(1);
     expect(invocations[0]).toMatchObject({
       runId: "run-real-deepseek",

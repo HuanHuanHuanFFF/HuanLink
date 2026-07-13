@@ -204,6 +204,88 @@ describe("createTaskStatusTool", () => {
     expect(observed.submit).not.toHaveBeenCalled();
   });
 
+  test("returns the current-session A2A candidate when another session owns the colliding canonical ID", async () => {
+    const query = "shared-task-id";
+    const currentSessionRecord: AgentCallRecord = {
+      ...record,
+      agentCallId: "huanlink-current",
+      taskId: query
+    };
+    const otherSessionRecord: AgentCallRecord = {
+      ...record,
+      agentCallId: query,
+      taskId: "a2a-other",
+      sessionId: "session-other"
+    };
+
+    const observed = await queryStatus(query, "session-current", {
+      byAgentCallId: otherSessionRecord,
+      byTaskId: currentSessionRecord
+    });
+
+    expect(observed.result).toMatchObject({
+      status: "found",
+      task: {
+        taskId: "huanlink-current",
+        a2aTaskId: query
+      }
+    });
+  });
+
+  test("returns ambiguous when both ID namespaces resolve to different records in the current session", async () => {
+    const query = "ambiguous-task-id";
+    const canonicalCandidate: AgentCallRecord = {
+      ...record,
+      agentCallId: query,
+      taskId: "a2a-canonical-candidate"
+    };
+    const externalCandidate: AgentCallRecord = {
+      ...record,
+      agentCallId: "huanlink-external-candidate",
+      taskId: query
+    };
+
+    const observed = await queryStatus(query, "session-current", {
+      byAgentCallId: canonicalCandidate,
+      byTaskId: externalCandidate
+    });
+
+    expect(observed.result).toEqual({ status: "ambiguous", taskId: query });
+    expect(observed.invoke).not.toHaveBeenCalled();
+    expect(observed.submit).not.toHaveBeenCalled();
+  });
+
+  test("deduplicates the same current-session record returned by both ID namespaces", async () => {
+    const observed = await queryStatus(record.agentCallId, "session-current", {
+      byAgentCallId: record,
+      byTaskId: { ...record }
+    });
+
+    expect(observed.result).toMatchObject({
+      status: "found",
+      task: {
+        taskId: record.agentCallId,
+        a2aTaskId: record.taskId
+      }
+    });
+  });
+
+  test("returns a terminal notification error under the public notificationError field", async () => {
+    const observed = await queryStatus(record.agentCallId, "session-current", {
+      byAgentCallId: {
+        ...record,
+        terminalNotificationError: "Failed to deliver the terminal update"
+      }
+    });
+
+    expect(observed.result).toMatchObject({
+      status: "found",
+      task: {
+        notificationError: "Failed to deliver the terminal update"
+      }
+    });
+  });
+
   test.each([
     {
       name: "an unknown ID",
