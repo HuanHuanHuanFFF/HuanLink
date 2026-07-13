@@ -9,7 +9,10 @@ import {
   type ModelResponse,
   type StreamEvent
 } from "@openai/agents";
-import { SUBMIT_CODEX_AGENT_CALL_TOOL_NAME } from "@huanlink/integration-openai-agents";
+import {
+  GET_TASK_STATUS_TOOL_NAME,
+  SUBMIT_CODEX_AGENT_CALL_TOOL_NAME
+} from "@huanlink/integration-openai-agents";
 import type {
   AgentCallInvocationResult,
   AgentCallReceipt,
@@ -97,6 +100,34 @@ function acceptedAgentCall(request: ModelRequest | undefined): AgentCallReceipt 
   return result;
 }
 
+function taskStatusResult(request: ModelRequest | undefined): unknown {
+  if (request === undefined || typeof request.input === "string") {
+    throw new Error("Expected a task-status tool continuation request");
+  }
+
+  const resultItem = request.input.find(
+    (item) => item.type === "function_call_result"
+  );
+  if (
+    resultItem === undefined ||
+    resultItem.name !== GET_TASK_STATUS_TOOL_NAME
+  ) {
+    throw new Error("Expected a task-status function_call_result item");
+  }
+  const output = resultItem.output;
+  const text =
+    typeof output === "string"
+      ? output
+      : !Array.isArray(output) && output.type === "text"
+        ? output.text
+        : undefined;
+  if (text === undefined) {
+    throw new Error("Expected a text task-status function result");
+  }
+
+  return JSON.parse(text) as unknown;
+}
+
 class DelegateThenSummarizeModel implements Model {
   readonly requests: ModelRequest[] = [];
 
@@ -178,6 +209,58 @@ class BlockingThenReplyModel implements Model {
   }
 }
 
+class SubmitThenQueryStatusModel implements Model {
+  readonly requests: ModelRequest[] = [];
+
+  async getResponse(request: ModelRequest): Promise<ModelResponse> {
+    this.requests.push(request);
+    if (this.requests.length === 1) {
+      return {
+        usage: new Usage(),
+        output: [
+          {
+            type: "function_call",
+            callId: "phase3-submit-before-status",
+            name: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
+            arguments: JSON.stringify({ task: "start one status-test task" })
+          }
+        ]
+      };
+    }
+    if (this.requests.length === 2) {
+      return {
+        usage: new Usage(),
+        output: [assistantMessage("Task accepted for later status lookup.")]
+      };
+    }
+    if (this.requests.length === 3) {
+      const accepted = acceptedAgentCall(this.requests[1]);
+      return {
+        usage: new Usage(),
+        output: [
+          {
+            type: "function_call",
+            callId: "phase3-status-query",
+            name: GET_TASK_STATUS_TOOL_NAME,
+            arguments: JSON.stringify({ taskId: accepted.agentCallId })
+          }
+        ]
+      };
+    }
+
+    return {
+      usage: new Usage(),
+      output: [assistantMessage("The existing task is still working.")]
+    };
+  }
+
+  async *getStreamedResponse(
+    _request: ModelRequest
+  ): AsyncIterable<StreamEvent> {
+    throw new Error("Streaming is not used in this test");
+  }
+}
+
 class SingleModelProvider implements ModelProvider {
   constructor(private readonly model: Model) {}
 
@@ -215,12 +298,98 @@ function terminalTransport(state: AgentCallTaskState): AgentCallTransport {
   };
 }
 
+function pendingTransport() {
+  const submitTask = vi.fn<AgentCallTransport["submitTask"]>(
+    async (request) => ({
+      taskId: "a2a-task-status-query",
+      contextId: request.contextId,
+      state: "working",
+      artifacts: [],
+      statusMessage: "Codex is working"
+    })
+  );
+  const transport: AgentCallTransport = {
+    discoverCapability: async (skillId) => ({
+      id: skillId,
+      name: "Codex code task"
+    }),
+    submitTask,
+    async *watchTask(_taskId, { signal }) {
+      await waitForAbort(signal);
+    },
+    cancelTask: async (taskId) => ({
+      taskId,
+      state: "canceled",
+      artifacts: []
+    })
+  };
+  return { transport, submitTask };
+}
+
+function waitForAbort(signal: AbortSignal): Promise<void> {
+  if (signal.aborted) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    signal.addEventListener("abort", () => resolve(), { once: true });
+  });
+}
+
 afterEach(async () => {
   await Promise.all(runtimes.splice(0).map((runtime) => runtime.close()));
   await Promise.all(servers.splice(0).map((server) => server.close()));
 });
 
 describe("Phase 3 HuanLink orchestration", () => {
+  test("queries an existing session task without submitting another AgentCall", async () => {
+    const model = new SubmitThenQueryStatusModel();
+    const { transport, submitTask } = pendingTransport();
+    const runtime = createPhase3HuanLinkRuntime({
+      codexA2aOrigin: "http://127.0.0.1:1",
+      transport,
+      runner: new Runner({
+        modelProvider: new SingleModelProvider(model),
+        tracingDisabled: true
+      })
+    });
+    runtimes.push(runtime);
+
+    await runtime.runMainAgent({
+      runId: "run-phase3-status-submission",
+      sessionId: "session-phase3-status",
+      input: "start a task"
+    });
+    const accepted = acceptedAgentCall(model.requests[1]);
+
+    await expect(
+      runtime.runMainAgent({
+        runId: "run-phase3-status-query",
+        sessionId: "session-phase3-status",
+        input: `report task ${accepted.agentCallId}`
+      })
+    ).resolves.toEqual({ output: "The existing task is still working." });
+
+    expect(taskStatusResult(model.requests[3])).toMatchObject({
+      status: "found",
+      task: {
+        taskId: accepted.agentCallId,
+        a2aTaskId: accepted.taskId,
+        state: "working",
+        executionMode: "async",
+        statusMessage: "Codex is working",
+        artifacts: []
+      }
+    });
+    expect(submitTask).toHaveBeenCalledTimes(1);
+    expect(runtime.agentCalls.listByRunId("run-phase3-status-query")).toEqual([]);
+    expect(model.requests[2]?.systemInstructions).toContain(
+      "use get_task_status"
+    );
+    expect(model.requests[2]?.systemInstructions).toContain(
+      "never use submit_codex_agent_call"
+    );
+  });
+
   test("blocking mode returns the remote result in the current turn without re-entry", async () => {
     const remoteStarted = deferred();
     const remoteCompletion = deferred();

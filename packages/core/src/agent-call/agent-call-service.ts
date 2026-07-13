@@ -9,6 +9,7 @@ import {
   type AgentCallRecord,
   type AgentCallBackgroundErrorListener,
   type AgentCallReceipt,
+  type AgentCallReader,
   type AgentCallRequest,
   type AgentCallSubmitter,
   type AgentCallTaskSnapshot,
@@ -29,7 +30,9 @@ type ActiveWatcher = {
 
 type AgentCallOutcomeWaiter = (record: AgentCallRecord) => void;
 
-export class AgentCallService implements AgentCallSubmitter, AgentCallInvoker {
+export class AgentCallService
+  implements AgentCallSubmitter, AgentCallInvoker, AgentCallReader
+{
   private readonly transport: AgentCallTransport;
   private readonly createId: () => AgentCallId;
   private readonly now: () => Date;

@@ -1,7 +1,8 @@
-import type { AgentCallInvoker } from "@huanlink/core";
+import type { AgentCallInvoker, AgentCallReader } from "@huanlink/core";
 import {
   OpenAiAgentsRuntime,
   createCodexAgentCallTool,
+  createTaskStatusTool,
   type OpenAiAgentsRunContext,
   type OpenAiAgentsRunner
 } from "@huanlink/integration-openai-agents";
@@ -14,6 +15,7 @@ export type MainAgentModelBinding = {
 
 export type CreatePhase3MainAgentRuntimeOptions = {
   invoker: AgentCallInvoker;
+  taskReader: AgentCallReader;
   runner?: OpenAiAgentsRunner;
   codexSkillId?: string;
   modelBinding?: MainAgentModelBinding;
@@ -22,15 +24,18 @@ export type CreatePhase3MainAgentRuntimeOptions = {
 export function createPhase3MainAgentRuntime(
   options: CreatePhase3MainAgentRuntimeOptions
 ): OpenAiAgentsRuntime {
-  const tool = createCodexAgentCallTool({
+  const submitTool = createCodexAgentCallTool({
     invoker: options.invoker,
     skillId: options.codexSkillId
   });
+  const taskStatusTool = createTaskStatusTool({ reader: options.taskReader });
   const agent = new Agent<OpenAiAgentsRunContext>({
     name: "HuanLink MainAgent",
     instructions: [
       "You are HuanLink's MainAgent.",
       "When the user asks for a concrete code change, delegate it with submit_codex_agent_call.",
+      "When the user asks to inspect or report an existing task, use get_task_status with its HuanLink or A2A task ID.",
+      "For an existing task status query, never use submit_codex_agent_call.",
       "Use executionMode async unless the user explicitly asks to block until completion.",
       "After an async task is accepted, acknowledge its task ID and continue the current turn without waiting.",
       "After a blocking task returns, use its result in the current turn.",
@@ -40,7 +45,7 @@ export function createPhase3MainAgentRuntime(
     ...(options.modelBinding?.modelSettings === undefined
       ? {}
       : { modelSettings: options.modelBinding.modelSettings }),
-    tools: [tool]
+    tools: [submitTool, taskStatusTool]
   });
 
   return new OpenAiAgentsRuntime({

@@ -127,6 +127,11 @@ export type AgentCallRecord = {
   updatedAt: string;
 };
 
+export interface AgentCallReader {
+  getByAgentCallId(agentCallId: AgentCallId): AgentCallRecord | undefined;
+  getByTaskId(taskId: string): AgentCallRecord | undefined;
+}
+
 export interface AgentCallSubmitter {
   submit(request: AgentCallRequest): Promise<AgentCallReceipt>;
 }

@@ -38,6 +38,10 @@ describe("real DeepSeek MainAgent smoke", () => {
           };
         }
       },
+      taskReader: {
+        getByAgentCallId: () => undefined,
+        getByTaskId: () => undefined
+      },
       modelBinding: createDeepSeekMainAgentModelBinding({
         config: {
           provider: "deepseek",

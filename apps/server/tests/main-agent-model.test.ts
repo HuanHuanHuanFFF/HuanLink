@@ -47,6 +47,10 @@ describe("createDeepSeekMainAgentModelBinding", () => {
     });
     const runtime = createPhase3MainAgentRuntime({
       invoker: { invoke },
+      taskReader: {
+        getByAgentCallId: () => undefined,
+        getByTaskId: () => undefined
+      },
       modelBinding
     });
 
@@ -79,6 +83,13 @@ describe("createDeepSeekMainAgentModelBinding", () => {
           type: "function",
           function: {
             name: "submit_codex_agent_call",
+            strict: true
+          }
+        },
+        {
+          type: "function",
+          function: {
+            name: "get_task_status",
             strict: true
           }
         }

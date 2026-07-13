@@ -61,6 +61,7 @@ export function createPhase3HuanLinkRuntime(
   const agentCalls = new AgentCallService({ transport });
   const mainAgent = createPhase3MainAgentRuntime({
     invoker: agentCalls,
+    taskReader: agentCalls,
     codexSkillId: options.codexSkillId,
     runner: options.runner,
     modelBinding: options.modelBinding
