@@ -1,6 +1,6 @@
 # DeepSeek MainAgent Provider Design
 
-**状态：** 方案已确认，待实施
+**状态：** 代码已实施，待真实 DeepSeek 与 QQ smoke
 **日期：** 2026-07-13
 
 ## 目标
