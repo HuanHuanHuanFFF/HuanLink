@@ -27,6 +27,11 @@ function task(
   };
 }
 
+const rejectUnexpectedContinuation: AgentCallTransport["continueTask"] =
+  async () => {
+    throw new Error("Unexpected task continuation in this test");
+  };
+
 describe("AgentCallService", () => {
   test("lists defensive copies of records for only the requested run", async () => {
     let taskSequence = 0;
@@ -43,6 +48,7 @@ describe("AgentCallService", () => {
         });
       },
       async *watchTask() {},
+      continueTask: rejectUnexpectedContinuation,
       cancelTask: async (taskId) => task("canceled", { taskId })
     };
     const service = new AgentCallService({
@@ -95,6 +101,7 @@ describe("AgentCallService", () => {
         await releaseCompletion.promise;
         yield task("completed");
       },
+      continueTask: rejectUnexpectedContinuation,
       cancelTask: async () => task("canceled")
     };
     const service = new AgentCallService({
@@ -151,6 +158,7 @@ describe("AgentCallService", () => {
           ]
         });
       },
+      continueTask: rejectUnexpectedContinuation,
       cancelTask: async () => task("canceled")
     };
     const service = new AgentCallService({
@@ -204,6 +212,7 @@ describe("AgentCallService", () => {
         subscriptionHeldOpen.resolve();
         await releaseSubscription.promise;
       },
+      continueTask: rejectUnexpectedContinuation,
       cancelTask: async () => task("canceled")
     };
     const service = new AgentCallService({
@@ -252,6 +261,7 @@ describe("AgentCallService", () => {
       submitTask: async () =>
         task("auth-required", { statusMessage: "sign in is required" }),
       watchTask,
+      continueTask: rejectUnexpectedContinuation,
       cancelTask: async () => task("canceled")
     };
     const service = new AgentCallService({
@@ -298,6 +308,7 @@ describe("AgentCallService", () => {
         await releaseCompletion.promise;
         yield task("completed");
       },
+      continueTask: rejectUnexpectedContinuation,
       cancelTask
     };
     const service = new AgentCallService({
@@ -364,6 +375,7 @@ describe("AgentCallService", () => {
         });
         yield task("completed");
       },
+      continueTask: rejectUnexpectedContinuation,
       cancelTask: vi.fn(async () => task("canceled"))
     };
     const service = new AgentCallService({
@@ -418,6 +430,7 @@ describe("AgentCallService", () => {
       async *watchTask() {
         throw new Error("subscription disconnected");
       },
+      continueTask: rejectUnexpectedContinuation,
       cancelTask: async () => task("canceled")
     };
     const service = new AgentCallService({
@@ -452,6 +465,7 @@ describe("AgentCallService", () => {
           statusMessage: "approval is required"
         });
       },
+      continueTask: rejectUnexpectedContinuation,
       cancelTask: async () => task("canceled")
     };
     const service = new AgentCallService({
@@ -476,6 +490,452 @@ describe("AgentCallService", () => {
     expect(terminalListener).not.toHaveBeenCalled();
   });
 
+  test("preserves structured questions from an input-required snapshot", async () => {
+    const transport: AgentCallTransport = {
+      discoverCapability: async (skillId) => ({ id: skillId, name: skillId }),
+      submitTask: async () => task("submitted"),
+      async *watchTask() {
+        yield task("input-required", {
+          statusMessage: "Scope: Which files may be changed?",
+          questions: [
+            {
+              id: "scope",
+              header: "Scope",
+              question: "Which files may be changed?",
+              isOther: false,
+              isSecret: false,
+              options: [
+                {
+                  label: "Adapter only",
+                  description: "Limit changes to the Codex adapter."
+                }
+              ]
+            }
+          ]
+        })
+      },
+      continueTask: async () => task("working"),
+      cancelTask: async () => task("canceled")
+    };
+    const service = new AgentCallService({
+      transport,
+      createId: () => "agent-call-questions"
+    });
+
+    await service.submit({
+      runId: "run-questions",
+      sessionId: "session-questions",
+      skillId: "codex-code-task",
+      input: "ask before choosing a scope",
+      executionMode: "async"
+    });
+    await service.waitForIdle();
+
+    expect(service.getByTaskId("a2a-task-01")?.questions).toEqual([
+      expect.objectContaining({
+        id: "scope",
+        question: "Which files may be changed?",
+        options: [expect.objectContaining({ label: "Adapter only" })]
+      })
+    ]);
+  });
+
+  test("continues the same paused task with structured answers and restarts its watcher", async () => {
+    let watchCycle = 0;
+    const continueTask = vi.fn(async () => task("working"));
+    const terminalListener = vi.fn();
+    const transport: AgentCallTransport = {
+      discoverCapability: async (skillId) => ({ id: skillId, name: skillId }),
+      submitTask: async () => task("submitted"),
+      async *watchTask() {
+        watchCycle += 1;
+        if (watchCycle === 1) {
+          yield task("input-required", {
+            statusMessage: "Scope: Which files may be changed?",
+            questions: [
+              {
+                id: "scope",
+                header: "Scope",
+                question: "Which files may be changed?",
+                isOther: false,
+                isSecret: false,
+                options: null
+              }
+            ]
+          });
+          return;
+        }
+        yield task("completed", {
+          artifacts: [{ id: "result", text: "continued the original task" }]
+        });
+      },
+      continueTask,
+      cancelTask: async () => task("canceled")
+    };
+    const service = new AgentCallService({
+      transport,
+      createId: () => "agent-call-continue",
+      createMessageId: () => "message-continue"
+    });
+    service.onTerminal(terminalListener);
+
+    await service.submit({
+      runId: "run-continue",
+      sessionId: "session-continue",
+      skillId: "codex-code-task",
+      input: "pause and continue",
+      executionMode: "async"
+    });
+    await service.waitForIdle();
+
+    await expect(
+      service.continueTask("a2a-task-01", { scope: ["Adapter only"] })
+    ).resolves.toMatchObject({
+      taskId: "a2a-task-01",
+      state: "working",
+      questions: undefined,
+      statusMessage: undefined
+    });
+    expect(continueTask).toHaveBeenCalledWith({
+      taskId: "a2a-task-01",
+      contextId: "a2a-context-01",
+      messageId: "message-continue",
+      signal: expect.any(AbortSignal),
+      answers: { scope: ["Adapter only"] }
+    });
+
+    await service.waitForIdle();
+    expect(service.getByTaskId("a2a-task-01")).toMatchObject({
+      state: "completed",
+      artifacts: [{ id: "result", text: "continued the original task" }]
+    });
+    expect(terminalListener).toHaveBeenCalledTimes(1);
+  });
+
+  test("rejects a concurrent continuation before transport while the first one completes", async () => {
+    const continuationStarted = deferred();
+    const releaseContinuation = deferred();
+    let continuationCalls = 0;
+    let watchCycle = 0;
+    const continueTask = vi.fn(async () => {
+      continuationCalls += 1;
+      if (continuationCalls > 1) {
+        throw new Error("duplicate continuation reached transport");
+      }
+      continuationStarted.resolve();
+      await releaseContinuation.promise;
+      return task("working");
+    });
+    const transport: AgentCallTransport = {
+      discoverCapability: async (skillId) => ({ id: skillId, name: skillId }),
+      submitTask: async () => task("submitted"),
+      async *watchTask() {
+        watchCycle += 1;
+        if (watchCycle === 1) {
+          yield task("input-required", {
+            questions: [
+              {
+                id: "scope",
+                header: "Scope",
+                question: "Which files may be changed?",
+                isOther: false,
+                isSecret: false,
+                options: null
+              }
+            ]
+          });
+          return;
+        }
+        yield task("completed", {
+          artifacts: [{ id: "result", text: "first continuation completed" }]
+        });
+      },
+      continueTask,
+      cancelTask: async () => task("canceled")
+    };
+    const service = new AgentCallService({
+      transport,
+      createId: () => "agent-call-concurrent-continuation"
+    });
+
+    await service.submit({
+      runId: "run-concurrent-continuation",
+      sessionId: "session-concurrent-continuation",
+      skillId: "codex-code-task",
+      input: "continue only once",
+      executionMode: "async"
+    });
+    await service.waitForIdle();
+
+    const firstContinuation = service.continueTask("a2a-task-01", {
+      scope: ["Adapter only"]
+    });
+    await continuationStarted.promise;
+    await expect(
+      service.continueTask("a2a-task-01", { scope: ["All files"] })
+    ).rejects.toThrow(/already has an active continuation/);
+    expect(continueTask).toHaveBeenCalledTimes(1);
+
+    releaseContinuation.resolve();
+    await expect(firstContinuation).resolves.toMatchObject({
+      taskId: "a2a-task-01",
+      state: "working"
+    });
+    await service.waitForIdle();
+
+    expect(service.getByTaskId("a2a-task-01")).toMatchObject({
+      state: "completed",
+      artifacts: [{ id: "result", text: "first continuation completed" }]
+    });
+  });
+
+  test("waits for an in-flight continuation during close without restarting its watcher", async () => {
+    const continuationStarted = deferred();
+    const releaseContinuation = deferred();
+    let continuationSignal: AbortSignal | undefined;
+    let watchCycle = 0;
+    const cancelTask = vi.fn(async () => task("canceled"));
+    const transport: AgentCallTransport = {
+      discoverCapability: async (skillId) => ({ id: skillId, name: skillId }),
+      submitTask: async () => task("submitted"),
+      async *watchTask() {
+        watchCycle += 1;
+        if (watchCycle === 1) {
+          yield task("input-required", {
+            questions: [
+              {
+                id: "scope",
+                header: "Scope",
+                question: "Which files may be changed?",
+                isOther: false,
+                isSecret: false,
+                options: null
+              }
+            ]
+          });
+          return;
+        }
+        yield task("completed");
+      },
+      continueTask: async (request) => {
+        continuationSignal = request.signal;
+        continuationStarted.resolve();
+        await releaseContinuation.promise;
+        return task("working");
+      },
+      cancelTask
+    };
+    const service = new AgentCallService({
+      transport,
+      createId: () => "agent-call-close-continuation"
+    });
+
+    await service.submit({
+      runId: "run-close-continuation",
+      sessionId: "session-close-continuation",
+      skillId: "codex-code-task",
+      input: "pause and close while continuing",
+      executionMode: "async"
+    });
+    await service.waitForIdle();
+
+    const continuation = service.continueTask("a2a-task-01", {
+      scope: ["Adapter only"]
+    });
+    await continuationStarted.promise;
+    let closeSettled = false;
+    const closing = service.close().finally(() => {
+      closeSettled = true;
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const closeWaitedForContinuation = !closeSettled;
+    const continuationWasAborted = continuationSignal?.aborted === true;
+
+    releaseContinuation.resolve();
+    const continuationOutcome = await continuation.then(
+      () => "resolved" as const,
+      (error: unknown) => error
+    );
+    await closing;
+
+    expect(closeWaitedForContinuation).toBe(true);
+    expect(continuationWasAborted).toBe(true);
+    expect(continuationOutcome).toBeInstanceOf(Error);
+    expect((continuationOutcome as Error).message).toMatch(
+      /closed during continuation/
+    );
+    expect(cancelTask).toHaveBeenCalledWith("a2a-task-01");
+    expect(watchCycle).toBe(1);
+    expect(service.getByTaskId("a2a-task-01")?.state).toBe("input-required");
+  });
+
+  test("does not start a watcher when close begins while applying a continued snapshot", async () => {
+    const closeTriggered = deferred();
+    let clockTicks = 0;
+    let watchCycle = 0;
+    let service!: AgentCallService;
+    let closing!: Promise<void>;
+    const cancelTask = vi.fn(async () => task("canceled"));
+    const transport: AgentCallTransport = {
+      discoverCapability: async (skillId) => ({ id: skillId, name: skillId }),
+      submitTask: async () => task("submitted"),
+      async *watchTask() {
+        watchCycle += 1;
+        if (watchCycle === 1) {
+          yield task("input-required", {
+            questions: [
+              {
+                id: "scope",
+                header: "Scope",
+                question: "Which files may be changed?",
+                isOther: false,
+                isSecret: false,
+                options: null
+              }
+            ]
+          });
+          return;
+        }
+        yield task("completed");
+      },
+      continueTask: async () => task("working"),
+      cancelTask
+    };
+    service = new AgentCallService({
+      transport,
+      createId: () => "agent-call-close-after-apply",
+      now: () => {
+        clockTicks += 1;
+        if (clockTicks === 3) {
+          queueMicrotask(() => {
+            closing = service.close();
+            closeTriggered.resolve();
+          });
+        }
+        return new Date(`2026-07-13T00:00:0${clockTicks}.000Z`);
+      }
+    });
+
+    await service.submit({
+      runId: "run-close-after-apply",
+      sessionId: "session-close-after-apply",
+      skillId: "codex-code-task",
+      input: "close between apply and watch",
+      executionMode: "async"
+    });
+    await service.waitForIdle();
+
+    const continuation = service.continueTask("a2a-task-01", {
+      scope: ["Adapter only"]
+    });
+    await closeTriggered.promise;
+    const continuationOutcome = await continuation.then(
+      () => "resolved" as const,
+      (error: unknown) => error
+    );
+    await closing;
+
+    expect(continuationOutcome).toBeInstanceOf(Error);
+    expect((continuationOutcome as Error).message).toMatch(
+      /closed during continuation/
+    );
+    expect(cancelTask).toHaveBeenCalledWith("a2a-task-01");
+    expect(watchCycle).toBe(1);
+    expect(service.getByTaskId("a2a-task-01")?.state).toBe("input-required");
+  });
+
+  test("notifies completion after a blocking invocation was returned as input-required and continued", async () => {
+    let watchCycle = 0;
+    const terminalListener = vi.fn();
+    const transport: AgentCallTransport = {
+      discoverCapability: async (skillId) => ({ id: skillId, name: skillId }),
+      submitTask: async () => task("submitted"),
+      async *watchTask() {
+        watchCycle += 1;
+        if (watchCycle === 1) {
+          yield task("input-required", {
+            questions: [
+              {
+                id: "scope",
+                header: "Scope",
+                question: "Which files may be changed?",
+                isOther: false,
+                isSecret: false,
+                options: null
+              }
+            ]
+          });
+          return;
+        }
+        yield task("completed", {
+          artifacts: [{ id: "result", text: "blocking continuation completed" }]
+        });
+      },
+      continueTask: async () => task("working"),
+      cancelTask: async () => task("canceled")
+    };
+    const service = new AgentCallService({
+      transport,
+      createId: () => "agent-call-blocking-continue",
+      createMessageId: () => "message-blocking-continue"
+    });
+    service.onTerminal(terminalListener);
+
+    await expect(
+      service.invoke({
+        runId: "run-blocking-continue",
+        sessionId: "session-blocking-continue",
+        skillId: "codex-code-task",
+        input: "pause this blocking call",
+        executionMode: "blocking"
+      })
+    ).resolves.toMatchObject({
+      state: "input-required",
+      questions: [expect.objectContaining({ id: "scope" })]
+    });
+
+    await service.continueTask("a2a-task-01", {
+      scope: ["Adapter only"]
+    });
+    await service.waitForIdle();
+
+    expect(terminalListener).toHaveBeenCalledTimes(1);
+    expect(terminalListener.mock.calls[0]?.[0]).toMatchObject({
+      executionMode: "blocking",
+      state: "completed",
+      artifacts: [{ text: "blocking continuation completed" }]
+    });
+  });
+
+  test("rejects continuation unless the tracked task is input-required", async () => {
+    const continueTask = vi.fn(async () => task("working"));
+    const transport: AgentCallTransport = {
+      discoverCapability: async (skillId) => ({ id: skillId, name: skillId }),
+      submitTask: async () => task("working"),
+      async *watchTask() {},
+      continueTask,
+      cancelTask: async () => task("canceled")
+    };
+    const service = new AgentCallService({
+      transport,
+      createId: () => "agent-call-not-paused"
+    });
+    await service.submit({
+      runId: "run-not-paused",
+      sessionId: "session-not-paused",
+      skillId: "codex-code-task",
+      input: "still working",
+      executionMode: "async"
+    });
+
+    await expect(
+      service.continueTask("a2a-task-01", { scope: ["Adapter only"] })
+    ).rejects.toThrow(/input-required/);
+    expect(continueTask).not.toHaveBeenCalled();
+
+    await service.close();
+  });
+
   test("maps cancellation through the transport without waiting for the watcher", async () => {
     const never = deferred();
     const terminalListener = vi.fn();
@@ -492,6 +952,7 @@ describe("AgentCallService", () => {
           )
         ]);
       },
+      continueTask: rejectUnexpectedContinuation,
       cancelTask: vi.fn(async () => task("canceled"))
     };
     const service = new AgentCallService({
@@ -528,6 +989,7 @@ describe("AgentCallService", () => {
         return task("submitted");
       },
       async *watchTask() {},
+      continueTask: rejectUnexpectedContinuation,
       cancelTask
     };
     const service = new AgentCallService({
@@ -560,6 +1022,7 @@ describe("AgentCallService", () => {
       async *watchTask() {
         yield task("completed");
       },
+      continueTask: rejectUnexpectedContinuation,
       cancelTask: async () => task("canceled")
     };
     const service = new AgentCallService({

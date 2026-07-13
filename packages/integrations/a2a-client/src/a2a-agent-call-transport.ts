@@ -19,9 +19,11 @@ import {
 import type {
   AgentCallArtifact,
   AgentCallCapability,
+  AgentCallInputQuestion,
   AgentCallTaskSnapshot,
   AgentCallTaskState,
   AgentCallTransport,
+  AgentCallTransportContinueRequest,
   AgentCallTransportSubmitRequest
 } from "@huanlink/core";
 
@@ -96,6 +98,38 @@ export class A2aAgentCallTransport implements AgentCallTransport {
     return snapshotFromTask(requireTask(result));
   }
 
+  async continueTask(
+    request: AgentCallTransportContinueRequest
+  ): Promise<AgentCallTaskSnapshot> {
+    const client = await this.getClient();
+    const result = await client.sendMessage(
+      SendMessageRequest.fromJSON({
+        message: {
+          messageId: request.messageId,
+          taskId: request.taskId,
+          ...(request.contextId === undefined
+            ? {}
+            : { contextId: request.contextId }),
+          role: "ROLE_USER",
+          parts: [{ data: { answers: request.answers } }]
+        },
+        configuration: { returnImmediately: true }
+      }),
+      request.signal === undefined ? undefined : { signal: request.signal }
+    );
+    const task = requireTask(result);
+    assertTaskId(request.taskId, task.id);
+    if (
+      request.contextId !== undefined &&
+      task.contextId !== request.contextId
+    ) {
+      throw new Error(
+        `A2A continuation returned context ${task.contextId}, expected ${request.contextId}`
+      );
+    }
+    return snapshotFromTask(task);
+  }
+
   async *watchTask(
     taskId: string,
     options: { signal: AbortSignal }
@@ -120,6 +154,9 @@ export class A2aAgentCallTransport implements AgentCallTransport {
               break;
             }
             yield snapshot;
+            if (isPaused(snapshot.state)) {
+              return;
+            }
             continue;
           }
 
@@ -131,13 +168,17 @@ export class A2aAgentCallTransport implements AgentCallTransport {
               terminalEventSeen = true;
               break;
             }
-            yield {
+            const snapshot: AgentCallTaskSnapshot = {
               taskId: update.taskId,
               contextId: update.contextId,
               state,
               artifacts: [],
-              ...messageField(update.status?.message)
+              ...messageFields(update.status?.message)
             };
+            yield snapshot;
+            if (isPaused(snapshot.state)) {
+              return;
+            }
           }
         }
       } catch (error) {
@@ -257,7 +298,7 @@ function snapshotFromTask(task: Task): AgentCallTaskSnapshot {
     contextId: task.contextId,
     state: stateFromTaskState(task.status?.state),
     artifacts: task.artifacts.map(artifactFromA2a),
-    ...messageField(task.status?.message)
+    ...messageFields(task.status?.message)
   };
 }
 
@@ -278,9 +319,9 @@ function artifactFromA2a(artifact: Artifact): AgentCallArtifact {
   };
 }
 
-function messageField(
+function messageFields(
   message: Message | undefined
-): Pick<AgentCallTaskSnapshot, "statusMessage"> | Record<string, never> {
+): Pick<AgentCallTaskSnapshot, "statusMessage" | "questions"> {
   if (!message) {
     return {};
   }
@@ -289,7 +330,77 @@ function messageField(
       part.content?.$case === "text" ? [part.content.value] : []
     )
     .join("\n");
-  return text === "" ? {} : { statusMessage: text };
+  const questions = message.parts.flatMap((part) =>
+    part.content?.$case === "data"
+      ? questionsFromData(part.content.value)
+      : []
+  );
+  return {
+    ...(text === "" ? {} : { statusMessage: text }),
+    ...(questions.length === 0 ? {} : { questions })
+  };
+}
+
+function questionsFromData(value: unknown): AgentCallInputQuestion[] {
+  const data = asRecord(value);
+  if (!data || !Array.isArray(data.questions)) {
+    return [];
+  }
+  const questions = data.questions.map(questionFromData);
+  return questions.some((question) => question === undefined)
+    ? []
+    : (questions as AgentCallInputQuestion[]);
+}
+
+function questionFromData(value: unknown): AgentCallInputQuestion | undefined {
+  const question = asRecord(value);
+  if (
+    !question ||
+    typeof question.id !== "string" ||
+    typeof question.header !== "string" ||
+    typeof question.question !== "string"
+  ) {
+    return undefined;
+  }
+  if (
+    question.options !== undefined &&
+    question.options !== null &&
+    !Array.isArray(question.options)
+  ) {
+    return undefined;
+  }
+  const options =
+    question.options === undefined || question.options === null
+      ? null
+      : question.options.map(optionFromData);
+  if (options?.some((option) => option === undefined)) {
+    return undefined;
+  }
+  return {
+    header: question.header,
+    id: question.id,
+    isOther: question.isOther === true,
+    isSecret: question.isSecret === true,
+    options: options as AgentCallInputQuestion["options"],
+    question: question.question
+  };
+}
+
+function optionFromData(
+  value: unknown
+): NonNullable<AgentCallInputQuestion["options"]>[number] | undefined {
+  const option = asRecord(value);
+  return option &&
+    typeof option.label === "string" &&
+    typeof option.description === "string"
+    ? { label: option.label, description: option.description }
+    : undefined;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
 }
 
 function stateFromTaskState(state: TaskState | undefined): AgentCallTaskState {

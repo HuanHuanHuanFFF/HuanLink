@@ -1,5 +1,5 @@
 import { createInterface } from "node:readline";
-import { PassThrough } from "node:stream";
+import { PassThrough, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
@@ -8,6 +8,7 @@ import {
   CodexAppServerClient,
   spawnCodexAppServerTransport,
   type CodexAppServerNotification,
+  type CodexAppServerRequest,
   type CodexAppServerTransport
 } from "../src/codex-app-server-client.js";
 
@@ -15,6 +16,11 @@ interface TestTransport {
   client: CodexAppServerTransport;
   fromClient: PassThrough;
   toClient: PassThrough;
+}
+
+interface WriteFailingTestTransport extends TestTransport {
+  closeCalls(): number;
+  failNextWrite(error: Error): void;
 }
 
 function createTestTransport(): TestTransport {
@@ -30,6 +36,46 @@ function createTestTransport(): TestTransport {
         fromClient.end();
         toClient.end();
       }
+    },
+    fromClient,
+    toClient
+  };
+}
+
+function createWriteFailingTestTransport(): WriteFailingTestTransport {
+  const fromClient = new PassThrough();
+  const toClient = new PassThrough();
+  let closeCalls = 0;
+  let nextWriteError: Error | undefined;
+  const stdin = new Writable({
+    write(chunk, encoding, callback) {
+      if (nextWriteError) {
+        const error = nextWriteError;
+        nextWriteError = undefined;
+        callback(error);
+        return;
+      }
+      fromClient.write(chunk, encoding);
+      callback();
+    }
+  });
+  stdin.on("error", () => undefined);
+
+  return {
+    client: {
+      stdin,
+      stdout: toClient,
+      stderr: new PassThrough(),
+      async close() {
+        closeCalls += 1;
+        stdin.destroy();
+        fromClient.end();
+        toClient.end();
+      }
+    },
+    closeCalls: () => closeCalls,
+    failNextWrite(error) {
+      nextWriteError = error;
     },
     fromClient,
     toClient
@@ -218,6 +264,234 @@ describe("CodexAppServerClient", () => {
 
     await expect(client.close()).resolves.toBeUndefined();
     await expect(client.close()).resolves.toBeUndefined();
+  });
+
+  it("separates user-input server requests from notifications and answers the same request id", async () => {
+    const transport = createTestTransport();
+    const readFromClient = createJsonLineReader(transport.fromClient);
+    const connecting = CodexAppServerClient.connect({
+      transport: transport.client,
+      expectedVersion: "0.142.5",
+      requestTimeoutMs: 1_000
+    });
+    const initialize = await readFromClient();
+    transport.toClient.write(
+      `${JSON.stringify({
+        id: initialize.id,
+        result: {
+          userAgent: "codex-cli/0.142.5",
+          codexHome: "C:/Users/demo/.codex",
+          platformFamily: "windows",
+          platformOs: "windows"
+        }
+      })}\n`
+    );
+    await readFromClient();
+    const client = await connecting;
+
+    const notifications: unknown[] = [];
+    const requests: CodexAppServerRequest[] = [];
+    client.onNotification((notification) => notifications.push(notification));
+    client.onServerRequest((request) => requests.push(request));
+
+    transport.toClient.write(
+      `${JSON.stringify({
+        method: "item/started",
+        params: { threadId: "thread-1", turnId: "turn-1" }
+      })}\n`
+    );
+    transport.toClient.write(
+      `${JSON.stringify({
+        id: "input-1",
+        method: "item/tool/requestUserInput",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "item-1",
+          questions: [
+            {
+              id: "scope",
+              header: "Scope",
+              question: "Which files may be changed?",
+              isOther: false,
+              isSecret: false,
+              options: [
+                {
+                  label: "Adapter only",
+                  description: "Limit changes to the Codex adapter."
+                }
+              ]
+            }
+          ],
+          autoResolutionMs: null
+        }
+      })}\n`
+    );
+
+    await expect.poll(() => requests).toHaveLength(1);
+    expect(notifications).toEqual([
+      {
+        method: "item/started",
+        params: { threadId: "thread-1", turnId: "turn-1" }
+      }
+    ]);
+    expect(requests[0]).toMatchObject({
+      id: "input-1",
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-1",
+        questions: [
+          expect.objectContaining({ id: "scope", question: "Which files may be changed?" })
+        ]
+      }
+    });
+
+    await client.respondToServerRequest("input-1", {
+      answers: { scope: { answers: ["Adapter only"] } }
+    });
+    await expect(readFromClient()).resolves.toEqual({
+      id: "input-1",
+      result: { answers: { scope: { answers: ["Adapter only"] } } }
+    });
+
+    await client.close();
+  });
+
+  it("discards an unresolved server request without sending a response", async () => {
+    const transport = createTestTransport();
+    const readFromClient = createJsonLineReader(transport.fromClient);
+    const connecting = CodexAppServerClient.connect({
+      transport: transport.client,
+      expectedVersion: "0.142.5",
+      requestTimeoutMs: 1_000
+    });
+    const initialize = await readFromClient();
+    transport.toClient.write(
+      `${JSON.stringify({
+        id: initialize.id,
+        result: {
+          userAgent: "codex-cli/0.142.5",
+          codexHome: "C:/Users/demo/.codex",
+          platformFamily: "windows",
+          platformOs: "windows"
+        }
+      })}\n`
+    );
+    await readFromClient();
+    const client = await connecting;
+    const requests: unknown[] = [];
+    client.onServerRequest((request) => requests.push(request));
+
+    transport.toClient.write(
+      `${JSON.stringify({
+        id: "input-discard",
+        method: "item/tool/requestUserInput",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "item-1",
+          questions: [
+            {
+              id: "scope",
+              header: "Scope",
+              question: "Which files may be changed?",
+              isOther: false,
+              isSecret: false,
+              options: null
+            }
+          ],
+          autoResolutionMs: null
+        }
+      })}\n`
+    );
+    await expect.poll(() => requests).toHaveLength(1);
+
+    client.discardServerRequest("input-discard");
+
+    await expect(
+      client.respondToServerRequest("input-discard", {
+        answers: { scope: { answers: ["Adapter only"] } }
+      })
+    ).rejects.toThrow(/Unknown or already answered/);
+    await client.close();
+  });
+
+  it("fails the connection for every subscriber when a server response write fails", async () => {
+    const transport = createWriteFailingTestTransport();
+    const readFromClient = createJsonLineReader(transport.fromClient);
+    const connecting = CodexAppServerClient.connect({
+      transport: transport.client,
+      expectedVersion: "0.142.5",
+      requestTimeoutMs: 1_000
+    });
+    const initialize = await readFromClient();
+    transport.toClient.write(
+      `${JSON.stringify({
+        id: initialize.id,
+        result: {
+          userAgent: "codex-cli/0.142.5",
+          codexHome: "C:/Users/demo/.codex",
+          platformFamily: "windows",
+          platformOs: "windows"
+        }
+      })}\n`
+    );
+    await readFromClient();
+    const client = await connecting;
+    const requests: CodexAppServerRequest[] = [];
+    const executorFailures: unknown[] = [];
+    client.onServerRequest((request) => requests.push(request));
+    client.onClose((error) => executorFailures.push(error));
+    client.onClose((error) => executorFailures.push(error));
+
+    for (const id of ["input-write-failure", "input-still-pending"]) {
+      transport.toClient.write(
+        `${JSON.stringify({
+          id,
+          method: "item/tool/requestUserInput",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: `item-${id}`,
+            questions: [
+              {
+                id: "scope",
+                header: "Scope",
+                question: "Which files may be changed?",
+                isOther: false,
+                isSecret: false,
+                options: null
+              }
+            ],
+            autoResolutionMs: null
+          }
+        })}\n`
+      );
+    }
+    await expect.poll(() => requests).toHaveLength(2);
+
+    const writeFailure = new Error("server response write failed");
+    const answer = { answers: { scope: { answers: ["Adapter only"] } } };
+    transport.failNextWrite(writeFailure);
+
+    try {
+      await expect(
+        client.respondToServerRequest("input-write-failure", answer)
+      ).rejects.toBe(writeFailure);
+      await expect.poll(() => executorFailures).toHaveLength(2);
+      expect(executorFailures).toEqual([writeFailure, writeFailure]);
+      expect(transport.closeCalls()).toBe(1);
+      await expect(
+        client.respondToServerRequest("input-still-pending", answer)
+      ).rejects.toThrow(/Unknown or already answered/);
+      await expect(
+        client.respondToServerRequest("input-write-failure", answer)
+      ).rejects.toThrow(/Unknown or already answered/);
+    } finally {
+      await client.close();
+    }
   });
 
   it("fails closed when app-server sends an unsupported reverse request", async () => {

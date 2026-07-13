@@ -36,6 +36,10 @@ import {
 
 const servers: RunningAdapterServer[] = [];
 const runtimes: Phase3HuanLinkRuntime[] = [];
+const rejectUnexpectedContinuation: AgentCallTransport["continueTask"] =
+  async () => {
+    throw new Error("Unexpected task continuation in this test");
+  };
 
 function deferred<T = void>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -289,6 +293,7 @@ function terminalTransport(state: AgentCallTaskState): AgentCallTransport {
         artifacts: [{ id: `artifact-${state}`, text: `${state} result` }]
       };
     },
+    continueTask: rejectUnexpectedContinuation,
     cancelTask: async (taskId) => ({
       taskId,
       contextId: "session-phase3",
@@ -317,6 +322,7 @@ function pendingTransport() {
     async *watchTask(_taskId, { signal }) {
       await waitForAbort(signal);
     },
+    continueTask: rejectUnexpectedContinuation,
     cancelTask: async (taskId) => ({
       taskId,
       state: "canceled",

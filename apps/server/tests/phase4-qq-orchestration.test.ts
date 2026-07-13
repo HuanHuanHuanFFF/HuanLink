@@ -30,6 +30,10 @@ const TARGET_GROUP = "20002";
 const OTHER_GROUP = "90009";
 const SESSION_ID = `onebot11:group:${TARGET_GROUP}`;
 const runtimes: Phase4QqRuntime[] = [];
+const rejectUnexpectedContinuation: AgentCallTransport["continueTask"] =
+  async () => {
+    throw new Error("Unexpected task continuation in this test");
+  };
 
 function deferred<T = void>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -246,6 +250,8 @@ class ControlledTransport implements AgentCallTransport {
     };
   }
 
+  continueTask = rejectUnexpectedContinuation;
+
   async *watchTask(
     taskId: string,
     options: { signal: AbortSignal }
@@ -287,6 +293,7 @@ function idleTransport(): AgentCallTransport {
       artifacts: []
     }),
     async *watchTask() {},
+    continueTask: rejectUnexpectedContinuation,
     cancelTask: async (taskId) => ({
       taskId,
       state: "canceled",

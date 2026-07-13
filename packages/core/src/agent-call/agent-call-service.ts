@@ -5,6 +5,7 @@ import {
   isAgentCallOutcomeState,
   isAgentCallTerminalState,
   type AgentCallInvocationResult,
+  type AgentCallInputAnswers,
   type AgentCallInvoker,
   type AgentCallRecord,
   type AgentCallBackgroundErrorListener,
@@ -20,12 +21,18 @@ import {
 export type AgentCallServiceOptions = {
   transport: AgentCallTransport;
   createId?: () => AgentCallId;
+  createMessageId?: () => string;
   now?: () => Date;
 };
 
 type ActiveWatcher = {
   controller: AbortController;
   promise: Promise<void>;
+};
+
+type ActiveContinuation = {
+  controller: AbortController;
+  promise: Promise<AgentCallRecord>;
 };
 
 type AgentCallOutcomeWaiter = (record: AgentCallRecord) => void;
@@ -35,15 +42,21 @@ export class AgentCallService
 {
   private readonly transport: AgentCallTransport;
   private readonly createId: () => AgentCallId;
+  private readonly createMessageId: () => string;
   private readonly now: () => Date;
   private readonly recordsByAgentCallId = new Map<AgentCallId, AgentCallRecord>();
   private readonly agentCallIdByTaskId = new Map<string, AgentCallId>();
   private readonly terminalHandled = new Set<AgentCallId>();
+  private readonly notifyTerminalAfterContinuation = new Set<AgentCallId>();
   private readonly terminalListeners = new Set<AgentCallTerminalListener>();
   private readonly backgroundErrorListeners =
     new Set<AgentCallBackgroundErrorListener>();
   private readonly activeSubmissions = new Set<Promise<AgentCallReceipt>>();
   private readonly activeWatchers = new Map<AgentCallId, ActiveWatcher>();
+  private readonly activeContinuationByTaskId = new Map<
+    string,
+    ActiveContinuation
+  >();
   private readonly activeCancellations = new Set<Promise<AgentCallRecord>>();
   private readonly outcomeWaiters = new Map<
     AgentCallId,
@@ -54,6 +67,7 @@ export class AgentCallService
   constructor(options: AgentCallServiceOptions) {
     this.transport = options.transport;
     this.createId = options.createId ?? randomUUID;
+    this.createMessageId = options.createMessageId ?? randomUUID;
     this.now = options.now ?? (() => new Date());
   }
 
@@ -80,6 +94,9 @@ export class AgentCallService
       taskId: record.taskId,
       state: record.state,
       artifacts: record.artifacts,
+      ...(record.questions === undefined
+        ? {}
+        : { questions: cloneQuestions(record.questions) }),
       ...(record.statusMessage === undefined
         ? {}
         : { statusMessage: record.statusMessage })
@@ -152,6 +169,9 @@ export class AgentCallService
       executionMode: request.executionMode,
       state: submitted.state,
       artifacts: cloneArtifacts(submitted.artifacts),
+      ...(submitted.questions === undefined
+        ? {}
+        : { questions: cloneQuestions(submitted.questions) }),
       ...(submitted.statusMessage === undefined
         ? {}
         : { statusMessage: submitted.statusMessage }),
@@ -265,6 +285,116 @@ export class AgentCallService
     return this.requireRecordClone(agentCallId);
   }
 
+  continueTask(
+    taskId: string,
+    answers: AgentCallInputAnswers,
+    signal?: AbortSignal
+  ): Promise<AgentCallRecord> {
+    this.assertOpen();
+    if (this.activeContinuationByTaskId.has(taskId)) {
+      return Promise.reject(
+        new Error(`Remote task ${taskId} already has an active continuation`)
+      );
+    }
+    const controller = new AbortController();
+    const continuationSignal =
+      signal === undefined
+        ? controller.signal
+        : AbortSignal.any([signal, controller.signal]);
+    const operation = Promise.resolve().then(() =>
+      this.performContinueTask(taskId, answers, continuationSignal)
+    );
+    const activeContinuation = { controller, promise: operation };
+    this.activeContinuationByTaskId.set(taskId, activeContinuation);
+    void operation.then(
+      () => {
+        if (
+          this.activeContinuationByTaskId.get(taskId) === activeContinuation
+        ) {
+          this.activeContinuationByTaskId.delete(taskId);
+        }
+      },
+      () => {
+        if (
+          this.activeContinuationByTaskId.get(taskId) === activeContinuation
+        ) {
+          this.activeContinuationByTaskId.delete(taskId);
+        }
+      }
+    );
+    return operation;
+  }
+
+  private async performContinueTask(
+    taskId: string,
+    answers: AgentCallInputAnswers,
+    signal: AbortSignal
+  ): Promise<AgentCallRecord> {
+    const agentCallId = this.agentCallIdByTaskId.get(taskId);
+    if (agentCallId === undefined) {
+      throw new Error(`Unknown remote task ${taskId}`);
+    }
+    const record = this.requireRecord(agentCallId);
+    if (record.state !== "input-required") {
+      throw new Error(
+        `Remote task ${taskId} must be input-required before it can continue`
+      );
+    }
+    const previousWatcher = this.activeWatchers.get(agentCallId);
+    if (previousWatcher) {
+      previousWatcher.controller.abort();
+      await previousWatcher.promise;
+    }
+    this.assertOpen();
+
+    const continued = await this.transport.continueTask({
+      taskId,
+      ...(record.contextId === undefined ? {} : { contextId: record.contextId }),
+      messageId: this.createMessageId(),
+      signal,
+      answers: cloneAnswers(answers)
+    });
+    if (this.closed) {
+      await this.rejectContinuationDuringShutdown(agentCallId, taskId);
+    }
+    this.assertMatchingTask(record, continued);
+    if (continued.state !== "working") {
+      throw new Error(
+        `Remote task ${taskId} continued in unexpected state ${continued.state}`
+      );
+    }
+    await this.applySnapshot(agentCallId, continued);
+    if (this.closed) {
+      this.recordsByAgentCallId.set(agentCallId, record);
+      await this.rejectContinuationDuringShutdown(agentCallId, taskId);
+    }
+    if (record.executionMode === "blocking") {
+      this.notifyTerminalAfterContinuation.add(agentCallId);
+    }
+    this.startWatcher(agentCallId, continued);
+    return this.requireRecordClone(agentCallId);
+  }
+
+  private async rejectContinuationDuringShutdown(
+    agentCallId: AgentCallId,
+    taskId: string
+  ): Promise<never> {
+    try {
+      await this.transport.cancelTask(taskId);
+    } catch (error) {
+      this.reportBackgroundError(
+        new Error(
+          `Failed to cancel remote task ${taskId} continued during shutdown`,
+          { cause: error }
+        ),
+        agentCallId
+      );
+    }
+    throw new Error(
+      `AgentCallService closed during continuation of remote task ${taskId}`
+    );
+  }
+
   async waitForIdle(): Promise<void> {
     while (this.activeWatchers.size > 0) {
       await Promise.all(
@@ -278,10 +408,18 @@ export class AgentCallService
       return;
     }
     this.closed = true;
+    for (const continuation of this.activeContinuationByTaskId.values()) {
+      continuation.controller.abort();
+    }
     await Promise.allSettled([...this.activeSubmissions]);
     for (const watcher of this.activeWatchers.values()) {
       watcher.controller.abort();
     }
+    await Promise.allSettled(
+      [...this.activeContinuationByTaskId.values()].map(
+        (continuation) => continuation.promise
+      )
+    );
     await Promise.allSettled([...this.activeCancellations]);
     await this.waitForIdle();
   }
@@ -373,10 +511,19 @@ export class AgentCallService
         }
       });
 
-    this.activeWatchers.set(agentCallId, { controller, promise });
+    const activeWatcher = { controller, promise };
+    this.activeWatchers.set(agentCallId, activeWatcher);
     void promise.then(
-      () => this.activeWatchers.delete(agentCallId),
-      () => this.activeWatchers.delete(agentCallId)
+      () => {
+        if (this.activeWatchers.get(agentCallId) === activeWatcher) {
+          this.activeWatchers.delete(agentCallId);
+        }
+      },
+      () => {
+        if (this.activeWatchers.get(agentCallId) === activeWatcher) {
+          this.activeWatchers.delete(agentCallId);
+        }
+      }
     );
   }
 
@@ -396,8 +543,17 @@ export class AgentCallService
         : { contextId: snapshot.contextId }),
       state: snapshot.state,
       artifacts: cloneArtifacts(snapshot.artifacts),
+      questions:
+        snapshot.state === "input-required" && snapshot.questions !== undefined
+          ? cloneQuestions(snapshot.questions)
+          : undefined,
       ...(snapshot.statusMessage === undefined
-        ? { statusMessage: current.statusMessage }
+        ? {
+            statusMessage:
+              current.state === "input-required" && snapshot.state === "working"
+                ? undefined
+                : current.statusMessage
+          }
         : { statusMessage: snapshot.statusMessage }),
       updatedAt: this.now().toISOString()
     };
@@ -417,7 +573,9 @@ export class AgentCallService
     }
 
     this.terminalHandled.add(agentCallId);
-    if (updated.executionMode === "blocking") {
+    const notifyAfterContinuation =
+      this.notifyTerminalAfterContinuation.delete(agentCallId);
+    if (updated.executionMode === "blocking" && !notifyAfterContinuation) {
       return;
     }
     this.activeWatchers.get(agentCallId)?.controller.abort();
@@ -494,12 +652,39 @@ function cloneArtifacts(
   return artifacts.map((artifact) => ({ ...artifact }));
 }
 
+function cloneQuestions(
+  questions: NonNullable<AgentCallRecord["questions"]>
+): NonNullable<AgentCallRecord["questions"]> {
+  return questions.map((question) => ({
+    ...question,
+    options:
+      question.options === null
+        ? null
+        : question.options.map((option) => ({ ...option }))
+  }));
+}
+
+function cloneAnswers(answers: AgentCallInputAnswers): AgentCallInputAnswers {
+  return Object.fromEntries(
+    Object.entries(answers).map(([questionId, values]) => [
+      questionId,
+      [...values]
+    ])
+  );
+}
+
 function cloneRecord(
   record: AgentCallRecord | undefined
 ): AgentCallRecord | undefined {
   return record === undefined
     ? undefined
-    : { ...record, artifacts: cloneArtifacts(record.artifacts) };
+    : {
+        ...record,
+        artifacts: cloneArtifacts(record.artifacts),
+        ...(record.questions === undefined
+          ? {}
+          : { questions: cloneQuestions(record.questions) })
+      };
 }
 
 function errorMessage(error: unknown): string {

@@ -9,6 +9,8 @@ import {
 
 import type {
   CodexAppServerNotification,
+  CodexAppServerRequest,
+  CodexAppServerRequestId,
   CodexRuntimeClient
 } from "./codex-app-server-client.js";
 import {
@@ -37,6 +39,10 @@ interface InFlightExecution {
   eventBus: ExecutionEventBus;
   finalAnswer: string;
   lastCommentary: string;
+  pendingInput?: {
+    requestId: CodexAppServerRequestId;
+    questions: CodexAppServerRequest["params"]["questions"];
+  };
   resolveTerminal(): void;
   resolveTurnReady(): void;
   taskId: string;
@@ -66,6 +72,7 @@ export class CodexTaskExecutor implements AgentExecutor {
   private readonly workspace: string;
   private readonly unsubscribeClose: () => void;
   private readonly unsubscribeNotifications: () => void;
+  private readonly unsubscribeServerRequests: () => void;
   private closing = false;
   private closePromise: Promise<void> | undefined;
 
@@ -80,6 +87,9 @@ export class CodexTaskExecutor implements AgentExecutor {
     this.unsubscribeNotifications = this.client.onNotification((notification) =>
       this.handleNotification(notification)
     );
+    this.unsubscribeServerRequests = this.client.onServerRequest((request) =>
+      this.handleServerRequest(request)
+    );
     this.unsubscribeClose = this.client.onClose((error) =>
       this.handleClientClose(error)
     );
@@ -89,6 +99,12 @@ export class CodexTaskExecutor implements AgentExecutor {
     requestContext: RequestContext,
     eventBus: ExecutionEventBus
   ): Promise<void> {
+    const existing = this.executions.get(requestContext.taskId);
+    if (existing) {
+      await this.continueExecution(existing, requestContext, eventBus);
+      return;
+    }
+
     const execution = createExecution(requestContext, eventBus);
     this.executions.set(execution.taskId, execution);
     eventBus.publish(AgentEvent.task(createInitialTask(requestContext)));
@@ -243,7 +259,60 @@ export class CodexTaskExecutor implements AgentExecutor {
       }
     }
     this.unsubscribeNotifications();
+    this.unsubscribeServerRequests();
     this.unsubscribeClose();
+  }
+
+  private async continueExecution(
+    execution: InFlightExecution,
+    requestContext: RequestContext,
+    eventBus: ExecutionEventBus
+  ): Promise<void> {
+    if (execution.terminal || !execution.pendingInput) {
+      throw new Error(`Task ${execution.taskId} is not awaiting user input`);
+    }
+    if (requestContext.contextId !== execution.contextId) {
+      throw new Error(
+        `Task ${execution.taskId} continuation has a mismatched context`
+      );
+    }
+    const pending = execution.pendingInput;
+    let answers: Record<string, string[]>;
+    try {
+      answers = extractAnswers(requestContext);
+      validateAnswerIds(pending.questions, answers);
+    } catch (error) {
+      publishInputRequiredUpdate(
+        execution,
+        eventBus,
+        pending.questions,
+        `Invalid user-input response: ${describeError(error)}`,
+        requestContext.userMessage.messageId
+      );
+      await execution.terminalPromise;
+      return;
+    }
+
+    execution.pendingInput = undefined;
+    publishWorkingUpdate(execution, eventBus);
+    try {
+      await this.client.respondToServerRequest(pending.requestId, {
+        answers: Object.fromEntries(
+          Object.entries(answers).map(([questionId, values]) => [
+            questionId,
+            { answers: values }
+          ])
+        )
+      });
+    } catch (error) {
+      this.finish(
+        execution,
+        TaskState.TASK_STATE_FAILED,
+        `Failed to answer Codex user-input request: ${describeError(error)}`
+      );
+      return;
+    }
+    await execution.terminalPromise;
   }
 
   private async failRuntimeAfterCancellationTimeout(
@@ -339,6 +408,9 @@ export class CodexTaskExecutor implements AgentExecutor {
       if (typeof turn.id === "string") {
         this.setTurnId(execution, turn.id);
       }
+      if (execution.pendingInput && turn.status === "completed") {
+        return;
+      }
 
       if (turn.status === "completed") {
         void this.completeAfterValidation(execution);
@@ -359,6 +431,43 @@ export class CodexTaskExecutor implements AgentExecutor {
         );
       }
     }
+  }
+
+  private handleServerRequest(request: CodexAppServerRequest): void {
+    const execution = this.findServerRequestExecution(request);
+    if (!execution || execution.terminal) {
+      return;
+    }
+    if (execution.pendingInput) {
+      this.client.discardServerRequest(request.id);
+      this.finish(
+        execution,
+        TaskState.TASK_STATE_FAILED,
+        "Codex requested additional input before the previous request was answered"
+      );
+      return;
+    }
+    execution.pendingInput = {
+      requestId: request.id,
+      questions: cloneInputQuestions(request.params.questions)
+    };
+    publishInputRequiredUpdate(
+      execution,
+      execution.eventBus,
+      request.params.questions,
+      undefined,
+      request.params.itemId
+    );
+  }
+
+  private findServerRequestExecution(
+    request: CodexAppServerRequest
+  ): InFlightExecution | undefined {
+    const execution = this.executionByTurn.get(request.params.turnId);
+    return execution?.turnId === request.params.turnId &&
+      execution.threadId === request.params.threadId
+      ? execution
+      : undefined;
   }
 
   private async completeAfterValidation(
@@ -457,6 +566,10 @@ export class CodexTaskExecutor implements AgentExecutor {
   ): void {
     if (execution.terminal) {
       return;
+    }
+    if (execution.pendingInput) {
+      this.client.discardServerRequest(execution.pendingInput.requestId);
+      execution.pendingInput = undefined;
     }
     execution.terminal = true;
     execution.resolveTurnReady();
@@ -578,6 +691,129 @@ function extractText(requestContext: RequestContext): string {
   return text;
 }
 
+function extractAnswers(
+  requestContext: RequestContext
+): Record<string, string[]> {
+  const answerParts = requestContext.userMessage.parts.flatMap((part) => {
+    if (part.content?.$case !== "data") {
+      return [];
+    }
+    const data = asRecord(part.content.value);
+    return data && asRecord(data.answers) ? [data.answers] : [];
+  });
+  if (answerParts.length !== 1) {
+    throw new Error("Task continuation requires one structured answers data part");
+  }
+
+  const answers: Record<string, string[]> = {};
+  for (const [questionId, value] of Object.entries(answerParts[0]!)) {
+    if (!Array.isArray(value) || value.some((answer) => typeof answer !== "string")) {
+      throw new Error(`Answer ${questionId} must be an array of strings`);
+    }
+    answers[questionId] = [...value];
+  }
+  return answers;
+}
+
+function validateAnswerIds(
+  questions: CodexAppServerRequest["params"]["questions"],
+  answers: Record<string, string[]>
+): void {
+  const expected = new Set(questions.map((question) => question.id));
+  const actual = Object.keys(answers);
+  const unknown = actual.filter((questionId) => !expected.has(questionId));
+  const missing = questions
+    .map((question) => question.id)
+    .filter((questionId) => !(questionId in answers));
+  if (unknown.length > 0 || missing.length > 0) {
+    throw new Error(
+      [
+        unknown.length > 0 ? `unknown question ids: ${unknown.join(", ")}` : "",
+        missing.length > 0 ? `missing question ids: ${missing.join(", ")}` : ""
+      ]
+        .filter(Boolean)
+        .join("; ")
+    );
+  }
+}
+
+function createInputRequiredMessage(
+  execution: InFlightExecution,
+  questions: CodexAppServerRequest["params"]["questions"],
+  failure: string | undefined,
+  messageSuffix: string
+): Message {
+  const readable = questions
+    .map((question) => `${question.header}: ${question.question}`)
+    .join("\n");
+  return Message.fromJSON({
+    messageId: `${execution.taskId}-input-required-${messageSuffix}`,
+    contextId: execution.contextId,
+    taskId: execution.taskId,
+    role: "ROLE_AGENT",
+    parts: [
+      { text: failure ? `${failure}\n${readable}` : readable },
+      { data: { questions } }
+    ]
+  });
+}
+
+function publishInputRequiredUpdate(
+  execution: InFlightExecution,
+  eventBus: ExecutionEventBus,
+  questions: CodexAppServerRequest["params"]["questions"],
+  failure: string | undefined,
+  messageSuffix: string
+): void {
+  eventBus.publish(
+    AgentEvent.statusUpdate({
+      taskId: execution.taskId,
+      contextId: execution.contextId,
+      status: {
+        state: TaskState.TASK_STATE_INPUT_REQUIRED,
+        message: createInputRequiredMessage(
+          execution,
+          questions,
+          failure,
+          messageSuffix
+        ),
+        timestamp: new Date().toISOString()
+      },
+      metadata: undefined
+    })
+  );
+}
+
+function cloneInputQuestions(
+  questions: CodexAppServerRequest["params"]["questions"]
+): CodexAppServerRequest["params"]["questions"] {
+  return questions.map((question) => ({
+    ...question,
+    options:
+      question.options === null
+        ? null
+        : question.options.map((option) => ({ ...option }))
+  }));
+}
+
+function publishWorkingUpdate(
+  execution: InFlightExecution,
+  eventBus: ExecutionEventBus
+): void {
+  eventBus.publish(
+    AgentEvent.statusUpdate({
+      taskId: execution.taskId,
+      contextId: execution.contextId,
+      status: {
+        state: TaskState.TASK_STATE_WORKING,
+        message: undefined,
+        timestamp: new Date().toISOString()
+      },
+      metadata: undefined
+    })
+  );
+}
+
 function collectCompletedItem(
   execution: InFlightExecution,
   item: Record<string, unknown>
@@ -676,6 +912,7 @@ function createDeveloperInstructions(expectedBranch: string): string {
     `Stay on branch ${expectedBranch}.`,
     "Do not switch branches, commit, merge, or push.",
     "Make minor implementation or wording choices yourself instead of pausing to ask.",
+    "When genuinely blocked by missing user input, use request_user_input.",
     "Make only the requested focused change and report the files and verification run."
   ].join(" ");
 }

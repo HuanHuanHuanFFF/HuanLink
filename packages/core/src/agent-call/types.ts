@@ -46,11 +46,28 @@ export type AgentCallArtifact = {
   text?: string;
 };
 
+export type AgentCallInputOption = {
+  description: string;
+  label: string;
+};
+
+export type AgentCallInputQuestion = {
+  header: string;
+  id: string;
+  isOther: boolean;
+  isSecret: boolean;
+  options: AgentCallInputOption[] | null;
+  question: string;
+};
+
+export type AgentCallInputAnswers = Record<string, string[]>;
+
 export type AgentCallTaskSnapshot = {
   taskId: string;
   contextId?: string;
   state: AgentCallTaskState;
   artifacts: AgentCallArtifact[];
+  questions?: AgentCallInputQuestion[];
   statusMessage?: string;
 };
 
@@ -62,6 +79,14 @@ export type AgentCallTransportSubmitRequest = {
   signal?: AbortSignal;
 };
 
+export type AgentCallTransportContinueRequest = {
+  answers: AgentCallInputAnswers;
+  contextId?: string;
+  messageId: string;
+  signal?: AbortSignal;
+  taskId: string;
+};
+
 export interface AgentCallTransport {
   discoverCapability(
     skillId: string,
@@ -69,6 +94,9 @@ export interface AgentCallTransport {
   ): Promise<AgentCallCapability>;
   submitTask(
     request: AgentCallTransportSubmitRequest
+  ): Promise<AgentCallTaskSnapshot>;
+  continueTask(
+    request: AgentCallTransportContinueRequest
   ): Promise<AgentCallTaskSnapshot>;
   watchTask(
     taskId: string,
@@ -102,6 +130,7 @@ export type AgentCallBlockingResult = {
   taskId: string;
   state: AgentCallTaskState;
   artifacts: AgentCallArtifact[];
+  questions?: AgentCallInputQuestion[];
   statusMessage?: string;
 };
 
@@ -121,6 +150,7 @@ export type AgentCallRecord = {
   executionMode: TaskExecutionMode;
   state: AgentCallTaskState;
   artifacts: AgentCallArtifact[];
+  questions?: AgentCallInputQuestion[];
   statusMessage?: string;
   terminalNotificationError?: string;
   createdAt: string;

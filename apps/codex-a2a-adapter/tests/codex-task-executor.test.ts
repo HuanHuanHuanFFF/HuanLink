@@ -4,6 +4,7 @@ import {
   CancelTaskRequest,
   GetTaskRequest,
   SendMessageRequest,
+  SubscribeToTaskRequest,
   TaskState,
   type SendMessageResult,
   type StreamResponse,
@@ -14,6 +15,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import type {
   CodexAppServerNotification,
+  CodexAppServerRequest,
   CodexRuntimeClient,
   InterruptCodexTurnOptions,
   StartCodexThreadOptions,
@@ -27,14 +29,24 @@ import {
 
 class ControlledCodexRuntime implements CodexRuntimeClient {
   closeCalls = 0;
+  readonly discardedServerRequests: Array<string | number> = [];
   readonly interruptCalls: InterruptCodexTurnOptions[] = [];
+  readonly serverResponses: Array<{
+    id: string | number;
+    result: unknown;
+  }> = [];
   readonly startThreadCalls: StartCodexThreadOptions[] = [];
   readonly startTurnCalls: StartCodexTurnOptions[] = [];
   onStartTurn?: () => void;
   onInterrupt?: () => void;
+  onRespondToServerRequest?: () => void;
+  respondToServerRequestError?: Error;
   startTurnGate?: Promise<void>;
   private readonly listeners = new Set<
     (notification: CodexAppServerNotification) => void
+  >();
+  private readonly serverRequestListeners = new Set<
+    (request: CodexAppServerRequest) => void
   >();
   private readonly closeListeners = new Set<(error: unknown) => void>();
 
@@ -47,11 +59,33 @@ class ControlledCodexRuntime implements CodexRuntimeClient {
     this.closeCalls += 1;
   }
 
+  discardServerRequest(id: string | number): void {
+    this.discardedServerRequests.push(id);
+  }
+
   onNotification(
     listener: (notification: CodexAppServerNotification) => void
   ): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+
+  onServerRequest(
+    listener: (request: CodexAppServerRequest) => void
+  ): () => void {
+    this.serverRequestListeners.add(listener);
+    return () => this.serverRequestListeners.delete(listener);
+  }
+
+  async respondToServerRequest(
+    id: string | number,
+    result: unknown
+  ): Promise<void> {
+    this.serverResponses.push({ id, result });
+    this.onRespondToServerRequest?.();
+    if (this.respondToServerRequestError) {
+      throw this.respondToServerRequestError;
+    }
   }
 
   async startThread(
@@ -79,6 +113,12 @@ class ControlledCodexRuntime implements CodexRuntimeClient {
     }
   }
 
+  emitServerRequest(request: CodexAppServerRequest): void {
+    for (const listener of this.serverRequestListeners) {
+      listener(request);
+    }
+  }
+
   emitClose(error: unknown): void {
     for (const listener of this.closeListeners) {
       listener(error);
@@ -97,6 +137,70 @@ function createSendRequest(text: string, returnImmediately: boolean) {
     },
     configuration: { returnImmediately }
   });
+}
+
+function createContinuationRequest(
+  task: Task,
+  answers: Record<string, string[]>
+) {
+  return SendMessageRequest.fromJSON({
+    message: {
+      messageId: randomUUID(),
+      taskId: task.id,
+      contextId: task.contextId,
+      role: "ROLE_USER",
+      parts: [{ data: { answers } }]
+    },
+    configuration: { returnImmediately: true }
+  });
+}
+
+function userInputRequest(
+  overrides: Partial<{ id: string; threadId: string; turnId: string }> = {}
+): CodexAppServerRequest {
+  return {
+    id: overrides.id ?? randomUUID(),
+    method: "item/tool/requestUserInput",
+    params: {
+      threadId: overrides.threadId ?? "thread-1",
+      turnId: overrides.turnId ?? "turn-1",
+      itemId: "item-1",
+      questions: [
+        {
+          id: "scope",
+          header: "Scope",
+          question: "Which files may be changed?",
+          isOther: false,
+          isSecret: false,
+          options: [
+            {
+              label: "Adapter only",
+              description: "Limit changes to the Codex adapter."
+            }
+          ]
+        }
+      ],
+      autoResolutionMs: null
+    }
+  };
+}
+
+function scheduleInputRequest(
+  runtime: ControlledCodexRuntime,
+  request: CodexAppServerRequest = userInputRequest()
+): void {
+  runtime.onStartTurn = () => {
+    setTimeout(() => {
+      runtime.emit({
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          turn: { id: "turn-1", status: "inProgress", items: [] }
+        }
+      });
+      runtime.emitServerRequest(request);
+    }, 0);
+  };
 }
 
 function requireTask(result: SendMessageResult): Task {
@@ -351,6 +455,493 @@ describe("CodexTaskExecutor", () => {
     });
   });
 
+  it("pauses for user input and continues the original A2A task and Codex turn", async () => {
+    const runtime = new ControlledCodexRuntime();
+    runtime.onStartTurn = () => {
+      setTimeout(() => {
+        runtime.emit({
+          method: "turn/started",
+          params: {
+            threadId: "thread-1",
+            turn: { id: "turn-1", status: "inProgress", items: [] }
+          }
+        });
+        runtime.emitServerRequest({
+          id: "input-1",
+          method: "item/tool/requestUserInput",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: "item-1",
+            questions: [
+              {
+                id: "scope",
+                header: "Scope",
+                question: "Which files may be changed?",
+                isOther: false,
+                isSecret: false,
+                options: [
+                  {
+                    label: "Adapter only",
+                    description: "Limit changes to the Codex adapter."
+                  }
+                ]
+              }
+            ],
+            autoResolutionMs: null
+          }
+        });
+      }, 0);
+    };
+    const { client } = await startClient(runtime);
+    const submitted = requireTask(
+      await client.sendMessage(createSendRequest("Ask when blocked", true))
+    );
+    const paused = await waitForTaskState(
+      client,
+      submitted.id,
+      TaskState.TASK_STATE_INPUT_REQUIRED
+    );
+
+    expect(paused.status?.message?.parts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          content: {
+            $case: "text",
+            value: expect.stringContaining("Which files may be changed?")
+          }
+        }),
+        expect.objectContaining({
+          content: {
+            $case: "data",
+            value: {
+              questions: [
+                expect.objectContaining({
+                  id: "scope",
+                  question: "Which files may be changed?"
+                })
+              ]
+            }
+          }
+        })
+      ])
+    );
+    expect(runtime.startThreadCalls).toHaveLength(1);
+    expect(runtime.startTurnCalls).toHaveLength(1);
+
+    const continued = requireTask(
+      await client.sendMessage(
+        createContinuationRequest(paused, { scope: ["Adapter only"] })
+      )
+    );
+    expect(continued.id).toBe(submitted.id);
+    expect(continued.contextId).toBe(submitted.contextId);
+    expect(continued.status?.state).toBe(TaskState.TASK_STATE_WORKING);
+    expect(runtime.serverResponses).toEqual([
+      {
+        id: "input-1",
+        result: {
+          answers: { scope: { answers: ["Adapter only"] } }
+        }
+      }
+    ]);
+    expect(runtime.startThreadCalls).toHaveLength(1);
+    expect(runtime.startTurnCalls).toHaveLength(1);
+
+    runtime.emit({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "agentMessage",
+          phase: "final_answer",
+          text: "Continued after receiving the requested scope."
+        }
+      }
+    });
+    runtime.emit({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: { id: "turn-1", status: "completed", items: [] }
+      }
+    });
+
+    const completed = await waitForTaskState(
+      client,
+      submitted.id,
+      TaskState.TASK_STATE_COMPLETED
+    );
+    expect(artifactText(completed)).toContain(
+      "Continued after receiving the requested scope."
+    );
+  });
+
+  it("does not lose a terminal turn emitted synchronously while answering user input", async () => {
+    const runtime = new ControlledCodexRuntime();
+    scheduleInputRequest(runtime, userInputRequest({ id: "input-race" }));
+    runtime.onRespondToServerRequest = () => {
+      runtime.emit({
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "agentMessage",
+            phase: "final_answer",
+            text: "Completed synchronously with the reverse response."
+          }
+        }
+      });
+      runtime.emit({
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turn: { id: "turn-1", status: "completed", items: [] }
+        }
+      });
+    };
+    const { client } = await startClient(runtime);
+    const submitted = requireTask(
+      await client.sendMessage(createSendRequest("Answer without a race", true))
+    );
+    const paused = await waitForTaskState(
+      client,
+      submitted.id,
+      TaskState.TASK_STATE_INPUT_REQUIRED
+    );
+
+    await client.sendMessage(
+      createContinuationRequest(paused, { scope: ["Adapter only"] })
+    );
+
+    const completed = await waitForTaskState(
+      client,
+      submitted.id,
+      TaskState.TASK_STATE_COMPLETED
+    );
+    expect(artifactText(completed)).toContain(
+      "Completed synchronously with the reverse response."
+    );
+  });
+
+  it("fails and releases the original execution when answering Codex fails", async () => {
+    const runtime = new ControlledCodexRuntime();
+    scheduleInputRequest(runtime, userInputRequest({ id: "input-write-failure" }));
+    runtime.respondToServerRequestError = new Error("response pipe closed");
+    const { client, executor } = await startClient(runtime);
+    const submitted = requireTask(
+      await client.sendMessage(createSendRequest("Handle response failure", true))
+    );
+    const paused = await waitForTaskState(
+      client,
+      submitted.id,
+      TaskState.TASK_STATE_INPUT_REQUIRED
+    );
+
+    await client.sendMessage(
+      createContinuationRequest(paused, { scope: ["Adapter only"] })
+    );
+
+    const failed = await waitForTaskState(
+      client,
+      submitted.id,
+      TaskState.TASK_STATE_FAILED
+    );
+    expect(failed.status?.message?.parts[0]?.content).toEqual({
+      $case: "text",
+      value: expect.stringContaining("response pipe closed")
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await executor.close(1_000);
+    expect(runtime.interruptCalls).toEqual([]);
+  });
+
+  it("discards both reverse requests when Codex asks again before the first answer", async () => {
+    const runtime = new ControlledCodexRuntime();
+    scheduleInputRequest(runtime, userInputRequest({ id: "input-first" }));
+    const { client } = await startClient(runtime);
+    const submitted = requireTask(
+      await client.sendMessage(createSendRequest("Reject duplicate input", true))
+    );
+    await waitForTaskState(
+      client,
+      submitted.id,
+      TaskState.TASK_STATE_INPUT_REQUIRED
+    );
+
+    runtime.emitServerRequest(userInputRequest({ id: "input-second" }));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(runtime.discardedServerRequests).toHaveLength(2);
+    expect(new Set(runtime.discardedServerRequests)).toEqual(
+      new Set(["input-first", "input-second"])
+    );
+    runtime.emitClose(new Error("test cleanup"));
+  });
+
+  it("does not treat turn/completed as terminal while user input is unresolved", async () => {
+    const runtime = new ControlledCodexRuntime();
+    scheduleInputRequest(runtime);
+    const { client } = await startClient(runtime);
+    const submitted = requireTask(
+      await client.sendMessage(createSendRequest("Wait for my scope", true))
+    );
+    const paused = await waitForTaskState(
+      client,
+      submitted.id,
+      TaskState.TASK_STATE_INPUT_REQUIRED
+    );
+
+    runtime.emit({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: { id: "turn-1", status: "completed", items: [] }
+      }
+    });
+    await new Promise<void>((resolve) => setTimeout(resolve, 25));
+
+    await expect(
+      client.getTask(GetTaskRequest.fromJSON({ id: submitted.id }))
+    ).resolves.toMatchObject({
+      status: { state: TaskState.TASK_STATE_INPUT_REQUIRED }
+    });
+
+    const continued = requireTask(
+      await client.sendMessage(
+        createContinuationRequest(paused, { scope: ["Adapter only"] })
+      )
+    );
+    expect(continued.status?.state).toBe(TaskState.TASK_STATE_WORKING);
+    expect(runtime.startTurnCalls).toHaveLength(1);
+    expect(runtime.serverResponses).toHaveLength(1);
+
+    runtime.emit({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "agentMessage",
+          phase: "final_answer",
+          text: "Completed after the real continuation."
+        }
+      }
+    });
+    runtime.emit({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: { id: "turn-1", status: "completed", items: [] }
+      }
+    });
+    await waitForTaskState(client, submitted.id, TaskState.TASK_STATE_COMPLETED);
+  });
+
+  it("ignores user-input requests that do not match both the active thread and turn", async () => {
+    const runtime = new ControlledCodexRuntime();
+    runtime.onStartTurn = () => {
+      setTimeout(() => {
+        runtime.emit({
+          method: "turn/started",
+          params: {
+            threadId: "thread-1",
+            turn: { id: "turn-1", status: "inProgress", items: [] }
+          }
+        });
+      }, 0);
+    };
+    const { client } = await startClient(runtime);
+    const submitted = requireTask(
+      await client.sendMessage(createSendRequest("Keep request routing strict", true))
+    );
+    await waitForTaskState(client, submitted.id, TaskState.TASK_STATE_WORKING);
+
+    runtime.emitServerRequest(
+      userInputRequest({ turnId: "turn-other" })
+    );
+    runtime.emitServerRequest(
+      userInputRequest({ threadId: "thread-other" })
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    await expect(
+      client.getTask(GetTaskRequest.fromJSON({ id: submitted.id }))
+    ).resolves.toMatchObject({
+      status: { state: TaskState.TASK_STATE_WORKING }
+    });
+    runtime.emitClose(new Error("test cleanup"));
+  });
+
+  it("keeps the task input-required when continuation answer ids are invalid", async () => {
+    const runtime = new ControlledCodexRuntime();
+    scheduleInputRequest(runtime);
+    const { client } = await startClient(runtime);
+    const submitted = requireTask(
+      await client.sendMessage(createSendRequest("Validate my response", true))
+    );
+    const paused = await waitForTaskState(
+      client,
+      submitted.id,
+      TaskState.TASK_STATE_INPUT_REQUIRED
+    );
+
+    const firstRequest = createContinuationRequest(paused, {
+      unknown: ["not allowed"]
+    });
+    const firstRejected = requireTask(
+      await client.sendMessage(
+        firstRequest
+      )
+    );
+    const secondRejected = requireTask(
+      await client.sendMessage(
+        createContinuationRequest(paused, { unknown: ["still not allowed"] })
+      )
+    );
+
+    expect(firstRejected.status?.state).toBe(TaskState.TASK_STATE_INPUT_REQUIRED);
+    expect(secondRejected.status?.state).toBe(TaskState.TASK_STATE_INPUT_REQUIRED);
+    expect(firstRejected.status?.message?.messageId).not.toBe(
+      secondRejected.status?.message?.messageId
+    );
+    expect(runtime.serverResponses).toEqual([]);
+    expect(runtime.startThreadCalls).toHaveLength(1);
+    expect(runtime.startTurnCalls).toHaveLength(1);
+    runtime.emitClose(new Error("test cleanup"));
+  });
+
+  it.each([
+    ["failed", TaskState.TASK_STATE_FAILED],
+    ["interrupted", TaskState.TASK_STATE_CANCELED]
+  ] as const)(
+    "honors a real %s turn terminal while user input is pending",
+    async (turnStatus, expectedState) => {
+      const runtime = new ControlledCodexRuntime();
+      scheduleInputRequest(runtime);
+      const { client } = await startClient(runtime);
+      const submitted = requireTask(
+        await client.sendMessage(createSendRequest("Observe the real terminal", true))
+      );
+      await waitForTaskState(
+        client,
+        submitted.id,
+        TaskState.TASK_STATE_INPUT_REQUIRED
+      );
+      const controller = new AbortController();
+      const iterator = client
+        .resubscribeTask(
+          SubscribeToTaskRequest.fromJSON({ id: submitted.id }),
+          { signal: controller.signal }
+        )
+        [Symbol.asyncIterator]();
+      await expect(iterator.next()).resolves.toMatchObject({
+        done: false,
+        value: {
+          payload: {
+            $case: "task",
+            value: { status: { state: TaskState.TASK_STATE_INPUT_REQUIRED } }
+          }
+        }
+      });
+      const nextEvent = iterator.next();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      runtime.emit({
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turn: {
+            id: "turn-1",
+            status: turnStatus,
+            error:
+              turnStatus === "failed"
+                ? { message: "Codex turn failed while awaiting input" }
+                : undefined,
+            items: []
+          }
+        }
+      });
+      try {
+        await expect(nextEvent).resolves.toMatchObject({
+          done: false,
+          value: {
+            payload: {
+              $case: "statusUpdate",
+              value: { status: { state: expectedState } }
+            }
+          }
+        });
+      } finally {
+        controller.abort();
+        runtime.emitClose(new Error("test cleanup"));
+      }
+    }
+  );
+
+  it.each(["cancel", "close"] as const)(
+    "discards pending app-server input when the task ends through %s",
+    async (mode) => {
+      const runtime = new ControlledCodexRuntime();
+      scheduleInputRequest(runtime);
+      runtime.onInterrupt = () => {
+        setTimeout(() => {
+          runtime.emit({
+            method: "turn/completed",
+            params: {
+              threadId: "thread-1",
+              turn: { id: "turn-1", status: "interrupted", items: [] }
+            }
+          });
+        }, 0);
+      };
+      const { client, executor } = await startClient(runtime);
+      const submitted = requireTask(
+        await client.sendMessage(createSendRequest("Clean up pending input", true))
+      );
+      await waitForTaskState(
+        client,
+        submitted.id,
+        TaskState.TASK_STATE_INPUT_REQUIRED
+      );
+      const controller = new AbortController();
+      const iterator = client
+        .resubscribeTask(
+          SubscribeToTaskRequest.fromJSON({ id: submitted.id }),
+          { signal: controller.signal }
+        )
+        [Symbol.asyncIterator]();
+      await iterator.next();
+      const terminalEvent = iterator.next();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      try {
+        if (mode === "cancel") {
+          await client.cancelTask(
+            CancelTaskRequest.fromJSON({ id: submitted.id })
+          );
+        } else {
+          await executor.close(1_000);
+        }
+
+        expect(runtime.discardedServerRequests).toHaveLength(1);
+        await expect(terminalEvent).resolves.toMatchObject({
+          done: false,
+          value: {
+            payload: {
+              $case: "statusUpdate",
+              value: { status: { state: TaskState.TASK_STATE_CANCELED } }
+            }
+          }
+        });
+      } finally {
+        controller.abort();
+      }
+    }
+  );
+
   it("uses the non-empty final answer and never lets empty agent messages overwrite it", async () => {
     const runtime = new ControlledCodexRuntime();
     scheduleCompletedTurn(runtime, [
@@ -386,6 +977,9 @@ describe("CodexTaskExecutor", () => {
     );
     expect(runtime.startThreadCalls[0]?.developerInstructions).toContain(
       "Make minor implementation or wording choices yourself instead of pausing to ask."
+    );
+    expect(runtime.startThreadCalls[0]?.developerInstructions).toContain(
+      "When genuinely blocked by missing user input, use request_user_input."
     );
   });
 

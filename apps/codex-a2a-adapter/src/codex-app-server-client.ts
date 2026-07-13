@@ -27,6 +27,40 @@ export interface CodexAppServerNotification {
   params?: Record<string, unknown>;
 }
 
+export type CodexAppServerRequestId = string | number;
+
+export interface CodexUserInputOption {
+  description: string;
+  label: string;
+}
+
+export interface CodexUserInputQuestion {
+  header: string;
+  id: string;
+  isOther: boolean;
+  isSecret: boolean;
+  options: CodexUserInputOption[] | null;
+  question: string;
+}
+
+export interface CodexRequestUserInputParams {
+  autoResolutionMs: number | null;
+  itemId: string;
+  questions: CodexUserInputQuestion[];
+  threadId: string;
+  turnId: string;
+}
+
+export interface CodexRequestUserInputResponse {
+  answers: Record<string, { answers: string[] }>;
+}
+
+export interface CodexAppServerRequest {
+  id: CodexAppServerRequestId;
+  method: "item/tool/requestUserInput";
+  params: CodexRequestUserInputParams;
+}
+
 export interface StartCodexThreadOptions {
   cwd: string;
   developerInstructions: string;
@@ -45,11 +79,19 @@ export interface InterruptCodexTurnOptions {
 
 export interface CodexRuntimeClient {
   close(): Promise<void>;
+  discardServerRequest(id: CodexAppServerRequestId): void;
   interruptTurn(options: InterruptCodexTurnOptions): Promise<void>;
   onClose(listener: (error: unknown) => void): () => void;
   onNotification(
     listener: (notification: CodexAppServerNotification) => void
   ): () => void;
+  onServerRequest(
+    listener: (request: CodexAppServerRequest) => void
+  ): () => void;
+  respondToServerRequest(
+    id: CodexAppServerRequestId,
+    result: CodexRequestUserInputResponse
+  ): Promise<void>;
   startThread(options: StartCodexThreadOptions): Promise<{ threadId: string }>;
   startTurn(options: StartCodexTurnOptions): Promise<{ turnId: string }>;
 }
@@ -145,6 +187,10 @@ export class CodexAppServerClient implements CodexRuntimeClient {
   private readonly notificationListeners = new Set<
     (notification: CodexAppServerNotification) => void
   >();
+  private readonly serverRequestListeners = new Set<
+    (request: CodexAppServerRequest) => void
+  >();
+  private readonly serverRequests = new Set<CodexAppServerRequestId>();
   private readonly pending = new Map<number, PendingRequest>();
   private readonly requestTimeoutMs: number;
   private nextRequestId = 1;
@@ -200,6 +246,7 @@ export class CodexAppServerClient implements CodexRuntimeClient {
     if (!this.closed) {
       this.closed = true;
       this.rejectPending(new Error("Codex app-server client closed"));
+      this.serverRequests.clear();
     }
     this.closePromise ??= this.transport.close();
     await this.closePromise;
@@ -219,6 +266,34 @@ export class CodexAppServerClient implements CodexRuntimeClient {
   ): () => void {
     this.notificationListeners.add(listener);
     return () => this.notificationListeners.delete(listener);
+  }
+
+  onServerRequest(
+    listener: (request: CodexAppServerRequest) => void
+  ): () => void {
+    this.serverRequestListeners.add(listener);
+    return () => this.serverRequestListeners.delete(listener);
+  }
+
+  discardServerRequest(id: CodexAppServerRequestId): void {
+    this.serverRequests.delete(id);
+  }
+
+  async respondToServerRequest(
+    id: CodexAppServerRequestId,
+    result: CodexRequestUserInputResponse
+  ): Promise<void> {
+    if (!this.serverRequests.delete(id)) {
+      throw new Error(
+        `Unknown or already answered Codex app-server request: ${String(id)}`
+      );
+    }
+    try {
+      await this.writeMessage({ id, result });
+    } catch (error) {
+      this.failConnection(error);
+      throw error;
+    }
   }
 
   async startThread(
@@ -311,6 +386,14 @@ export class CodexAppServerClient implements CodexRuntimeClient {
       typeof message.method === "string" &&
       (typeof message.id === "number" || typeof message.id === "string")
     ) {
+      const request = userInputRequestFrom(message);
+      if (request && this.serverRequestListeners.size > 0) {
+        this.serverRequests.add(request.id);
+        for (const listener of this.serverRequestListeners) {
+          listener(request);
+        }
+        return;
+      }
       void this.writeMessage({
         id: message.id,
         error: {
@@ -388,6 +471,7 @@ export class CodexAppServerClient implements CodexRuntimeClient {
     this.connectionFailed = true;
     this.connectionFailure = error;
     this.rejectPending(error);
+    this.serverRequests.clear();
     for (const listener of this.closeListeners) {
       try {
         listener(error);
@@ -402,6 +486,91 @@ export class CodexAppServerClient implements CodexRuntimeClient {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function userInputRequestFrom(
+  message: Record<string, unknown>
+): CodexAppServerRequest | undefined {
+  if (
+    message.method !== "item/tool/requestUserInput" ||
+    (typeof message.id !== "string" && typeof message.id !== "number")
+  ) {
+    return undefined;
+  }
+  const params = requestUserInputParamsFrom(message.params);
+  return params === undefined
+    ? undefined
+    : { id: message.id, method: message.method, params };
+}
+
+function requestUserInputParamsFrom(
+  value: unknown
+): CodexRequestUserInputParams | undefined {
+  const params = isRecord(value) ? value : undefined;
+  if (
+    !params ||
+    typeof params.threadId !== "string" ||
+    typeof params.turnId !== "string" ||
+    typeof params.itemId !== "string" ||
+    !Array.isArray(params.questions)
+  ) {
+    return undefined;
+  }
+  const questions = params.questions.map(userInputQuestionFrom);
+  if (questions.some((question) => question === undefined)) {
+    return undefined;
+  }
+  const autoResolutionMs =
+    typeof params.autoResolutionMs === "number" ? params.autoResolutionMs : null;
+  return {
+    autoResolutionMs,
+    itemId: params.itemId,
+    questions: questions as CodexUserInputQuestion[],
+    threadId: params.threadId,
+    turnId: params.turnId
+  };
+}
+
+function userInputQuestionFrom(
+  value: unknown
+): CodexUserInputQuestion | undefined {
+  const question = isRecord(value) ? value : undefined;
+  if (
+    !question ||
+    typeof question.id !== "string" ||
+    typeof question.header !== "string" ||
+    typeof question.question !== "string"
+  ) {
+    return undefined;
+  }
+  const options = question.options;
+  if (options !== undefined && options !== null && !Array.isArray(options)) {
+    return undefined;
+  }
+  const parsedOptions =
+    options === undefined || options === null
+      ? null
+      : options.map(userInputOptionFrom);
+  if (parsedOptions?.some((option) => option === undefined)) {
+    return undefined;
+  }
+  return {
+    header: question.header,
+    id: question.id,
+    isOther: question.isOther === true,
+    isSecret: question.isSecret === true,
+    options: parsedOptions as CodexUserInputOption[] | null,
+    question: question.question
+  };
+}
+
+function userInputOptionFrom(value: unknown): CodexUserInputOption | undefined {
+  const option = isRecord(value) ? value : undefined;
+  return option &&
+    typeof option.label === "string" &&
+    typeof option.description === "string"
+    ? { label: option.label, description: option.description }
+    : undefined;
 }
 
 async function closeChildProcess(
