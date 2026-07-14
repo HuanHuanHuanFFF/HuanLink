@@ -25,6 +25,8 @@ import {
   createPhase4QqRuntime,
   type Phase4QqRuntime
 } from "../src/index.js";
+import { ThrowingMutatingRuntimeLogger } from "./support/hostile-runtime-logger.js";
+import { RecordingRuntimeLogger } from "./support/recording-runtime-logger.js";
 
 const TARGET_GROUP = "20002";
 const OTHER_GROUP = "90009";
@@ -411,6 +413,37 @@ afterEach(async () => {
 });
 
 describe("Phase 4 QQ orchestration", () => {
+  test("keeps MainAgent input and QQ egress intact when the logger mutates fields and throws", async () => {
+    const channel = new ControlledChannel();
+    const model = new BoundReplyModel();
+    const runtime = createPhase4QqRuntime({
+      channel,
+      targetConversationId: TARGET_GROUP,
+      codexA2aOrigin: "http://127.0.0.1:1",
+      transport: idleTransport(),
+      runner: runner(model),
+      logger: new ThrowingMutatingRuntimeLogger()
+    });
+    runtimes.push(runtime);
+
+    await runtime.start();
+    await channel.emit(
+      message("hostile-logger", {
+        text: "/huanlink preserve this request",
+        trigger: { kind: "command", text: "preserve this request" }
+      })
+    );
+    await waitForSendCount(channel, 1);
+
+    const modelInput = JSON.stringify(model.requests[0]?.input);
+    expect(modelInput).toContain("preserve this request");
+    expect(modelInput).not.toContain("logger-corrupted");
+    expect(channel.sent[0]).toEqual({
+      conversationId: TARGET_GROUP,
+      text: "MainAgent used the injected model binding."
+    });
+  });
+
   test("passes the production model binding through Phase 4 without a Runner override", async () => {
     const channel = new ControlledChannel();
     const model = new BoundReplyModel();
@@ -568,6 +601,7 @@ describe("Phase 4 QQ orchestration", () => {
     const store = new InMemoryConversationStore();
     const model = new DelegateThenSummarizeModel();
     const transport = new ControlledTransport();
+    const logger = new RecordingRuntimeLogger();
     const runtime = createPhase4QqRuntime({
       channel,
       targetConversationId: TARGET_GROUP,
@@ -575,7 +609,8 @@ describe("Phase 4 QQ orchestration", () => {
       transport,
       runner: runner(model),
       createRunId: runIds("run-phase4-initial", "run-phase4-reentry"),
-      store
+      store,
+      logger
     });
     runtimes.push(runtime);
 
@@ -618,6 +653,73 @@ describe("Phase 4 QQ orchestration", () => {
 
     transport.completion.resolve();
     await waitForSendCount(channel, 2);
+
+    const expectedCorrelation = {
+      sessionId: SESSION_ID,
+      agentCallId: agentCall!.agentCallId,
+      a2aTaskId: transport.taskId,
+      contextId: "a2a-context-phase4"
+    };
+    expect(logger.find("qq.message.accepted")).toMatchObject({
+      fields: {
+        sessionId: SESSION_ID,
+        messageId: "ambient",
+        conversationId: TARGET_GROUP,
+        senderId: "30003"
+      }
+    });
+    expect(
+      logger.filter("main_agent.run.started").map((entry) => entry.fields)
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          sessionId: SESSION_ID,
+          runId: "run-phase4-initial",
+          trigger: "user"
+        }),
+        expect.objectContaining({
+          sessionId: SESSION_ID,
+          runId: "run-phase4-reentry",
+          trigger: "agent_call_terminal"
+        })
+      ])
+    );
+    expect(logger.find("qq.reply.sent")).toMatchObject({
+      fields: {
+        sessionId: SESSION_ID,
+        runId: "run-phase4-initial",
+        messageId: "trigger",
+        trigger: "mention",
+        agentCalls: [
+          {
+            agentCallId: agentCall!.agentCallId,
+            a2aTaskId: transport.taskId,
+            contextId: "a2a-context-phase4"
+          }
+        ]
+      }
+    });
+    expect(logger.find("main_agent.reentry.context_ready")).toMatchObject({
+      fields: {
+        ...expectedCorrelation,
+        runId: "run-phase4-reentry",
+        trigger: "agent_call_terminal"
+      }
+    });
+    expect(logger.find("main_agent.reentry.completed")).toMatchObject({
+      fields: {
+        ...expectedCorrelation,
+        runId: "run-phase4-reentry",
+        trigger: "agent_call_terminal"
+      }
+    });
+    expect(logger.find("main_agent.reentry.egress.sent")).toMatchObject({
+      fields: {
+        ...expectedCorrelation,
+        runId: "run-phase4-reentry",
+        trigger: "agent_call_terminal"
+      }
+    });
   });
 
   test("keeps receiving group context while Codex works and uses it for terminal re-entry", async () => {
@@ -693,12 +795,14 @@ describe("Phase 4 QQ orchestration", () => {
   test("ignores even triggered messages from groups outside the configured target", async () => {
     const channel = new ControlledChannel();
     const model = new IdleModel();
+    const logger = new RecordingRuntimeLogger();
     const runtime = createPhase4QqRuntime({
       channel,
       targetConversationId: TARGET_GROUP,
       codexA2aOrigin: "http://127.0.0.1:1",
       transport: idleTransport(),
-      runner: runner(model)
+      runner: runner(model),
+      logger
     });
     runtimes.push(runtime);
 
@@ -721,6 +825,18 @@ describe("Phase 4 QQ orchestration", () => {
     ).toEqual([]);
     expect(model.requests).toHaveLength(0);
     expect(channel.sent).toEqual([]);
+    expect(logger.filter("qq.message.ignored")).toHaveLength(2);
+    expect(logger.filter("qq.message.ignored")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          level: "debug",
+          fields: expect.objectContaining({
+            conversationId: OTHER_GROUP,
+            reason: "non_target_conversation"
+          })
+        })
+      ])
+    );
   });
 
   test("does not let an immediate terminal reply overtake the initial task receipt", async () => {
@@ -832,13 +948,15 @@ describe("Phase 4 QQ orchestration", () => {
   test("does not record a failed send and releases the session for the next turn", async () => {
     const channel = new RejectFirstSendChannel();
     const onBackgroundError = vi.fn<AgentCallBackgroundErrorListener>();
+    const logger = new RecordingRuntimeLogger();
     const runtime = createPhase4QqRuntime({
       channel,
       targetConversationId: TARGET_GROUP,
       codexA2aOrigin: "http://127.0.0.1:1",
       transport: idleTransport(),
       runner: runner(new BoundReplyModel()),
-      onBackgroundError
+      onBackgroundError,
+      logger
     });
     runtimes.push(runtime);
 
@@ -849,6 +967,25 @@ describe("Phase 4 QQ orchestration", () => {
       })
     );
     await vi.waitFor(() => expect(onBackgroundError).toHaveBeenCalledOnce());
+
+    const failedReply = logger
+      .filter("qq.reply.failed")
+      .find((entry) => entry.fields.messageId === "failed-send");
+    expect(failedReply).toMatchObject({
+      level: "error",
+      fields: {
+        sessionId: SESSION_ID,
+        runId: expect.any(String),
+        messageId: "failed-send",
+        conversationId: TARGET_GROUP,
+        trigger: "command"
+      }
+    });
+    expect(
+      logger
+        .filter("qq.reply.sent")
+        .some((entry) => entry.fields.runId === failedReply?.fields.runId)
+    ).toBe(false);
 
     expect(runtime.conversations.formatLatestContext(SESSION_ID)).toBe(
       "Alice: message failed-send"
@@ -871,6 +1008,7 @@ describe("Phase 4 QQ orchestration", () => {
     const started = deferred();
     const aborted = deferred();
     let runCount = 0;
+    const logger = new RecordingRuntimeLogger();
     const abortableRunner: OpenAiAgentsRunner = {
       run(_agent, _input, options) {
         runCount += 1;
@@ -898,7 +1036,8 @@ describe("Phase 4 QQ orchestration", () => {
       targetConversationId: TARGET_GROUP,
       codexA2aOrigin: "http://127.0.0.1:1",
       transport: idleTransport(),
-      runner: abortableRunner
+      runner: abortableRunner,
+      logger
     });
     runtimes.push(runtime);
 
@@ -920,10 +1059,20 @@ describe("Phase 4 QQ orchestration", () => {
     expect(runCount).toBe(1);
     expect(channel.closeCalls).toBe(1);
     expect(channel.sent).toEqual([]);
+    expect(logger.find("main_agent.run.aborted")).toMatchObject({
+      level: "debug",
+      fields: {
+        sessionId: SESSION_ID,
+        runId: expect.any(String),
+        trigger: "user"
+      }
+    });
+    expect(logger.find("main_agent.run.failed")).toBeUndefined();
   });
 
   test("closes the channel before waiting for a pending receipt send", async () => {
     const channel = new CloseReleasesSendChannel();
+    const logger = new RecordingRuntimeLogger();
     const runtime = createPhase4QqRuntime({
       channel,
       targetConversationId: TARGET_GROUP,
@@ -931,7 +1080,8 @@ describe("Phase 4 QQ orchestration", () => {
       transport: idleTransport(),
       runner: {
         run: async () => ({ finalOutput: "receipt waiting on channel close" })
-      }
+      },
+      logger
     });
     runtimes.push(runtime);
 
@@ -955,6 +1105,8 @@ describe("Phase 4 QQ orchestration", () => {
 
     expect(settledPromptly).toBe(true);
     expect(channel.closeCalls).toBe(1);
+    expect(logger.find("qq.reply.aborted")).toMatchObject({ level: "debug" });
+    expect(logger.find("qq.reply.failed")).toBeUndefined();
   });
 
   test("rejects a start that finishes after shutdown and all later starts", async () => {

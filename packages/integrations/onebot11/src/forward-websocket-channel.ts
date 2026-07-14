@@ -3,7 +3,10 @@ import { randomUUID } from "node:crypto";
 import type {
   ChannelAdapter,
   ChannelMessageListener,
+  RuntimeLogFields,
+  RuntimeLogger,
 } from "@huanlink/core";
+import { NoopRuntimeLogger } from "@huanlink/core";
 import WebSocket, { type RawData } from "ws";
 
 import { parseOneBot11GroupMessage } from "./group-message.js";
@@ -14,6 +17,7 @@ import type {
 
 type PendingAction = {
   socket: WebSocket;
+  conversationId: string;
   resolve: () => void;
   reject: (error: Error) => void;
   timeout: NodeJS.Timeout;
@@ -33,6 +37,8 @@ export class ForwardWebSocketOneBot11Channel implements ChannelAdapter {
   private readonly requestTimeoutMs: number;
   private readonly reconnectDelaysMs: readonly number[];
   private readonly onError: OneBot11ChannelErrorListener;
+  private readonly logger: RuntimeLogger;
+  private readonly logSecrets: readonly string[];
   private readonly listeners = new Set<ChannelMessageListener>();
   private readonly pendingActions = new Map<string, PendingAction>();
 
@@ -72,6 +78,8 @@ export class ForwardWebSocketOneBot11Channel implements ChannelAdapter {
     }
 
     this.onError = options.onError ?? (() => undefined);
+    this.logger = options.logger ?? new NoopRuntimeLogger();
+    this.logSecrets = configuredLogSecrets(this.url, this.accessToken);
   }
 
   start(): Promise<void> {
@@ -86,6 +94,7 @@ export class ForwardWebSocketOneBot11Channel implements ChannelAdapter {
     }
 
     this.running = true;
+    const attempt = this.reconnectAttempt;
     const operation = this.connect().catch((error: unknown) => {
       this.running = false;
       const failedSocket = this.socket;
@@ -100,7 +109,13 @@ export class ForwardWebSocketOneBot11Channel implements ChannelAdapter {
           // The connection failure remains the useful startup error.
         }
       }
-      throw this.sanitizeConnectionError(error);
+      const connectionError = this.sanitizeConnectionError(error);
+      this.writeLog("error", "onebot11.error", {
+        stage: "connect",
+        attempt,
+        error: connectionError,
+      });
+      throw connectionError;
     });
     this.startOperation = operation;
     void operation.then(
@@ -131,17 +146,17 @@ export class ForwardWebSocketOneBot11Channel implements ChannelAdapter {
       socket === undefined ||
       socket.readyState !== WebSocket.OPEN
     ) {
-      return Promise.reject(
+      return this.rejectReply(
+        conversationId,
         new Error("OneBot 11 WebSocket is not connected"),
       );
     }
 
     const groupId = parseOutgoingGroupId(conversationId);
     if (groupId === undefined) {
-      return Promise.reject(
-        new Error(
-          "OneBot 11 group ID must be a safe positive integer string",
-        ),
+      return this.rejectReply(
+        conversationId,
+        new Error("OneBot 11 group ID must be a safe positive integer string"),
       );
     }
 
@@ -154,6 +169,15 @@ export class ForwardWebSocketOneBot11Channel implements ChannelAdapter {
       },
       echo,
     });
+    this.writeLog("info", "onebot11.reply.sending", {
+      conversationId,
+      echo,
+    });
+    this.writeLog("debug", "onebot11.reply.payload", {
+      conversationId,
+      echo,
+      payload: { text },
+    });
 
     return new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => {
@@ -162,7 +186,13 @@ export class ForwardWebSocketOneBot11Channel implements ChannelAdapter {
           new Error("OneBot 11 action " + echo + " timed out"),
         );
       }, this.requestTimeoutMs);
-      this.pendingActions.set(echo, { socket, resolve, reject, timeout });
+      this.pendingActions.set(echo, {
+        socket,
+        conversationId,
+        resolve,
+        reject,
+        timeout,
+      });
 
       try {
         socket.send(payload, (error) => {
@@ -194,52 +224,59 @@ export class ForwardWebSocketOneBot11Channel implements ChannelAdapter {
   }
 
   private async performClose(): Promise<void> {
+    this.writeLog("info", "onebot11.closing");
     this.closing = true;
     this.running = false;
     if (this.reconnectTimer !== undefined) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = undefined;
     }
-    this.rejectAllPending(new Error("OneBot 11 channel closed"));
+    this.rejectAllPending(new Error("OneBot 11 channel closed"), "aborted");
 
-    const socket = this.socket;
-    this.socket = undefined;
-    if (
-      socket === undefined ||
-      socket.readyState === WebSocket.CLOSED
-    ) {
-      return;
-    }
+    try {
+      const socket = this.socket;
+      this.socket = undefined;
+      if (
+        socket === undefined ||
+        socket.readyState === WebSocket.CLOSED
+      ) {
+        return;
+      }
 
-    await new Promise<void>((resolve) => {
-      let settled = false;
-      let forceClose: NodeJS.Timeout;
-      const finish = () => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        clearTimeout(forceClose);
-        resolve();
-      };
-      forceClose = setTimeout(() => {
+      await new Promise<void>((resolve) => {
+        let settled = false;
+        let forceClose: NodeJS.Timeout;
+        const finish = () => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          clearTimeout(forceClose);
+          resolve();
+        };
+        forceClose = setTimeout(() => {
+          try {
+            socket.terminate();
+          } finally {
+            finish();
+          }
+        }, 250);
+        socket.once("close", finish);
         try {
+          socket.close(1000, "HuanLink shutdown");
+        } catch {
           socket.terminate();
-        } finally {
           finish();
         }
-      }, 250);
-      socket.once("close", finish);
-      try {
-        socket.close(1000, "HuanLink shutdown");
-      } catch {
-        socket.terminate();
-        finish();
-      }
-    });
+      });
+    } finally {
+      this.writeLog("info", "onebot11.closed");
+    }
   }
 
   private connect(): Promise<void> {
+    const attempt = this.reconnectAttempt;
+    this.writeLog("info", "onebot11.connection.connecting", { attempt });
     return new Promise<void>((resolve, reject) => {
       let opened = false;
       let settled = false;
@@ -267,6 +304,7 @@ export class ForwardWebSocketOneBot11Channel implements ChannelAdapter {
           return;
         }
         opened = true;
+        this.writeLog("info", "onebot11.connection.opened", { attempt });
         this.reconnectAttempt = 0;
         if (!settled) {
           settled = true;
@@ -283,6 +321,10 @@ export class ForwardWebSocketOneBot11Channel implements ChannelAdapter {
         this.reportError(normalizeError(error));
       });
       socket.once("close", (code, reason) => {
+        this.writeLog("info", "onebot11.connection.closed", {
+          attempt,
+          code,
+        });
         const isCurrent = this.socket === socket;
         if (isCurrent) {
           this.socket = undefined;
@@ -308,13 +350,13 @@ export class ForwardWebSocketOneBot11Channel implements ChannelAdapter {
           return;
         }
         if (isCurrent && this.running && !this.closing) {
-          this.scheduleReconnect();
+          this.scheduleReconnect(code);
         }
       });
     });
   }
 
-  private scheduleReconnect(): void {
+  private scheduleReconnect(code?: number): void {
     if (
       !this.running ||
       this.closing ||
@@ -328,6 +370,11 @@ export class ForwardWebSocketOneBot11Channel implements ChannelAdapter {
         Math.min(this.reconnectAttempt, this.reconnectDelaysMs.length - 1)
       ]!;
     this.reconnectAttempt += 1;
+    this.writeLog("warn", "onebot11.connection.reconnect_scheduled", {
+      attempt: this.reconnectAttempt,
+      delay,
+      ...(code === undefined ? {} : { code }),
+    });
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = undefined;
       if (!this.running || this.closing) {
@@ -385,6 +432,20 @@ export class ForwardWebSocketOneBot11Channel implements ChannelAdapter {
         commandPrefix: this.commandPrefix,
       });
       if (message !== undefined) {
+        this.writeLog("info", "onebot11.message.received", {
+          messageId: message.messageId,
+          conversationId: message.conversationId,
+          senderId: message.senderId,
+          ...(message.trigger === undefined
+            ? {}
+            : { trigger: message.trigger.kind }),
+        });
+        this.writeLog("debug", "onebot11.message.payload", {
+          messageId: message.messageId,
+          conversationId: message.conversationId,
+          senderId: message.senderId,
+          payload: cloneMessage(message),
+        });
         this.dispatchMessage(message);
       }
     } catch (error) {
@@ -404,6 +465,10 @@ export class ForwardWebSocketOneBot11Channel implements ChannelAdapter {
     if (frame.status === "ok" && frame.retcode === 0) {
       this.pendingActions.delete(frame.echo);
       clearTimeout(pending.timeout);
+      this.writeLog("info", "onebot11.reply.sent", {
+        conversationId: pending.conversationId,
+        echo: frame.echo,
+      });
       pending.resolve();
       return;
     }
@@ -441,19 +506,37 @@ export class ForwardWebSocketOneBot11Channel implements ChannelAdapter {
     }
   }
 
-  private rejectAction(echo: string, error: Error): void {
+  private rejectAction(
+    echo: string,
+    error: Error,
+    outcome: "failed" | "aborted" = "failed",
+  ): void {
     const pending = this.pendingActions.get(echo);
     if (pending === undefined) {
       return;
     }
     this.pendingActions.delete(echo);
     clearTimeout(pending.timeout);
+    this.writeLog(
+      outcome === "aborted" ? "debug" : "error",
+      outcome === "aborted"
+        ? "onebot11.reply.aborted"
+        : "onebot11.reply.failed",
+      {
+        conversationId: pending.conversationId,
+        echo,
+        error,
+      },
+    );
     pending.reject(error);
   }
 
-  private rejectAllPending(error: Error): void {
+  private rejectAllPending(
+    error: Error,
+    outcome: "failed" | "aborted" = "failed",
+  ): void {
     for (const echo of [...this.pendingActions.keys()]) {
-      this.rejectAction(echo, error);
+      this.rejectAction(echo, error, outcome);
     }
   }
 
@@ -469,20 +552,48 @@ export class ForwardWebSocketOneBot11Channel implements ChannelAdapter {
     error: unknown,
     action = "connect",
   ): Error {
-    let message = normalizeError(error).message;
-    if (this.accessToken !== undefined) {
-      message = message.split(this.accessToken).join("[redacted]");
-    }
+    const message = redactLogString(
+      normalizeError(error).message,
+      this.logSecrets,
+    );
     return new Error(
       "Failed to " + action + " OneBot 11 WebSocket: " + message,
     );
   }
 
   private reportError(error: Error): void {
+    this.writeLog("error", "onebot11.error", { error });
     try {
       this.onError(error);
     } catch {
       // Error observers must not break the WebSocket reader loop.
+    }
+  }
+
+  private rejectReply(conversationId: string, error: Error): Promise<never> {
+    const aborted = this.closing;
+    this.writeLog(
+      aborted ? "debug" : "error",
+      aborted ? "onebot11.reply.aborted" : "onebot11.reply.failed",
+      { conversationId, error },
+    );
+    return Promise.reject(error);
+  }
+
+  private writeLog(
+    level: "debug" | "info" | "warn" | "error",
+    message: string,
+    fields?: RuntimeLogFields,
+  ): void {
+    try {
+      this.logger[level](
+        message,
+        fields === undefined
+          ? undefined
+          : sanitizeLogFields(fields, this.logSecrets),
+      );
+    } catch {
+      // Logging observers must not break the channel lifecycle.
     }
   }
 }
@@ -528,6 +639,123 @@ function nonEmptyString(input: unknown): string | undefined {
 
 function normalizeError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
+}
+
+function configuredLogSecrets(
+  rawUrl: string,
+  accessToken: string | undefined,
+): string[] {
+  const secrets = accessToken === undefined ? [] : [accessToken];
+  try {
+    const url = new URL(rawUrl);
+    const sensitiveParts = [
+      url.username,
+      url.password,
+      url.search,
+      ...url.searchParams.values(),
+    ].filter((value) => value.length > 0);
+    if (sensitiveParts.length > 0) {
+      secrets.push(rawUrl);
+    }
+    for (const part of sensitiveParts) {
+      secrets.push(part);
+      try {
+        const decoded = decodeURIComponent(part);
+        if (decoded.length > 0) {
+          secrets.push(decoded);
+        }
+      } catch {
+        // The encoded URL component was already covered above.
+      }
+    }
+  } catch {
+    // URL validity is enforced by the WebSocket constructor.
+  }
+  return [...new Set(secrets)].sort((left, right) => right.length - left.length);
+}
+
+function sanitizeLogFields(
+  fields: RuntimeLogFields,
+  secrets: readonly string[],
+): RuntimeLogFields {
+  return sanitizeLogValue(
+    fields,
+    secrets,
+    new WeakMap<object, unknown>(),
+  ) as RuntimeLogFields;
+}
+
+function sanitizeLogValue(
+  value: unknown,
+  secrets: readonly string[],
+  seen: WeakMap<object, unknown>,
+): unknown {
+  if (typeof value === "string") {
+    return redactLogString(value, secrets);
+  }
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+
+  const prior = seen.get(value);
+  if (prior !== undefined) {
+    return prior;
+  }
+  if (value instanceof Date) {
+    return new Date(value.getTime());
+  }
+  if (value instanceof Error) {
+    const sanitized = new Error(redactLogString(value.message, secrets));
+    seen.set(value, sanitized);
+    sanitized.name = redactLogString(value.name, secrets);
+    sanitized.stack =
+      value.stack === undefined
+        ? undefined
+        : redactLogString(value.stack, secrets);
+    if ("cause" in value) {
+      (sanitized as Error & { cause?: unknown }).cause = sanitizeLogValue(
+        value.cause,
+        secrets,
+        seen,
+      );
+    }
+    for (const [key, nested] of Object.entries(value)) {
+      (sanitized as unknown as Record<string, unknown>)[
+        redactLogString(key, secrets)
+      ] = sanitizeLogValue(nested, secrets, seen);
+    }
+    return sanitized;
+  }
+  if (Array.isArray(value)) {
+    const sanitized: unknown[] = [];
+    seen.set(value, sanitized);
+    for (const item of value) {
+      sanitized.push(sanitizeLogValue(item, secrets, seen));
+    }
+    return sanitized;
+  }
+
+  const sanitized: Record<string, unknown> = {};
+  seen.set(value, sanitized);
+  for (const [key, nested] of Object.entries(value)) {
+    sanitized[redactLogString(key, secrets)] = sanitizeLogValue(
+      nested,
+      secrets,
+      seen,
+    );
+  }
+  return sanitized;
+}
+
+function redactLogString(
+  value: string,
+  secrets: readonly string[],
+): string {
+  let sanitized = value;
+  for (const secret of secrets) {
+    sanitized = sanitized.split(secret).join("[redacted]");
+  }
+  return sanitized;
 }
 
 function parseOutgoingGroupId(input: string): number | undefined {

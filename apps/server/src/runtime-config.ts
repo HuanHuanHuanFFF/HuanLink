@@ -67,6 +67,7 @@ const mainAgentModelRuntimeConfigEnvSchema = z.object({
 });
 
 const phase4QqRuntimeConfigEnvSchema = z.object({
+  HUANLINK_LOG_LEVEL: z.enum(RUNTIME_LOG_LEVELS).default("info"),
   HUANLINK_ONEBOT_WS_URL: z
     .string()
     .trim()
@@ -125,6 +126,9 @@ export type Phase4QqRuntimeConfig = {
   oneBot11: OneBot11QqRuntimeConfig;
   codexA2a: CodexA2aRuntimeConfig;
   mainAgentModel: MainAgentModelConfig;
+  logging: {
+    level: RuntimeLogLevel;
+  };
 };
 
 // 启动时一次性读取环境变量，并映射成 core 可消费的 RuntimeConfig。
@@ -172,6 +176,7 @@ export function loadPhase4QqRuntimeConfigFromEnv(input: {
 } = {}): Phase4QqRuntimeConfig {
   loadEnvFile(input.envFilePath);
   const parsed = phase4QqRuntimeConfigEnvSchema.safeParse({
+    HUANLINK_LOG_LEVEL: process.env.HUANLINK_LOG_LEVEL,
     HUANLINK_ONEBOT_WS_URL: process.env.HUANLINK_ONEBOT_WS_URL,
     HUANLINK_ONEBOT_ACCESS_TOKEN:
       process.env.HUANLINK_ONEBOT_ACCESS_TOKEN,
@@ -194,7 +199,10 @@ export function loadPhase4QqRuntimeConfigFromEnv(input: {
       commandPrefix: parsed.data.HUANLINK_ONEBOT_COMMAND_PREFIX
     },
     codexA2a: parseCodexA2aRuntimeConfigFromProcessEnv(),
-    mainAgentModel: parseMainAgentModelConfigFromProcessEnv()
+    mainAgentModel: parseMainAgentModelConfigFromProcessEnv(),
+    logging: {
+      level: parsed.data.HUANLINK_LOG_LEVEL
+    }
   };
 }
 

@@ -1,8 +1,10 @@
 import type {
   AgentCallContinuator,
   AgentCallInvoker,
-  AgentCallReader
+  AgentCallReader,
+  RuntimeLogger
 } from "@huanlink/core";
+import { NoopRuntimeLogger } from "@huanlink/core";
 import {
   OpenAiAgentsRuntime,
   createCodexAgentCallTool,
@@ -12,6 +14,8 @@ import {
   type OpenAiAgentsRunner
 } from "@huanlink/integration-openai-agents";
 import { Agent, type Model, type ModelSettings } from "@openai/agents";
+
+import { createBestEffortRuntimeLogger } from "./best-effort-runtime-logger.js";
 
 export type MainAgentModelBinding = {
   model: string | Model;
@@ -25,19 +29,28 @@ export type CreatePhase3MainAgentRuntimeOptions = {
   runner?: OpenAiAgentsRunner;
   codexSkillId?: string;
   modelBinding?: MainAgentModelBinding;
+  logger?: RuntimeLogger;
 };
 
 export function createPhase3MainAgentRuntime(
   options: CreatePhase3MainAgentRuntimeOptions
 ): OpenAiAgentsRuntime {
+  const logger = createBestEffortRuntimeLogger(
+    options.logger ?? new NoopRuntimeLogger()
+  );
   const submitTool = createCodexAgentCallTool({
     invoker: options.invoker,
-    skillId: options.codexSkillId
+    skillId: options.codexSkillId,
+    logger: logger.child({ source: "main_agent.tool.submit" })
   });
-  const taskStatusTool = createTaskStatusTool({ reader: options.taskReader });
+  const taskStatusTool = createTaskStatusTool({
+    reader: options.taskReader,
+    logger: logger.child({ source: "main_agent.tool.status" })
+  });
   const taskContinuationTool = createTaskContinuationTool({
     reader: options.taskReader,
-    continuator: options.taskContinuator
+    continuator: options.taskContinuator,
+    logger: logger.child({ source: "main_agent.tool.continue" })
   });
   const agent = new Agent<OpenAiAgentsRunContext>({
     name: "HuanLink MainAgent",

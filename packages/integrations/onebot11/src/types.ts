@@ -1,3 +1,5 @@
+import type { RuntimeLogger } from "@huanlink/core";
+
 export type ParseOneBot11GroupMessageOptions = {
   commandPrefix: string;
 };
@@ -11,4 +13,5 @@ export type ForwardWebSocketOneBot11ChannelOptions =
     requestTimeoutMs?: number;
     reconnectDelaysMs?: readonly number[];
     onError?: OneBot11ChannelErrorListener;
+    logger?: RuntimeLogger;
   };

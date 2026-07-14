@@ -153,6 +153,7 @@ describe("loadPhase4QqRuntimeConfigFromEnv", () => {
     process.env.HUANLINK_MAIN_AGENT_PROVIDER = "deepseek";
     process.env.HUANLINK_MAIN_AGENT_MODEL = "deepseek-v4-flash";
     process.env.HUANLINK_DEEPSEEK_BASE_URL = "https://api.deepseek.com/beta";
+    process.env.HUANLINK_LOG_LEVEL = "debug";
 
     expect(server.loadPhase4QqRuntimeConfigFromEnv()).toEqual({
       oneBot11: {
@@ -170,6 +171,9 @@ describe("loadPhase4QqRuntimeConfigFromEnv", () => {
         modelId: "deepseek-v4-flash",
         baseURL: "https://api.deepseek.com/beta",
         apiKey: "test-deepseek-key"
+      },
+      logging: {
+        level: "debug"
       }
     });
   });
@@ -194,6 +198,9 @@ describe("loadPhase4QqRuntimeConfigFromEnv", () => {
         modelId: "deepseek-v4-flash",
         baseURL: "https://api.deepseek.com/beta",
         apiKey: "test-deepseek-key"
+      },
+      logging: {
+        level: "info"
       }
     });
   });

@@ -1,7 +1,11 @@
 import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 
-import type { InboundChannelMessage } from "@huanlink/core";
+import type {
+  InboundChannelMessage,
+  RuntimeLogFields,
+  RuntimeLogger,
+} from "@huanlink/core";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 
@@ -11,6 +15,58 @@ type JsonObject = Record<string, unknown>;
 
 const servers: WebSocketServer[] = [];
 const channels: ForwardWebSocketOneBot11Channel[] = [];
+
+type RecordedLog = {
+  level: "debug" | "info" | "warn" | "error";
+  message: string;
+  fields: RuntimeLogFields;
+};
+
+class RecordingRuntimeLogger implements RuntimeLogger {
+  readonly entries: RecordedLog[];
+
+  constructor(
+    entries: RecordedLog[] = [],
+    private readonly bindings: RuntimeLogFields = {},
+  ) {
+    this.entries = entries;
+  }
+
+  debug(message: string, fields: RuntimeLogFields = {}): void {
+    this.record("debug", message, fields);
+  }
+
+  info(message: string, fields: RuntimeLogFields = {}): void {
+    this.record("info", message, fields);
+  }
+
+  warn(message: string, fields: RuntimeLogFields = {}): void {
+    this.record("warn", message, fields);
+  }
+
+  error(message: string, fields: RuntimeLogFields = {}): void {
+    this.record("error", message, fields);
+  }
+
+  child(bindings: RuntimeLogFields): RuntimeLogger {
+    return new RecordingRuntimeLogger(this.entries, {
+      ...this.bindings,
+      ...bindings,
+    });
+  }
+
+  private record(
+    level: RecordedLog["level"],
+    message: string,
+    fields: RuntimeLogFields,
+  ): void {
+    this.entries.push({
+      level,
+      message,
+      fields: { ...this.bindings, ...fields },
+    });
+  }
+}
 
 function deferred<T = void>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -115,6 +171,239 @@ afterEach(async () => {
 });
 
 describe("ForwardWebSocketOneBot11Channel", () => {
+  test("logs safe connection, message, reply, and close lifecycle details", async () => {
+    const { server, url } = await startServer();
+    const sensitiveUrl = new URL(url);
+    sensitiveUrl.username = "onebot-user-secret";
+    sensitiveUrl.password = "onebot-password-secret";
+    sensitiveUrl.searchParams.set("session", "onebot-query-secret");
+    let socket: WebSocket | undefined;
+    server.on("connection", (connected) => {
+      socket = connected;
+      connected.on("message", (data) => {
+        const request = readFrame(data);
+        connected.send(
+          JSON.stringify({
+            status: "ok",
+            retcode: 0,
+            data: { message_id: 5678 },
+            echo: request.echo,
+          }),
+        );
+      });
+    });
+    const logger = new RecordingRuntimeLogger();
+    const received: InboundChannelMessage[] = [];
+    const channel = createChannel(sensitiveUrl.toString(), { logger });
+    channel.onMessage((message) => {
+      received.push(message);
+    });
+
+    await channel.start();
+    socket!.send(
+      JSON.stringify(
+        groupEvent(7, "/huanlink inspect this", {
+          raw_transport_secret: "raw-frame-secret",
+        }),
+      ),
+    );
+    await waitFor(() => received.length === 1, "the logged group event");
+    await channel.sendText("20002", "reply payload");
+    await channel.close();
+
+    expect(logger.entries.map((entry) => entry.message)).toEqual(
+      expect.arrayContaining([
+        "onebot11.connection.connecting",
+        "onebot11.connection.opened",
+        "onebot11.message.received",
+        "onebot11.message.payload",
+        "onebot11.reply.sending",
+        "onebot11.reply.payload",
+        "onebot11.reply.sent",
+        "onebot11.closing",
+        "onebot11.connection.closed",
+        "onebot11.closed",
+      ]),
+    );
+    expect(logEntry(logger, "onebot11.message.received")).toMatchObject({
+      level: "info",
+      fields: {
+        messageId: "7",
+        conversationId: "20002",
+        senderId: "30003",
+        trigger: "command",
+      },
+    });
+    expect(logEntry(logger, "onebot11.message.payload")).toMatchObject({
+      level: "debug",
+      fields: {
+        messageId: "7",
+        payload: expect.objectContaining({ text: "/huanlink inspect this" }),
+      },
+    });
+    const sending = logEntry(logger, "onebot11.reply.sending");
+    expect(sending).toMatchObject({
+      level: "info",
+      fields: {
+        conversationId: "20002",
+        echo: expect.stringMatching(/^send-group:/),
+      },
+    });
+    expect(logEntry(logger, "onebot11.reply.payload")).toMatchObject({
+      level: "debug",
+      fields: { payload: { text: "reply payload" } },
+    });
+    expect(logEntry(logger, "onebot11.reply.sent")).toMatchObject({
+      level: "info",
+      fields: {
+        conversationId: "20002",
+        echo: sending.fields.echo,
+      },
+    });
+    expect(logEntry(logger, "onebot11.connection.closed")).toMatchObject({
+      fields: { code: 1000 },
+    });
+
+    const serialized = JSON.stringify(logger.entries);
+    for (const secret of [
+      "onebot-user-secret",
+      "onebot-password-secret",
+      "onebot-query-secret",
+      "raw-frame-secret",
+    ]) {
+      expect(serialized).not.toContain(secret);
+    }
+  });
+
+  test("logs disconnect and reconnect scheduling with the real attempt, delay, and code", async () => {
+    const { server, url } = await startServer();
+    const sockets: WebSocket[] = [];
+    server.on("connection", (socket) => sockets.push(socket));
+    const logger = new RecordingRuntimeLogger();
+    const channel = createChannel(url, { logger, reconnectDelaysMs: [10] });
+
+    await channel.start();
+    sockets[0]!.close(1011, "test disconnect");
+    await waitFor(
+      () =>
+        logger.entries.filter(
+          (entry) => entry.message === "onebot11.connection.opened",
+        ).length === 2,
+      "the second opened connection log",
+    );
+
+    expect(logEntry(logger, "onebot11.connection.closed")).toMatchObject({
+      fields: { attempt: 0, code: 1011 },
+    });
+    expect(
+      logEntry(logger, "onebot11.connection.reconnect_scheduled"),
+    ).toMatchObject({
+      fields: { attempt: 1, delay: 10, code: 1011 },
+    });
+    expect(
+      logger.entries
+        .filter((entry) => entry.message === "onebot11.connection.opened")
+        .map((entry) => entry.fields.attempt),
+    ).toEqual([0, 1]);
+  });
+
+  test("logs a failed reply without a false sent event", async () => {
+    const { server, url } = await startServer();
+    const actionSecret = "onebot-action-query-secret";
+    const sensitiveUrl = new URL(url);
+    sensitiveUrl.searchParams.set("session", actionSecret);
+    server.on("connection", (socket) => {
+      socket.on("message", (data) => {
+        const request = readFrame(data);
+        socket.send(
+          JSON.stringify({
+            status: "failed",
+            retcode: 1404,
+            message: `reply rejected ${actionSecret}`,
+            echo: request.echo,
+          }),
+        );
+      });
+    });
+    const logger = new RecordingRuntimeLogger();
+    const channel = createChannel(sensitiveUrl.toString(), { logger });
+    await channel.start();
+
+    await expect(channel.sendText("20002", "failed reply")).rejects.toThrow(
+      actionSecret,
+    );
+
+    const failed = logEntry(logger, "onebot11.reply.failed");
+    expect(failed).toMatchObject({
+      level: "error",
+      fields: {
+        conversationId: "20002",
+        echo: expect.stringMatching(/^send-group:/),
+      },
+    });
+    expect(
+      logger.entries.some(
+        (entry) =>
+          entry.message === "onebot11.reply.sent" &&
+          entry.fields.echo === failed.fields.echo,
+      ),
+    ).toBe(false);
+    expect(loggedError(failed).message).not.toContain(actionSecret);
+  });
+
+  test("sanitizes established socket errors only in logs and preserves the observer error", async () => {
+    const { server, url } = await startServer();
+    server.on("connection", () => undefined);
+    const sensitiveUrl = new URL(url);
+    sensitiveUrl.username = "onebot-user-secret";
+    sensitiveUrl.password = "onebot-password-secret";
+    sensitiveUrl.searchParams.set("session", "onebot-query-secret");
+    const logger = new RecordingRuntimeLogger();
+    const onError = vi.fn();
+    const channel = createChannel(sensitiveUrl.toString(), { logger, onError });
+    await channel.start();
+    const businessError = new Error(
+      `socket failed ${sensitiveUrl.toString()} onebot-query-secret`,
+    );
+
+    const clientSocket = (
+      channel as unknown as { socket: WebSocket | undefined }
+    ).socket;
+    expect(clientSocket).toBeDefined();
+    clientSocket!.emit("error", businessError);
+
+    expect(onError).toHaveBeenCalledWith(businessError);
+    const logged = logEntry(logger, "onebot11.error");
+    const loggedMessage = loggedError(logged).message;
+    for (const secret of [
+      "onebot-user-secret",
+      "onebot-password-secret",
+      "onebot-query-secret",
+    ]) {
+      expect(loggedMessage).not.toContain(secret);
+    }
+  });
+
+  test("sanitizes a remote close reason only in the pending reply log", async () => {
+    const { server, url } = await startServer();
+    const closeSecret = "onebot-close-query-secret";
+    const sensitiveUrl = new URL(url);
+    sensitiveUrl.searchParams.set("session", closeSecret);
+    server.on("connection", (socket) => {
+      socket.on("message", () => socket.close(1011, closeSecret));
+    });
+    const logger = new RecordingRuntimeLogger();
+    const channel = createChannel(sensitiveUrl.toString(), { logger });
+    await channel.start();
+
+    await expect(channel.sendText("20002", "close this reply")).rejects.toThrow(
+      closeSecret,
+    );
+
+    const failed = logEntry(logger, "onebot11.reply.failed");
+    expect(loggedError(failed).message).not.toContain(closeSecret);
+  });
+
   test("connects at the configured root with a Bearer header and dispatches parsed events", async () => {
     const { server, url } = await startServer();
     const connections: Array<{ socket: WebSocket; url: string; authorization?: string }> = [];
@@ -289,6 +578,36 @@ describe("ForwardWebSocketOneBot11Channel", () => {
     );
   });
 
+  test("logs a pending reply canceled by channel close only as a debug abort", async () => {
+    const { server, url } = await startServer();
+    server.on("connection", (socket) => {
+      socket.on("message", () => undefined);
+    });
+    const logger = new RecordingRuntimeLogger();
+    const channel = createChannel(url, { logger });
+    await channel.start();
+
+    const pending = channel.sendText("20002", "pending during shutdown");
+    const rejected = expect(pending).rejects.toThrow(
+      "OneBot 11 channel closed",
+    );
+    await channel.close();
+    await rejected;
+
+    const aborted = logEntry(logger, "onebot11.reply.aborted");
+    expect(aborted).toMatchObject({
+      level: "debug",
+      fields: { conversationId: "20002" },
+    });
+    expect(
+      logger.entries.some(
+        (entry) =>
+          entry.message === "onebot11.reply.failed" &&
+          entry.fields.echo === aborted.fields.echo,
+      ),
+    ).toBe(false);
+  });
+
   test("rejects pending actions on disconnect, reconnects, and never replays them", async () => {
     const { server, url } = await startServer();
     const sockets: WebSocket[] = [];
@@ -457,3 +776,22 @@ describe("ForwardWebSocketOneBot11Channel", () => {
     await expect(pending).resolves.toBeUndefined();
   });
 });
+
+function logEntry(
+  logger: RecordingRuntimeLogger,
+  message: string,
+): RecordedLog {
+  const entry = logger.entries.find((candidate) => candidate.message === message);
+  if (entry === undefined) {
+    throw new Error(`Missing recorded log ${message}`);
+  }
+  return entry;
+}
+
+function loggedError(entry: RecordedLog): Error {
+  const error = entry.fields.error;
+  if (!(error instanceof Error)) {
+    throw new Error(`Log ${entry.message} did not contain an Error`);
+  }
+  return error;
+}

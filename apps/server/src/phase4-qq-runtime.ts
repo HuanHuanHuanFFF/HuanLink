@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import {
   InMemoryConversationStore,
+  NoopRuntimeLogger,
   type AgentCallBackgroundErrorListener,
   type AgentCallRecord,
   type AgentCallService,
@@ -9,6 +10,8 @@ import {
   type ChannelAdapter,
   type InboundChannelMessage,
   type RunId,
+  type RuntimeLogFields,
+  type RuntimeLogger,
   type SessionId
 } from "@huanlink/core";
 import type { OpenAiAgentsRunner } from "@huanlink/integration-openai-agents";
@@ -18,6 +21,7 @@ import {
   type Phase3HuanLinkRuntime
 } from "./phase3-runtime.js";
 import type { MainAgentModelBinding } from "./main-agent-runtime.js";
+import { createBestEffortRuntimeLogger } from "./best-effort-runtime-logger.js";
 
 export type CreatePhase4QqRuntimeOptions = {
   channel: ChannelAdapter;
@@ -30,6 +34,7 @@ export type CreatePhase4QqRuntimeOptions = {
   createRunId?: () => RunId;
   store?: InMemoryConversationStore;
   onBackgroundError?: AgentCallBackgroundErrorListener;
+  logger?: RuntimeLogger;
 };
 
 export interface Phase4QqRuntime {
@@ -54,12 +59,52 @@ export function createPhase4QqRuntime(
 
   const conversations = options.store ?? new InMemoryConversationStore();
   const createRunId = options.createRunId ?? randomUUID;
+  const logger = createBestEffortRuntimeLogger(
+    options.logger ?? new NoopRuntimeLogger()
+  );
+  const qqLogger = logger.child({ source: "phase4.qq" });
+  const reentryLogger = logger.child({ source: "phase4.reentry" });
   const egressTails = new Map<SessionId, Promise<void>>();
   const activeOperations = new Set<Promise<void>>();
   const activeControllers = new Set<AbortController>();
   const reportBackgroundError = createBackgroundErrorReporter(
     options.onBackgroundError
   );
+  let unsubscribe: (() => void) | undefined;
+  let started = false;
+  let closed = false;
+  let startOperation: Promise<void> | undefined;
+  let closeOperation: Promise<void> | undefined;
+
+  async function sendReply(
+    conversationId: string,
+    text: string,
+    fields: RuntimeLogFields,
+    signal?: AbortSignal
+  ): Promise<boolean> {
+    const wasAborted = () => closed || signal?.aborted === true;
+    if (wasAborted()) {
+      qqLogger.debug("qq.reply.discarded_after_close", fields);
+      return false;
+    }
+    qqLogger.info("qq.reply.sending", fields);
+    qqLogger.debug("qq.reply.payload", {
+      ...fields,
+      payload: { text }
+    });
+    try {
+      await options.channel.sendText(conversationId, text);
+    } catch (error) {
+      if (wasAborted()) {
+        qqLogger.debug("qq.reply.aborted", { ...fields, error });
+      } else {
+        qqLogger.error("qq.reply.failed", { ...fields, error });
+      }
+      throw error;
+    }
+    qqLogger.info("qq.reply.sent", fields);
+    return true;
+  }
 
   const phase3 = createPhase3HuanLinkRuntime({
     codexA2aOrigin: options.codexA2aOrigin,
@@ -73,6 +118,7 @@ export function createPhase4QqRuntime(
     ...(options.transport === undefined
       ? {}
       : { transport: options.transport }),
+    logger: logger.child({ source: "phase3" }),
     createRunId,
     beforeReentry: async ({ sessionId, signal }) => {
       const reservation = reserveSessionEgress(egressTails, sessionId);
@@ -87,6 +133,11 @@ export function createPhase4QqRuntime(
     getLatestContext: (sessionId) =>
       conversations.formatLatestContext(sessionId),
     onReentry: async (result) => {
+      const fields = reentryResultLogFields(result);
+      if (closed) {
+        qqLogger.debug("qq.reply.discarded_after_close", fields);
+        return;
+      }
       const route = conversations.getRoute(result.sessionId);
       if (route === undefined) {
         throw new Error(`No channel route for session ${result.sessionId}`);
@@ -96,8 +147,36 @@ export function createPhase4QqRuntime(
           `Session ${result.sessionId} is routed to ${route.channel}, not ${options.channel.channel}`
         );
       }
-      await options.channel.sendText(route.conversationId, result.output);
+      reentryLogger.info("main_agent.reentry.egress.sending", fields);
+      try {
+        const sent = await sendReply(
+          route.conversationId,
+          result.output,
+          fields
+        );
+        if (!sent) {
+          return;
+        }
+      } catch (error) {
+        if (closed) {
+          reentryLogger.debug("main_agent.reentry.egress.aborted", {
+            ...fields,
+            error
+          });
+        } else {
+          reentryLogger.error("main_agent.reentry.egress.failed", {
+            ...fields,
+            error
+          });
+        }
+        throw error;
+      }
+      reentryLogger.info("main_agent.reentry.egress.sent", fields);
       if (closed) {
+        qqLogger.debug("qq.reply.discarded_after_close", {
+          ...fields,
+          stage: "conversation_record"
+        });
         return;
       }
       conversations.appendOutbound(result.sessionId, result.output);
@@ -105,20 +184,31 @@ export function createPhase4QqRuntime(
     onBackgroundError: reportBackgroundError
   });
 
-  let unsubscribe: (() => void) | undefined;
-  let started = false;
-  let closed = false;
-  let startOperation: Promise<void> | undefined;
-  let closeOperation: Promise<void> | undefined;
-
   const receive = (message: InboundChannelMessage): void => {
-    if (closed || message.conversationId !== targetConversationId) {
+    const sessionId = sessionIdFor(message);
+    const fields = messageLogFields(message, sessionId);
+    qqLogger.debug("qq.message.payload", {
+      ...fields,
+      payload: { ...message }
+    });
+    if (closed) {
+      qqLogger.debug("qq.message.ignored", {
+        ...fields,
+        reason: "runtime_closed"
+      });
       return;
     }
+    if (message.conversationId !== targetConversationId) {
+      qqLogger.debug("qq.message.ignored", {
+        ...fields,
+        reason: "non_target_conversation"
+      });
+      return;
+    }
+    qqLogger.info("qq.message.accepted", fields);
 
     let reservation: SessionEgressReservation | undefined;
     try {
-      const sessionId = sessionIdFor(message);
       if (message.trigger !== undefined) {
         reservation = reserveSessionEgress(egressTails, sessionId);
       }
@@ -176,7 +266,27 @@ export function createPhase4QqRuntime(
       });
       const agentCalls = phase3.agentCalls.listByRunId(runId);
       const reply = appendTaskIds(result.output, agentCalls);
-      await options.channel.sendText(message.conversationId, reply);
+      const replyFields = {
+        ...messageLogFields(message, sessionId),
+        runId,
+        ...agentCallsLogFields(agentCalls)
+      };
+      const sent = await sendReply(
+        message.conversationId,
+        reply,
+        replyFields,
+        signal
+      );
+      if (!sent) {
+        return;
+      }
+      if (closed) {
+        qqLogger.debug("qq.reply.discarded_after_close", {
+          ...replyFields,
+          stage: "conversation_record"
+        });
+        return;
+      }
       conversations.appendOutbound(sessionId, reply);
     } finally {
       reservation.release();
@@ -275,6 +385,57 @@ export function createPhase4QqRuntime(
       closeOperation = performClose();
       return closeOperation;
     }
+  };
+}
+
+function messageLogFields(
+  message: InboundChannelMessage,
+  sessionId: SessionId
+): RuntimeLogFields {
+  return {
+    sessionId,
+    messageId: message.messageId,
+    conversationId: message.conversationId,
+    senderId: message.senderId,
+    ...(message.trigger === undefined
+      ? {}
+      : { trigger: message.trigger.kind })
+  };
+}
+
+function agentCallsLogFields(
+  agentCalls: AgentCallRecord[]
+): RuntimeLogFields {
+  if (agentCalls.length === 0) {
+    return {};
+  }
+  return {
+    agentCalls: agentCalls.map((agentCall) => ({
+      agentCallId: agentCall.agentCallId,
+      a2aTaskId: agentCall.taskId,
+      ...(agentCall.contextId === undefined
+        ? {}
+        : { contextId: agentCall.contextId })
+    }))
+  };
+}
+
+function reentryResultLogFields(
+  result: Parameters<
+    NonNullable<
+      Parameters<typeof createPhase3HuanLinkRuntime>[0]["onReentry"]
+    >
+  >[0]
+): RuntimeLogFields {
+  return {
+    sessionId: result.sessionId,
+    runId: result.runId,
+    agentCallId: result.agentCall.agentCallId,
+    a2aTaskId: result.agentCall.taskId,
+    ...(result.agentCall.contextId === undefined
+      ? {}
+      : { contextId: result.agentCall.contextId }),
+    trigger: result.trigger
   };
 }
 

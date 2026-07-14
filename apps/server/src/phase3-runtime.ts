@@ -3,12 +3,16 @@ import { randomUUID } from "node:crypto";
 import {
   AgentCallService,
   AgentTurnScheduler,
+  NoopRuntimeLogger,
   type AgentCallBackgroundErrorListener,
   type AgentCallRecord,
   type AgentCallTransport,
   type AgentRuntimeInput,
   type AgentRuntimeResult,
+  type AgentRuntimeTrigger,
   type RunId,
+  type RuntimeLogFields,
+  type RuntimeLogger,
   type SessionId
 } from "@huanlink/core";
 import { A2aAgentCallTransport } from "@huanlink/integration-a2a-client";
@@ -24,6 +28,7 @@ import {
   createPhase3MainAgentRuntime,
   type MainAgentModelBinding
 } from "./main-agent-runtime.js";
+import { createBestEffortRuntimeLogger } from "./best-effort-runtime-logger.js";
 
 export type Phase3ReentryResult = {
   runId: RunId;
@@ -57,6 +62,7 @@ export type CreatePhase3HuanLinkRuntimeOptions = {
   ) => Promise<Phase3ReentryCleanup | void> | Phase3ReentryCleanup | void;
   onReentry?: (result: Phase3ReentryResult) => Promise<void> | void;
   onBackgroundError?: AgentCallBackgroundErrorListener;
+  logger?: RuntimeLogger;
 };
 
 export type Phase3MainAgentInput = Pick<
@@ -73,17 +79,27 @@ export interface Phase3HuanLinkRuntime {
 export function createPhase3HuanLinkRuntime(
   options: CreatePhase3HuanLinkRuntimeOptions
 ): Phase3HuanLinkRuntime {
+  const logger = createBestEffortRuntimeLogger(
+    options.logger ?? new NoopRuntimeLogger()
+  );
   const transport =
     options.transport ??
-    new A2aAgentCallTransport({ origin: options.codexA2aOrigin });
-  const agentCalls = new AgentCallService({ transport });
+    new A2aAgentCallTransport({
+      origin: options.codexA2aOrigin,
+      logger: logger.child({ source: "a2a.transport" })
+    });
+  const agentCalls = new AgentCallService({
+    transport,
+    logger: logger.child({ source: "agent_call.service" })
+  });
   const mainAgent = createPhase3MainAgentRuntime({
     invoker: agentCalls,
     taskReader: agentCalls,
     taskContinuator: agentCalls,
     codexSkillId: options.codexSkillId,
     runner: options.runner,
-    modelBinding: options.modelBinding
+    modelBinding: options.modelBinding,
+    logger: logger.child({ source: "main_agent" })
   });
   const turns = new AgentTurnScheduler({ runtime: mainAgent });
   const activeReentries = new Map<AbortController, Promise<void>>();
@@ -107,6 +123,37 @@ export function createPhase3HuanLinkRuntime(
   let closed = false;
   let closeOperation: Promise<void> | undefined;
 
+  const runMainAgentTurn = async (
+    input: Phase3MainAgentInput & { trigger: AgentRuntimeTrigger }
+  ): Promise<AgentRuntimeResult> => {
+    const fields = {
+      sessionId: input.sessionId,
+      runId: input.runId,
+      trigger: input.trigger
+    } satisfies RuntimeLogFields;
+    logger.info("main_agent.run.started", fields);
+    logger.debug("main_agent.run.input", {
+      ...fields,
+      payload: { input: input.input }
+    });
+    try {
+      const result = await turns.run(input);
+      logger.info("main_agent.run.completed", fields);
+      logger.debug("main_agent.run.output", {
+        ...fields,
+        payload: { output: result.output }
+      });
+      return result;
+    } catch (error) {
+      if (input.signal?.aborted === true) {
+        logger.debug("main_agent.run.aborted", fields);
+      } else {
+        logger.error("main_agent.run.failed", { ...fields, error });
+      }
+      throw error;
+    }
+  };
+
   const runReentry = async (
     agentCall: AgentCallRecord,
     trigger: Phase3ReentryResult["trigger"],
@@ -114,25 +161,30 @@ export function createPhase3HuanLinkRuntime(
   ): Promise<void> => {
     const reason =
       trigger === "agent_call_input_required" ? "input-required" : "terminal";
-    const cleanup = await waitWithSignal(
-      Promise.resolve().then(() =>
-        beforeReentry({
-          sessionId: agentCall.sessionId,
-          trigger,
-          reason,
-          agentCall,
-          signal
-        })
-      ),
-      signal
-    );
+    const baseFields = agentCallLogFields(agentCall, trigger);
+    logger.info("main_agent.reentry.started", baseFields);
+    let cleanup: Phase3ReentryCleanup | void = undefined;
+    let runId: RunId | undefined;
     try {
+      cleanup = await waitWithSignal(
+        Promise.resolve().then(() =>
+          beforeReentry({
+            sessionId: agentCall.sessionId,
+            trigger,
+            reason,
+            agentCall,
+            signal
+          })
+        ),
+        signal
+      );
       signal.throwIfAborted();
       const latestContext = await waitWithSignal(
         Promise.resolve().then(() => getLatestContext(agentCall.sessionId)),
         signal
       );
-      const runId = createRunId();
+      const currentRunId = createRunId();
+      runId = currentRunId;
       const paused =
         trigger === "agent_call_input_required"
           ? buildAgentCallPausedPayload(agentCall, latestContext)
@@ -141,9 +193,15 @@ export function createPhase3HuanLinkRuntime(
         paused === undefined
           ? buildAgentCallReentryInput(agentCall, latestContext)
           : buildAgentCallPausedReentryInput(paused);
+      const reentryFields = { ...baseFields, runId: currentRunId };
+      logger.info("main_agent.reentry.context_ready", reentryFields);
+      logger.debug("main_agent.reentry.payload", {
+        ...reentryFields,
+        payload: { latestContext, input }
+      });
       const result = await waitWithSignal(
-        turns.run({
-          runId,
+        runMainAgentTurn({
+          runId: currentRunId,
           sessionId: agentCall.sessionId,
           trigger,
           input,
@@ -154,7 +212,7 @@ export function createPhase3HuanLinkRuntime(
       await waitWithSignal(
         Promise.resolve().then(() =>
           onReentry({
-            runId,
+            runId: currentRunId,
             sessionId: agentCall.sessionId,
             trigger,
             reason,
@@ -167,6 +225,21 @@ export function createPhase3HuanLinkRuntime(
         ),
         signal
       );
+      logger.info("main_agent.reentry.completed", reentryFields);
+    } catch (error) {
+      const failureFields = {
+        ...baseFields,
+        ...(runId === undefined ? {} : { runId })
+      };
+      if (signal.aborted) {
+        logger.debug("main_agent.reentry.aborted", failureFields);
+      } else {
+        logger.error("main_agent.reentry.failed", {
+          ...failureFields,
+          error
+        });
+      }
+      throw error;
     } finally {
       if (cleanup !== undefined) {
         await cleanup();
@@ -221,7 +294,7 @@ export function createPhase3HuanLinkRuntime(
   return {
     agentCalls,
     runMainAgent: (input) =>
-      turns.run({
+      runMainAgentTurn({
         ...input,
         trigger: "user"
       }),
@@ -229,6 +302,21 @@ export function createPhase3HuanLinkRuntime(
       closeOperation ??= performClose();
       return closeOperation;
     }
+  };
+}
+
+function agentCallLogFields(
+  agentCall: AgentCallRecord,
+  trigger: Phase3ReentryResult["trigger"]
+): RuntimeLogFields {
+  return {
+    sessionId: agentCall.sessionId,
+    agentCallId: agentCall.agentCallId,
+    a2aTaskId: agentCall.taskId,
+    ...(agentCall.contextId === undefined
+      ? {}
+      : { contextId: agentCall.contextId }),
+    trigger
   };
 }
 
