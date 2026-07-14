@@ -26,6 +26,9 @@ importers:
       '@a2a-js/sdk':
         specifier: 1.0.0-beta.0
         version: 1.0.0-beta.0(express@5.2.1)
+      '@huanlink/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       express:
         specifier: ^5.1.0
         version: 5.2.1

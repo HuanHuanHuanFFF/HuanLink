@@ -26,6 +26,7 @@ import {
   startAdapterServer,
   type RunningAdapterServer
 } from "../src/server.js";
+import { RecordingRuntimeLogger } from "./support/recording-runtime-logger.js";
 
 class ControlledCodexRuntime implements CodexRuntimeClient {
   closeCalls = 0;
@@ -224,6 +225,7 @@ async function startClient(
   runtime: ControlledCodexRuntime,
   options: {
     cancelTimeoutMs?: number;
+    logger?: RecordingRuntimeLogger;
     validateWorkspace?: () => Promise<{
       branch: string;
       workspace: string;
@@ -236,6 +238,7 @@ async function startClient(
     expectedBranch: "spike/demo-v0",
     model: "gpt-5.4-mini",
     cancelTimeoutMs: options.cancelTimeoutMs,
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
     validateWorkspace:
       options.validateWorkspace ??
       (async () => ({
@@ -344,6 +347,7 @@ describe("CodexTaskExecutor", () => {
 
   it("maps a real Codex turn event stream to A2A status and Artifact events", async () => {
     const runtime = new ControlledCodexRuntime();
+    const logger = new RecordingRuntimeLogger();
     runtime.onStartTurn = () => {
       setTimeout(() => {
         runtime.emit({
@@ -400,7 +404,7 @@ describe("CodexTaskExecutor", () => {
         });
       }, 0);
     };
-    const { client } = await startClient(runtime);
+    const { client } = await startClient(runtime, { logger });
     const events: StreamResponse[] = [];
 
     for await (const event of client.sendMessageStream(
@@ -453,6 +457,47 @@ describe("CodexTaskExecutor", () => {
       $case: "text",
       value: expect.stringContaining("diff --git a/example.ts b/example.ts")
     });
+    const taskEvent = events.find((event) => event.payload?.$case === "task");
+    expect(taskEvent?.payload?.$case).toBe("task");
+    if (taskEvent?.payload?.$case !== "task") {
+      throw new Error("Expected initial task event");
+    }
+    const taskFields = {
+      a2aTaskId: taskEvent.payload.value.id,
+      contextId: taskEvent.payload.value.contextId
+    };
+    expect(logger.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          level: "info",
+          message: "adapter.task.received",
+          fields: expect.objectContaining(taskFields)
+        }),
+        expect.objectContaining({
+          level: "info",
+          message: "codex.thread.ready",
+          fields: expect.objectContaining({ ...taskFields, threadId: "thread-1" })
+        }),
+        expect.objectContaining({
+          level: "info",
+          message: "codex.turn.started",
+          fields: expect.objectContaining({ ...taskFields, turnId: "turn-1" })
+        }),
+        expect.objectContaining({
+          level: "info",
+          message: "adapter.artifact.published",
+          fields: expect.objectContaining({ ...taskFields, changedFileCount: 1 })
+        }),
+        expect.objectContaining({
+          level: "info",
+          message: "adapter.task.terminal",
+          fields: expect.objectContaining({
+            ...taskFields,
+            state: TaskState.TASK_STATE_COMPLETED
+          })
+        })
+      ])
+    );
   });
 
   it("pauses for user input and continues the original A2A task and Codex turn", async () => {

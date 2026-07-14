@@ -6,6 +6,12 @@ import {
   type ExecutionEventBus,
   type RequestContext
 } from "@a2a-js/sdk/server";
+import {
+  NoopRuntimeLogger,
+  type RuntimeLogFields,
+  type RuntimeLogLevel,
+  type RuntimeLogger
+} from "@huanlink/core";
 
 import type {
   CodexAppServerNotification,
@@ -22,6 +28,7 @@ export interface CodexTaskExecutorOptions {
   cancelTimeoutMs?: number;
   client: CodexRuntimeClient;
   expectedBranch: string;
+  logger?: RuntimeLogger;
   model: string;
   validateWorkspace?: (
     workspace: string,
@@ -61,6 +68,7 @@ export class CodexTaskExecutor implements AgentExecutor {
   private readonly client: CodexRuntimeClient;
   private readonly cancelTimeoutMs: number;
   private readonly expectedBranch: string;
+  private readonly logger: RuntimeLogger;
   private readonly model: string;
   private readonly executions = new Map<string, InFlightExecution>();
   private readonly executionByThread = new Map<string, InFlightExecution>();
@@ -81,6 +89,7 @@ export class CodexTaskExecutor implements AgentExecutor {
     this.cancelTimeoutMs =
       options.cancelTimeoutMs ?? DEFAULT_CANCEL_TIMEOUT_MS;
     this.expectedBranch = options.expectedBranch;
+    this.logger = options.logger ?? new NoopRuntimeLogger();
     this.model = options.model;
     this.validateWorkspace = options.validateWorkspace ?? validateDemoWorkspace;
     this.workspace = options.workspace;
@@ -107,6 +116,10 @@ export class CodexTaskExecutor implements AgentExecutor {
 
     const execution = createExecution(requestContext, eventBus);
     this.executions.set(execution.taskId, execution);
+    this.writeLog("info", "adapter.task.received", {
+      ...executionLogFields(execution),
+      messageId: requestContext.userMessage.messageId
+    });
     eventBus.publish(AgentEvent.task(createInitialTask(requestContext)));
 
     if (this.closing) {
@@ -132,6 +145,10 @@ export class CodexTaskExecutor implements AgentExecutor {
         execution.contextId,
         validated.workspace
       );
+      this.writeLog("info", "codex.thread.ready", {
+        ...executionLogFields(execution),
+        threadId: execution.threadId
+      });
       if (execution.terminal) {
         return;
       }
@@ -148,6 +165,11 @@ export class CodexTaskExecutor implements AgentExecutor {
         prompt: extractText(requestContext)
       });
       this.setTurnId(execution, started.turnId);
+      this.writeLog("info", "codex.turn.started", {
+        ...executionLogFields(execution),
+        threadId: execution.threadId,
+        turnId: started.turnId
+      });
       this.publishWorking(execution);
 
       await execution.terminalPromise;
@@ -294,6 +316,10 @@ export class CodexTaskExecutor implements AgentExecutor {
     }
 
     execution.pendingInput = undefined;
+    this.writeLog("info", "adapter.task.input_submitted", {
+      ...executionLogFields(execution),
+      questionIds: pending.questions.map((question) => question.id)
+    });
     publishWorkingUpdate(execution, eventBus);
     try {
       await this.client.respondToServerRequest(pending.requestId, {
@@ -408,6 +434,12 @@ export class CodexTaskExecutor implements AgentExecutor {
       if (typeof turn.id === "string") {
         this.setTurnId(execution, turn.id);
       }
+      this.writeLog("info", "codex.turn.completed", {
+        ...executionLogFields(execution),
+        threadId: execution.threadId,
+        turnId: execution.turnId,
+        status: turn.status
+      });
       if (execution.pendingInput && turn.status === "completed") {
         return;
       }
@@ -451,6 +483,12 @@ export class CodexTaskExecutor implements AgentExecutor {
       requestId: request.id,
       questions: cloneInputQuestions(request.params.questions)
     };
+    this.writeLog("info", "adapter.task.input_required", {
+      ...executionLogFields(execution),
+      threadId: request.params.threadId,
+      turnId: request.params.turnId,
+      questionIds: request.params.questions.map((question) => question.id)
+    });
     publishInputRequiredUpdate(
       execution,
       execution.eventBus,
@@ -545,6 +583,7 @@ export class CodexTaskExecutor implements AgentExecutor {
       return;
     }
     execution.workingPublished = true;
+    this.writeLog("info", "adapter.task.working", executionLogFields(execution));
     execution.eventBus.publish(
       AgentEvent.statusUpdate({
         taskId: execution.taskId,
@@ -575,6 +614,12 @@ export class CodexTaskExecutor implements AgentExecutor {
     execution.resolveTurnReady();
 
     if (state === TaskState.TASK_STATE_COMPLETED) {
+      this.writeLog("info", "adapter.artifact.published", {
+        ...executionLogFields(execution),
+        changedFileCount: execution.changedFiles.size,
+        threadId: execution.threadId,
+        turnId: execution.turnId
+      });
       execution.eventBus.publish(
         AgentEvent.artifactUpdate({
           taskId: execution.taskId,
@@ -607,6 +652,13 @@ export class CodexTaskExecutor implements AgentExecutor {
         metadata: undefined
       })
     );
+    this.writeLog("info", "adapter.task.terminal", {
+      ...executionLogFields(execution),
+      state,
+      threadId: execution.threadId,
+      turnId: execution.turnId,
+      ...(failure === undefined ? {} : { failureLength: failure.length })
+    });
     execution.eventBus.finished();
     execution.resolveTerminal();
   }
@@ -628,6 +680,25 @@ export class CodexTaskExecutor implements AgentExecutor {
       this.executionByTurn.delete(execution.turnId);
     }
   }
+
+  private writeLog(
+    level: RuntimeLogLevel,
+    message: string,
+    fields?: RuntimeLogFields
+  ): void {
+    try {
+      this.logger[level](message, fields);
+    } catch {
+      // Logging must not change the A2A task lifecycle.
+    }
+  }
+}
+
+function executionLogFields(execution: InFlightExecution): RuntimeLogFields {
+  return {
+    a2aTaskId: execution.taskId,
+    contextId: execution.contextId
+  };
 }
 
 function createInitialTask(requestContext: RequestContext): Task {

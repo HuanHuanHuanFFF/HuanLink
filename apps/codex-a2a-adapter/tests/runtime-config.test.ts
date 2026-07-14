@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { parseHost, parsePort } from "../src/runtime-config.js";
+import {
+  parseHost,
+  parseLogLevel,
+  parsePort
+} from "../src/runtime-config.js";
 
 describe("adapter runtime config", () => {
   it.each(["127.0.0.1", "localhost", "::1"])(
@@ -35,4 +39,17 @@ describe("adapter runtime config", () => {
       );
     }
   );
+
+  it.each(["debug", "info", "warn", "error"] as const)(
+    "parses log level %s",
+    (value) => {
+      expect(parseLogLevel(value)).toBe(value);
+    }
+  );
+
+  it.each(["", "trace", "INFO"])("rejects invalid log level %s", (value) => {
+    expect(() => parseLogLevel(value)).toThrow(
+      `Invalid HUANLINK_LOG_LEVEL: ${value}`
+    );
+  });
 });

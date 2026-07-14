@@ -24,6 +24,7 @@
   },
   "dependencies": {
     "@a2a-js/sdk": "1.0.0-beta.0",
+    "@huanlink/core": "workspace:*",
     "express": "^5.1.0"
   },
   "devDependencies": {

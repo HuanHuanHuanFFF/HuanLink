@@ -2,6 +2,12 @@ import {
   CodexAppServerClient,
   spawnCodexAppServerTransport
 } from "./codex-app-server-client.js";
+import {
+  NoopRuntimeLogger,
+  type RuntimeLogFields,
+  type RuntimeLogLevel,
+  type RuntimeLogger
+} from "@huanlink/core";
 import { CodexTaskExecutor } from "./codex-task-executor.js";
 import { startAdapterServer } from "./server.js";
 import { validateDemoWorkspace } from "./workspace-guard.js";
@@ -12,6 +18,7 @@ export interface StartCodexAdapterRuntimeOptions {
   expectedBranch: string;
   expectedCodexVersion: string;
   host: string;
+  logger?: RuntimeLogger;
   port: number;
   workspace: string;
 }
@@ -24,10 +31,21 @@ export interface RunningCodexAdapterRuntime {
 export async function startCodexAdapterRuntime(
   options: StartCodexAdapterRuntimeOptions
 ): Promise<RunningCodexAdapterRuntime> {
+  const logger = options.logger ?? new NoopRuntimeLogger();
+  writeLog(logger, "info", "adapter.runtime.starting", {
+    host: options.host,
+    port: options.port,
+    model: options.codexModel
+  });
   const validated = await validateDemoWorkspace(
     options.workspace,
     options.expectedBranch
   );
+  writeLog(logger, "info", "adapter.workspace.validated", {
+    branch: validated.branch,
+    workspace: validated.workspace
+  });
+  writeLog(logger, "info", "codex.app_server.starting");
   const transport = spawnCodexAppServerTransport({
     executable: options.codexExecutable,
     cwd: validated.workspace
@@ -36,9 +54,11 @@ export async function startCodexAdapterRuntime(
     transport,
     expectedVersion: options.expectedCodexVersion
   });
+  writeLog(logger, "info", "codex.app_server.connected");
   const executor = new CodexTaskExecutor({
     client,
     model: options.codexModel,
+    logger,
     workspace: validated.workspace,
     expectedBranch: options.expectedBranch
   });
@@ -50,6 +70,9 @@ export async function startCodexAdapterRuntime(
       host: options.host,
       port: options.port
     });
+    writeLog(logger, "info", "adapter.a2a.started", {
+      origin: server.origin
+    });
   } catch (error) {
     await executor.close();
     await client.close();
@@ -60,7 +83,7 @@ export async function startCodexAdapterRuntime(
   return {
     origin: server.origin,
     close() {
-      closePromise ??= closeRuntime(server.close(), executor, client);
+      closePromise ??= closeRuntime(server.close(), executor, client, logger);
       return closePromise;
     }
   };
@@ -69,8 +92,10 @@ export async function startCodexAdapterRuntime(
 async function closeRuntime(
   serverClosing: Promise<void>,
   executor: CodexTaskExecutor,
-  client: CodexAppServerClient
+  client: CodexAppServerClient,
+  logger: RuntimeLogger
 ): Promise<void> {
+  writeLog(logger, "info", "adapter.runtime.stopping");
   const errors: unknown[] = [];
   try {
     await executor.close();
@@ -88,6 +113,23 @@ async function closeRuntime(
     errors.push(error);
   }
   if (errors.length > 0) {
+    writeLog(logger, "error", "adapter.runtime.stop_failed", {
+      errorCount: errors.length
+    });
     throw new AggregateError(errors, "Failed to stop Codex A2A runtime");
+  }
+  writeLog(logger, "info", "adapter.runtime.stopped");
+}
+
+function writeLog(
+  logger: RuntimeLogger,
+  level: RuntimeLogLevel,
+  message: string,
+  fields?: RuntimeLogFields
+): void {
+  try {
+    logger[level](message, fields);
+  } catch {
+    // Logging must not change runtime startup or shutdown.
   }
 }

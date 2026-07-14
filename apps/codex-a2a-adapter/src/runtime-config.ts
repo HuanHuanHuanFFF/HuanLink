@@ -1,4 +1,12 @@
+import type { RuntimeLogLevel } from "@huanlink/core";
+
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
+const LOG_LEVELS = new Set<RuntimeLogLevel>([
+  "debug",
+  "info",
+  "warn",
+  "error"
+]);
 
 export function parseHost(value: string): string {
   if (value.trim().length === 0 || !LOOPBACK_HOSTS.has(value)) {
@@ -18,6 +26,13 @@ export function parsePort(value: string): number {
     throw invalidPort(value);
   }
   return parsed;
+}
+
+export function parseLogLevel(value: string): RuntimeLogLevel {
+  if (!LOG_LEVELS.has(value as RuntimeLogLevel)) {
+    throw new Error(`Invalid HUANLINK_LOG_LEVEL: ${value}`);
+  }
+  return value as RuntimeLogLevel;
 }
 
 function invalidPort(value: string): Error {

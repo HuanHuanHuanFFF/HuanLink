@@ -1,5 +1,10 @@
 export { createAgentCard } from "./agent-card.js";
 export {
+  createCodexAdapterRuntimeLogger,
+  resolveCodexAdapterLogPath,
+  type CreateCodexAdapterRuntimeLoggerOptions
+} from "./adapter-runtime-logger.js";
+export {
   CodexAppServerClient,
   spawnCodexAppServerTransport,
   type CodexAppServerClientOptions,
