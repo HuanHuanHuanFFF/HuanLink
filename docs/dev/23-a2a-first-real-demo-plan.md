@@ -303,6 +303,15 @@ Phase 3 实际核验记录（2026-07-12）：
 - Codex 完成后，群内能收到结合最新上下文生成的最终结果。
 - Codex 执行期间，QQ 群消息处理不被阻塞。
 
+Phase 4 实际验收记录（2026-07-14）：
+
+- HuanLink server 已通过 LLBot 的 OneBot 11 正向 WebSocket 接入真实 QQ 群；真实 `/huanlink` 命令能够触发 DeepSeek MainAgent，普通连接测试不会调用 Codex。
+- 真实代码任务要求 Codex 重写仓库根目录的 `test.md` 项目概况。MainAgent 只创建了一个异步 AgentCall 和一个 A2A Task，群内立即收到 HuanLink taskId 与 A2A taskId。
+- Codex 执行期间，用户继续在同一群查询任务状态、询问功能并补充上下文；QQ 消息和 MainAgent turn 均正常处理，状态查询复用原任务且没有重新派发 Codex。
+- Adapter 通过独立的 `codex app-server` 进程执行任务；关闭 Codex 桌面应用不影响该任务继续运行。任务最终从 `working` 进入 `completed`，并真实写入 `test.md`（32 行、2365 bytes）。
+- A2A Task 产生 1 个 Artifact；HuanLink 只触发 1 次终态 MainAgent re-entry，将文件、结果摘要和最新群聊语义发回原群。自动完成通知与用户手动查询恰好重叠时出现两条完成说明，但没有重复任务或重复终态回流。
+- 本地 `server.jsonl` 与 `codex-a2a-adapter.jsonl` 能通过关联 ID 串起同一个 AgentCall、A2A Task、Codex thread/turn、Artifact 和终态回流。Phase 4 验收通过；真实 `input-required` 场景不作为本阶段门禁。
+
 ### Phase 5：真实闭环验收
 
 使用一个真实、可验证的小型代码任务执行完整演示：

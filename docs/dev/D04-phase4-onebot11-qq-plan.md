@@ -147,6 +147,16 @@
 4. 等待终态 fresh turn，确认最终结果发回同一群且包含最新消息语义。自动测试或 CLI 输入不能替代该步骤。
 5. 文档提交和代码提交保持分离，使用清楚的中文 Conventional Commit；Phase 4 完成后推送 `origin/spike/demo-v0`，不 merge、不建 PR，并停在 Phase 4 gate 等待用户确认。
 
+## Phase 4 实际验收记录（2026-07-14）
+
+- 真实入口为 LLBot OneBot 11 正向 WebSocket，触发方式为 `/huanlink`；连接测试、MainAgent 回复和 QQ 原群路由均正常。
+- 真实任务要求 Codex 将 HuanLink 项目概况写入仓库根目录的 `test.md`。群内先收到 HuanLink taskId 和 A2A taskId，任务以 `async` 模式在后台执行。
+- 任务处于 `working` 时，用户可以继续查询同一任务、询问功能并发送其他群消息；MainAgent 使用任务状态查询能力，没有创建替代任务。
+- Adapter 启动的 `codex app-server` 是独立进程，不依赖 Codex 桌面应用持续打开。Codex 最终完成真实文件修改，A2A 返回 Artifact，HuanLink 触发一次终态 re-entry 并将结果发回原群。
+- 实际结果为 `test.md` 32 行、2365 bytes；QQ 回复中的项目摘要、文件路径和状态与 Codex 结果一致。本地两个 JSONL 文件能够关联同一个 AgentCall、A2A Task、Codex thread/turn、Artifact 与终态回流。
+- 非阻塞观察：状态时间当前按 UTC 输出但没有标注时区；MainAgent 曾错误推测关闭 Codex 桌面应用会中断任务；自动完成通知与手动查询重叠时会连续产生两条完成说明。这些属于后续体验优化，不阻塞 Phase 4。
+- 验收结论：Phase 4 通过。未引入 OneBot HTTP、反向 WebSocket、持久化任务或其他非目标；真实 `input-required` 场景按用户确认留待后续验证。
+
 ## 明确非目标
 
 - OneBot HTTP、反向 WebSocket 和私有 LLBot/NapCat API。
