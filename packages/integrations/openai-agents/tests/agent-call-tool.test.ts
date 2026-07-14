@@ -9,6 +9,7 @@ import {
   Agent,
   RunContext,
   Runner,
+  ToolTimeoutError,
   Usage,
   type Model,
   type ModelProvider,
@@ -23,6 +24,11 @@ import {
   createCodexAgentCallTool,
   type OpenAiAgentsRunContext
 } from "../src/index.js";
+import { MutatingRuntimeLogger } from "./support/mutating-runtime-logger.js";
+import { RecordingRuntimeLogger } from "./support/recording-runtime-logger.js";
+import { ThrowingRuntimeLogger } from "./support/throwing-runtime-logger.js";
+
+const delegatedTask = "add one focused validation and test it";
 
 function assistantMessage(text: string): ModelResponse["output"][number] {
   return {
@@ -56,7 +62,7 @@ class ToolCallingThenReplyModel implements Model {
             callId: "tool-call-01",
             name: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
             arguments: JSON.stringify({
-              task: "add one focused validation and test it",
+              task: delegatedTask,
               ...(this.executionMode === undefined
                 ? {}
                 : { executionMode: this.executionMode })
@@ -129,7 +135,8 @@ describe("createCodexAgentCallTool", () => {
       async () => scenario.invocationResult
     );
     const model = new ToolCallingThenReplyModel(scenario.requestedMode);
-    const tool = createCodexAgentCallTool({ invoker: { invoke } });
+    const logger = new RecordingRuntimeLogger();
+    const tool = createCodexAgentCallTool({ invoker: { invoke }, logger });
     const agent = new Agent<OpenAiAgentsRunContext>({
       name: "HuanLink MainAgent",
       instructions: "Delegate code changes to Codex when appropriate.",
@@ -158,7 +165,7 @@ describe("createCodexAgentCallTool", () => {
       sessionId: "session-tool-01",
       contextId: "session-tool-01",
       skillId: "codex-code-task",
-      input: "add one focused validation and test it",
+      input: delegatedTask,
       executionMode: scenario.expectedMode,
       signal: abortController.signal
     });
@@ -170,6 +177,188 @@ describe("createCodexAgentCallTool", () => {
     expect(continuationInput).toContain(
       `\\\"status\\\":\\\"${scenario.invocationResult.status}\\\"`
     );
+    expect(logger.entries).toEqual([
+      {
+        level: "info",
+        message: "main_agent.tool.started",
+        fields: {
+          runId: "run-tool-01",
+          sessionId: "session-tool-01",
+          toolName: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
+          executionMode: scenario.expectedMode,
+          inputLength: delegatedTask.length
+        }
+      },
+      {
+        level: "debug",
+        message: "main_agent.tool.started",
+        fields: {
+          runId: "run-tool-01",
+          sessionId: "session-tool-01",
+          toolName: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
+          executionMode: scenario.expectedMode,
+          inputLength: delegatedTask.length,
+          task: delegatedTask
+        }
+      },
+      {
+        level: "info",
+        message: "main_agent.tool.completed",
+        fields: {
+          runId: "run-tool-01",
+          sessionId: "session-tool-01",
+          toolName: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
+          status: scenario.invocationResult.status,
+          executionMode: scenario.invocationResult.executionMode,
+          agentCallId: scenario.invocationResult.agentCallId,
+          a2aTaskId: scenario.invocationResult.taskId,
+          state: scenario.invocationResult.state
+        }
+      }
+    ]);
+  });
+
+  test.each([
+    {
+      name: "child binding",
+      createLogger: () =>
+        new ThrowingRuntimeLogger({ throwOnChild: true })
+    },
+    {
+      name: "started info logging",
+      createLogger: () =>
+        new ThrowingRuntimeLogger({
+          throwWhen: ({ level, message }) =>
+            level === "info" && message === "main_agent.tool.started"
+        })
+    },
+    {
+      name: "started debug logging",
+      createLogger: () =>
+        new ThrowingRuntimeLogger({
+          throwWhen: ({ level, message }) =>
+            level === "debug" && message === "main_agent.tool.started"
+        })
+    },
+    {
+      name: "completed info logging",
+      createLogger: () =>
+        new ThrowingRuntimeLogger({
+          throwWhen: ({ level, message }) =>
+            level === "info" && message === "main_agent.tool.completed"
+        })
+    }
+  ])(
+    "does not change a successful submission when the logger fails during $name",
+    async ({ createLogger }) => {
+      const invocationResult: AgentCallInvocationResult = {
+        status: "accepted",
+        executionMode: "async",
+        agentCallId: "agent-call-log-failure-safe",
+        taskId: "a2a-task-log-failure-safe",
+        state: "submitted"
+      };
+      const invoke = vi.fn<AgentCallInvoker["invoke"]>(
+        async () => invocationResult
+      );
+      const tool = createCodexAgentCallTool({
+        invoker: { invoke },
+        logger: createLogger()
+      });
+      const context = new RunContext<OpenAiAgentsRunContext>({
+        runId: "run-tool-logger-failure",
+        sessionId: "session-tool-logger-failure",
+        trigger: "user"
+      });
+
+      const output = await tool.invoke(
+        context,
+        JSON.stringify({ task: delegatedTask, executionMode: "async" })
+      );
+
+      expect(output).toBe(JSON.stringify(invocationResult));
+      expect(invoke).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  test("logs a failed submission without changing the tool error result", async () => {
+    const originalMessage = "AgentCall submission failed";
+    const failure = new Error(originalMessage);
+    const logger = new MutatingRuntimeLogger(({ fields }) => {
+      if (fields.error instanceof Error) {
+        fields.error.message = "logger-mutated-error";
+      }
+    });
+    const tool = createCodexAgentCallTool({
+      invoker: {
+        invoke: vi.fn(async () => {
+          throw failure;
+        })
+      },
+      logger
+    });
+    const context = new RunContext<OpenAiAgentsRunContext>({
+      runId: "run-tool-failure",
+      sessionId: "session-tool-failure",
+      trigger: "user"
+    });
+
+    const output = await tool.invoke(
+      context,
+      JSON.stringify({ task: delegatedTask, executionMode: "async" })
+    );
+
+    expect(String(output)).toContain(originalMessage);
+    expect(failure.message).toBe(originalMessage);
+    expect(logger.entries.at(-1)).toEqual({
+      level: "error",
+      message: "main_agent.tool.failed",
+      fields: {
+        runId: "run-tool-failure",
+        sessionId: "session-tool-failure",
+        toolName: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
+        executionMode: "async",
+        inputLength: delegatedTask.length,
+        errorType: "Error"
+      }
+    });
+    expect(logger.entries.at(-1)?.fields).not.toHaveProperty("error");
+  });
+
+  test("preserves the original submission error when failed logging throws", async () => {
+    const businessFailure = new Error("Original AgentCall submission failure");
+    const loggerFailure = new Error("Runtime logger error failure");
+    const invoke = vi.fn<AgentCallInvoker["invoke"]>(async () => {
+      throw businessFailure;
+    });
+    const tool = createCodexAgentCallTool({
+      invoker: { invoke },
+      logger: new ThrowingRuntimeLogger({
+        failure: loggerFailure,
+        throwWhen: ({ level }) => level === "error"
+      })
+    });
+    const context = new RunContext<OpenAiAgentsRunContext>({
+      runId: "run-tool-original-error",
+      sessionId: "session-tool-original-error",
+      trigger: "user"
+    });
+    const timeoutController = new AbortController();
+    timeoutController.abort(
+      new ToolTimeoutError({
+        toolName: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
+        timeoutMs: 1
+      })
+    );
+
+    await expect(
+      tool.invoke(
+        context,
+        JSON.stringify({ task: delegatedTask, executionMode: "async" }),
+        { signal: timeoutController.signal }
+      )
+    ).rejects.toBe(businessFailure);
+    expect(invoke).toHaveBeenCalledTimes(1);
   });
 
   test.each(["background", "wait"] as const)(

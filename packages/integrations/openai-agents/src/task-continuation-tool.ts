@@ -1,13 +1,19 @@
-import type {
-  AgentCallContinuator,
-  AgentCallInputAnswers,
-  AgentCallInputQuestion,
-  AgentCallReader
+import {
+  type AgentCallContinuator,
+  type AgentCallInputAnswers,
+  type AgentCallInputQuestion,
+  type AgentCallReader,
+  type RuntimeLogFields,
+  type RuntimeLogger
 } from "@huanlink/core";
 import { tool } from "@openai/agents";
 import { z } from "zod";
 
 import { combineAbortSignals } from "./abort-signals.js";
+import {
+  bestEffortRuntimeLogger,
+  safeRuntimeErrorType
+} from "./best-effort-runtime-logger.js";
 import type { OpenAiAgentsRunContext } from "./openai-agents-runtime.js";
 import { resolveTaskRecord } from "./task-record-resolution.js";
 
@@ -30,11 +36,14 @@ const parameters = z.object({
 export type CreateTaskContinuationToolOptions = {
   reader: AgentCallReader;
   continuator: AgentCallContinuator;
+  logger?: RuntimeLogger;
 };
 
 export function createTaskContinuationTool(
   options: CreateTaskContinuationToolOptions
 ) {
+  const logger = bestEffortRuntimeLogger(options.logger);
+
   return tool<typeof parameters, OpenAiAgentsRunContext>({
     name: CONTINUE_TASK_TOOL_NAME,
     description:
@@ -48,47 +57,98 @@ export function createTaskContinuationTool(
         throw new Error("Task continuation tool requires a HuanLink RunContext");
       }
 
-      const resolution = resolveTaskRecord(
-        options.reader,
-        taskId,
-        runContext.context.sessionId
-      );
-      if (resolution.status === "not-found") {
-        return JSON.stringify({ status: "not-found", taskId });
-      }
-      if (resolution.status === "ambiguous") {
-        return JSON.stringify({ status: "ambiguous", taskId });
-      }
-      const record = resolution.record;
-      if (record.state !== "input-required") {
-        return JSON.stringify({
-          status: "invalid-state",
-          taskId,
-          state: record.state
-        });
-      }
-      const validatedAnswers = validateAnswers(record.questions, answers);
-      if (validatedAnswers === undefined) {
-        return JSON.stringify({
-          status: "invalid-answers",
-          taskId,
-          error:
-            "Answers must cover every pending question exactly once with at least one non-blank answer."
-        });
-      }
-
-      const continued = await options.continuator.continueTask(
-        record.taskId,
-        validatedAnswers,
-        combineAbortSignals(runContext.context.signal, details?.signal)
-      );
-
-      return JSON.stringify({
-        status: "continued",
-        taskId: continued.agentCallId,
-        a2aTaskId: continued.taskId,
-        state: continued.state
+      const toolLogger = logger.child({
+        runId: runContext.context.runId,
+        sessionId: runContext.context.sessionId,
+        toolName: CONTINUE_TASK_TOOL_NAME
       });
+      const requestFields = {
+        taskId,
+        questionIds: answers.map((answer) => answer.questionId)
+      };
+      toolLogger.info("main_agent.tool.started", requestFields);
+
+      const complete = (result: unknown, fields: RuntimeLogFields) => {
+        toolLogger.info("main_agent.tool.completed", fields);
+        return JSON.stringify(result);
+      };
+
+      try {
+        const resolution = resolveTaskRecord(
+          options.reader,
+          taskId,
+          runContext.context.sessionId
+        );
+        if (resolution.status === "not-found") {
+          return complete(
+            { status: "not-found", taskId },
+            { taskId, status: "not-found" }
+          );
+        }
+        if (resolution.status === "ambiguous") {
+          return complete(
+            { status: "ambiguous", taskId },
+            { taskId, status: "ambiguous" }
+          );
+        }
+        const record = resolution.record;
+        const taskFields = {
+          taskId,
+          agentCallId: record.agentCallId,
+          a2aTaskId: record.taskId,
+          state: record.state
+        };
+        if (record.state !== "input-required") {
+          return complete(
+            {
+              status: "invalid-state",
+              taskId,
+              state: record.state
+            },
+            { ...taskFields, status: "invalid-state" }
+          );
+        }
+        const validatedAnswers = validateAnswers(record.questions, answers);
+        if (validatedAnswers === undefined) {
+          return complete(
+            {
+              status: "invalid-answers",
+              taskId,
+              error:
+                "Answers must cover every pending question exactly once with at least one non-blank answer."
+            },
+            { ...taskFields, status: "invalid-answers" }
+          );
+        }
+
+        const continued = await options.continuator.continueTask(
+          record.taskId,
+          validatedAnswers,
+          combineAbortSignals(runContext.context.signal, details?.signal)
+        );
+
+        return complete(
+          {
+            status: "continued",
+            taskId: continued.agentCallId,
+            a2aTaskId: continued.taskId,
+            state: continued.state
+          },
+          {
+            taskId,
+            status: "continued",
+            agentCallId: record.agentCallId,
+            a2aTaskId: record.taskId,
+            state: continued.state
+          }
+        );
+      } catch (error) {
+        toolLogger.error("main_agent.tool.failed", {
+          ...requestFields,
+          errorType: safeRuntimeErrorType(error)
+        });
+        throw error;
+      }
     }
   });
 }

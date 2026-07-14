@@ -1,7 +1,17 @@
-import type { AgentCallReader, AgentCallRecord } from "@huanlink/core";
+import {
+  type AgentCallInputQuestion,
+  type AgentCallReader,
+  type AgentCallRecord,
+  type RuntimeLogFields,
+  type RuntimeLogger
+} from "@huanlink/core";
 import { tool } from "@openai/agents";
 import { z } from "zod";
 
+import {
+  bestEffortRuntimeLogger,
+  safeRuntimeErrorType
+} from "./best-effort-runtime-logger.js";
 import type { OpenAiAgentsRunContext } from "./openai-agents-runtime.js";
 import { resolveTaskRecord } from "./task-record-resolution.js";
 
@@ -16,10 +26,17 @@ const parameters = z.object({
 });
 
 export type CreateTaskStatusToolOptions = {
+  logger?: RuntimeLogger;
   reader: AgentCallReader;
 };
 
+type TaskStatusToolResult =
+  | { status: "not-found" | "ambiguous"; taskId: string }
+  | { status: "found"; task: ReturnType<typeof publicTaskStatus> };
+
 export function createTaskStatusTool(options: CreateTaskStatusToolOptions) {
+  const logger = bestEffortRuntimeLogger(options.logger);
+
   return tool<typeof parameters, OpenAiAgentsRunContext>({
     name: GET_TASK_STATUS_TOOL_NAME,
     description:
@@ -33,24 +50,100 @@ export function createTaskStatusTool(options: CreateTaskStatusToolOptions) {
         throw new Error("Task status tool requires a HuanLink RunContext");
       }
 
-      const resolution = resolveTaskRecord(
-        options.reader,
-        taskId,
-        runContext.context.sessionId
-      );
-      if (resolution.status === "not-found") {
-        return JSON.stringify({ status: "not-found", taskId });
-      }
-      if (resolution.status === "ambiguous") {
-        return JSON.stringify({ status: "ambiguous", taskId });
-      }
-
-      return JSON.stringify({
-        status: "found",
-        task: publicTaskStatus(resolution.record)
+      const toolLogger = logger.child({
+        runId: runContext.context.runId,
+        sessionId: runContext.context.sessionId,
+        toolName: GET_TASK_STATUS_TOOL_NAME
       });
+      toolLogger.info("main_agent.tool.started", { taskId });
+
+      const complete = (
+        result: TaskStatusToolResult,
+        fields: RuntimeLogFields
+      ) => {
+        toolLogger.info("main_agent.tool.completed", fields);
+        toolLogger.debug("main_agent.tool.completed", {
+          ...fields,
+          result: taskStatusLogProjection(result)
+        });
+        return JSON.stringify(result);
+      };
+
+      try {
+        const resolution = resolveTaskRecord(
+          options.reader,
+          taskId,
+          runContext.context.sessionId
+        );
+        if (resolution.status === "not-found") {
+          return complete(
+            { status: "not-found", taskId },
+            { taskId, resolutionStatus: "not-found" }
+          );
+        }
+        if (resolution.status === "ambiguous") {
+          return complete(
+            { status: "ambiguous", taskId },
+            { taskId, resolutionStatus: "ambiguous" }
+          );
+        }
+
+        const result: TaskStatusToolResult = {
+          status: "found",
+          task: publicTaskStatus(resolution.record)
+        };
+        return complete(result, {
+          taskId,
+          resolutionStatus: "found",
+          agentCallId: resolution.record.agentCallId,
+          a2aTaskId: resolution.record.taskId,
+          state: resolution.record.state
+        });
+      } catch (error) {
+        toolLogger.error("main_agent.tool.failed", {
+          taskId,
+          errorType: safeRuntimeErrorType(error)
+        });
+        throw error;
+      }
     }
   });
+}
+
+function taskStatusLogProjection(result: TaskStatusToolResult): unknown {
+  if (result.status !== "found") {
+    return { ...result };
+  }
+
+  const { artifacts, questions, ...taskFields } = result.task;
+  return {
+    status: "found",
+    task: {
+      ...taskFields,
+      ...(questions === undefined
+        ? {}
+        : { questions: questions.map(questionLogProjection) }),
+      artifacts: artifacts.map((artifact) => ({ ...artifact }))
+    }
+  };
+}
+
+function questionLogProjection(question: AgentCallInputQuestion): unknown {
+  if (question.isSecret) {
+    return {
+      id: question.id,
+      isOther: question.isOther,
+      isSecret: true
+    };
+  }
+
+  return {
+    ...question,
+    options:
+      question.options === null
+        ? null
+        : question.options.map((option) => ({ ...option }))
+  };
 }
 
 function publicTaskStatus(record: AgentCallRecord) {

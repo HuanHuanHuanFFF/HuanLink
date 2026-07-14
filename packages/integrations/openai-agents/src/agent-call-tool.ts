@@ -1,11 +1,16 @@
 import {
   TASK_EXECUTION_MODES,
-  type AgentCallInvoker
+  type AgentCallInvoker,
+  type RuntimeLogger
 } from "@huanlink/core";
 import { tool } from "@openai/agents";
 import { z } from "zod";
 
 import { combineAbortSignals } from "./abort-signals.js";
+import {
+  bestEffortRuntimeLogger,
+  safeRuntimeErrorType
+} from "./best-effort-runtime-logger.js";
 import type { OpenAiAgentsRunContext } from "./openai-agents-runtime.js";
 
 export const SUBMIT_CODEX_AGENT_CALL_TOOL_NAME =
@@ -25,12 +30,14 @@ const parameters = z.object({
 
 export type CreateCodexAgentCallToolOptions = {
   invoker: AgentCallInvoker;
+  logger?: RuntimeLogger;
   skillId?: string;
 };
 
 export function createCodexAgentCallTool(
   options: CreateCodexAgentCallToolOptions
 ) {
+  const logger = bestEffortRuntimeLogger(options.logger);
   const skillId = options.skillId ?? "codex-code-task";
 
   return tool<typeof parameters, OpenAiAgentsRunContext>({
@@ -48,13 +55,28 @@ export function createCodexAgentCallTool(
         throw new Error("Codex AgentCall tool requires a HuanLink RunContext");
       }
 
+      const toolLogger = logger.child({
+        runId: runContext.context.runId,
+        sessionId: runContext.context.sessionId,
+        toolName: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME
+      });
+      const inputFields = {
+        executionMode,
+        inputLength: task.length
+      };
+      toolLogger.info("main_agent.tool.started", inputFields);
+      toolLogger.debug("main_agent.tool.started", {
+        ...inputFields,
+        task
+      });
+
       const signal = combineAbortSignals(
         runContext.context.signal,
         details?.signal
       );
 
-      return JSON.stringify(
-        await options.invoker.invoke({
+      try {
+        const result = await options.invoker.invoke({
           runId: runContext.context.runId,
           sessionId: runContext.context.sessionId,
           contextId: runContext.context.sessionId,
@@ -62,8 +84,22 @@ export function createCodexAgentCallTool(
           input: task,
           executionMode,
           ...(signal === undefined ? {} : { signal })
-        })
-      );
+        });
+        toolLogger.info("main_agent.tool.completed", {
+          status: result.status,
+          executionMode: result.executionMode,
+          agentCallId: result.agentCallId,
+          a2aTaskId: result.taskId,
+          state: result.state
+        });
+        return JSON.stringify(result);
+      } catch (error) {
+        toolLogger.error("main_agent.tool.failed", {
+          ...inputFields,
+          errorType: safeRuntimeErrorType(error)
+        });
+        throw error;
+      }
     }
   });
 }

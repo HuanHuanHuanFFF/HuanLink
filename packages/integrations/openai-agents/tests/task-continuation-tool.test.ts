@@ -5,12 +5,14 @@ import type {
   AgentCallReader,
   AgentCallRecord
 } from "@huanlink/core";
-import { Agent, RunContext } from "@openai/agents";
+import { Agent, RunContext, ToolTimeoutError } from "@openai/agents";
 
 import {
   createTaskContinuationTool,
   type OpenAiAgentsRunContext
 } from "../src/index.js";
+import { RecordingRuntimeLogger } from "./support/recording-runtime-logger.js";
+import { ThrowingRuntimeLogger } from "./support/throwing-runtime-logger.js";
 
 const pausedRecord: AgentCallRecord = {
   agentCallId: "huanlink-task-01",
@@ -121,6 +123,222 @@ describe("createTaskContinuationTool", () => {
       a2aTaskId: pausedRecord.taskId,
       state: "working"
     });
+    expect(continueTask).toHaveBeenCalledTimes(1);
+  });
+
+  test("logs continuation metadata without recording secret answer values", async () => {
+    const secretAnswer = "user-secret-that-must-not-be-logged";
+    const recordWithSecretQuestion: AgentCallRecord = {
+      ...pausedRecord,
+      questions: [
+        ...pausedRecord.questions!,
+        {
+          id: "credential",
+          header: "Credential",
+          question: "Provide the temporary credential.",
+          isOther: false,
+          isSecret: true,
+          options: null
+        }
+      ]
+    };
+    const logger = new RecordingRuntimeLogger();
+    const continueTask = vi.fn<AgentCallContinuator["continueTask"]>(
+      async () => ({
+        ...recordWithSecretQuestion,
+        state: "working",
+        questions: undefined
+      })
+    );
+    const tool = createTaskContinuationTool({
+      reader: {
+        getByAgentCallId: () => recordWithSecretQuestion,
+        getByTaskId: () => undefined
+      },
+      continuator: { continueTask },
+      logger
+    });
+
+    await tool.invoke(
+      runContext("user"),
+      JSON.stringify({
+        taskId: recordWithSecretQuestion.agentCallId,
+        answers: [
+          { questionId: "scope", answers: ["Adapter only"] },
+          { questionId: "credential", answers: [secretAnswer] }
+        ]
+      })
+    );
+
+    expect(JSON.stringify(logger.entries)).not.toContain(secretAnswer);
+    expect(JSON.stringify(logger.entries)).not.toContain("Adapter only");
+    expect(logger.entries).toEqual([
+      {
+        level: "info",
+        message: "main_agent.tool.started",
+        fields: {
+          runId: "run-continuation",
+          sessionId: "session-current",
+          toolName: "continue_task",
+          taskId: recordWithSecretQuestion.agentCallId,
+          questionIds: ["scope", "credential"]
+        }
+      },
+      {
+        level: "info",
+        message: "main_agent.tool.completed",
+        fields: {
+          runId: "run-continuation",
+          sessionId: "session-current",
+          toolName: "continue_task",
+          taskId: recordWithSecretQuestion.agentCallId,
+          status: "continued",
+          agentCallId: recordWithSecretQuestion.agentCallId,
+          a2aTaskId: recordWithSecretQuestion.taskId,
+          state: "working"
+        }
+      }
+    ]);
+    expect(JSON.stringify(logger.entries)).not.toContain('"answerCount"');
+  });
+
+  test.each([
+    {
+      name: "child binding",
+      createLogger: () =>
+        new ThrowingRuntimeLogger({ throwOnChild: true })
+    },
+    {
+      name: "started info logging",
+      createLogger: () =>
+        new ThrowingRuntimeLogger({
+          throwWhen: ({ level, message }) =>
+            level === "info" && message === "main_agent.tool.started"
+        })
+    },
+    {
+      name: "completed info logging",
+      createLogger: () =>
+        new ThrowingRuntimeLogger({
+          throwWhen: ({ level, message }) =>
+            level === "info" && message === "main_agent.tool.completed"
+        })
+    }
+  ])(
+    "does not change a continuation result when the logger fails during $name",
+    async ({ createLogger }) => {
+      const getByAgentCallId = vi.fn<AgentCallReader["getByAgentCallId"]>(
+        () => pausedRecord
+      );
+      const getByTaskId = vi.fn<AgentCallReader["getByTaskId"]>(
+        () => undefined
+      );
+      const continuedRecord = {
+        ...pausedRecord,
+        state: "working" as const,
+        questions: undefined
+      };
+      const continueTask = vi.fn<AgentCallContinuator["continueTask"]>(
+        async () => continuedRecord
+      );
+      const tool = createTaskContinuationTool({
+        reader: { getByAgentCallId, getByTaskId },
+        continuator: { continueTask },
+        logger: createLogger()
+      });
+
+      const output = await tool.invoke(
+        runContext("user"),
+        JSON.stringify({
+          taskId: pausedRecord.agentCallId,
+          answers: [{ questionId: "scope", answers: ["Adapter only"] }]
+        })
+      );
+
+      expect(JSON.parse(String(output))).toEqual({
+        status: "continued",
+        taskId: pausedRecord.agentCallId,
+        a2aTaskId: pausedRecord.taskId,
+        state: "working"
+      });
+      expect(getByAgentCallId).toHaveBeenCalledTimes(1);
+      expect(getByTaskId).toHaveBeenCalledTimes(1);
+      expect(continueTask).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  test("logs a failed continuation without recording secret answers", async () => {
+    const secretAnswer = "s".repeat(137);
+    const failure = new Error(secretAnswer);
+    const loggerFailure = new Error("Runtime logger error failure");
+    const secretRecord: AgentCallRecord = {
+      ...pausedRecord,
+      questions: [
+        {
+          ...pausedRecord.questions![0]!,
+          id: "credential",
+          isSecret: true
+        }
+      ]
+    };
+    const logger = new ThrowingRuntimeLogger({
+      failure: loggerFailure,
+      throwWhen: ({ level }) => level === "error"
+    });
+    const continueTask = vi.fn(async () => {
+      throw failure;
+    });
+    const tool = createTaskContinuationTool({
+      reader: {
+        getByAgentCallId: () => secretRecord,
+        getByTaskId: () => undefined
+      },
+      continuator: {
+        continueTask
+      },
+      logger
+    });
+    const timeoutController = new AbortController();
+    timeoutController.abort(
+      new ToolTimeoutError({
+        toolName: "continue_task",
+        timeoutMs: 1
+      })
+    );
+
+    await expect(
+      tool.invoke(
+        runContext("user"),
+        JSON.stringify({
+          taskId: secretRecord.agentCallId,
+          answers: [{ questionId: "credential", answers: [secretAnswer] }]
+        }),
+        { signal: timeoutController.signal }
+      )
+    ).rejects.toBe(failure);
+
+    const failedLog = logger.attempts.find(
+      ({ level, message }) =>
+        level === "error" && message === "main_agent.tool.failed"
+    );
+    expect(failedLog).toEqual({
+      level: "error",
+      message: "main_agent.tool.failed",
+      fields: {
+        runId: "run-continuation",
+        sessionId: "session-current",
+        toolName: "continue_task",
+        taskId: secretRecord.agentCallId,
+        questionIds: ["credential"],
+        errorType: "Error"
+      }
+    });
+    const serializedLogs = JSON.stringify(logger.attempts);
+    expect(serializedLogs).not.toContain(secretAnswer);
+    expect(serializedLogs).not.toContain(String(secretAnswer.length));
+    expect(failedLog?.fields).not.toHaveProperty("error");
+    expect(failedLog?.fields).not.toHaveProperty("errorMessageLength");
+    expect(failedLog?.fields).not.toHaveProperty("answerCount");
     expect(continueTask).toHaveBeenCalledTimes(1);
   });
 
