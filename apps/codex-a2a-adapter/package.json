@@ -17,7 +17,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "clean": "rimraf --glob dist \"*.tsbuildinfo\" \"*.tsbuildinfo.*\"",
-    "start": "node dist/main.js",
+    "start": "node --env-file-if-exists=../../.env dist/main.js",
     "test": "vitest run",
     "test:real": "vitest run --config vitest.real.config.ts",
     "typecheck": "tsc -p tsconfig.json"
