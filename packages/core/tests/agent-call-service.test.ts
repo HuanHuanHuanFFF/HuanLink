@@ -2,7 +2,10 @@ import { describe, expect, test, vi } from "vitest";
 
 import {
   AgentCallService,
-  type AgentCallTransport
+  type AgentCallTransport,
+  type RuntimeLogFields,
+  type RuntimeLogLevel,
+  type RuntimeLogger
 } from "../src/index.js";
 import {
   deferred,
@@ -10,7 +13,401 @@ import {
   task
 } from "./agent-call-test-helpers.js";
 
+type RecordedLogEntry = {
+  level: RuntimeLogLevel;
+  message: string;
+  fields: RuntimeLogFields;
+};
+
+class RecordingLogger implements RuntimeLogger {
+  constructor(
+    readonly entries: RecordedLogEntry[] = [],
+    private readonly bindings: RuntimeLogFields = {}
+  ) {}
+
+  debug(message: string, fields?: RuntimeLogFields): void {
+    this.record("debug", message, fields);
+  }
+
+  info(message: string, fields?: RuntimeLogFields): void {
+    this.record("info", message, fields);
+  }
+
+  warn(message: string, fields?: RuntimeLogFields): void {
+    this.record("warn", message, fields);
+  }
+
+  error(message: string, fields?: RuntimeLogFields): void {
+    this.record("error", message, fields);
+  }
+
+  child(bindings: RuntimeLogFields): RuntimeLogger {
+    return new RecordingLogger(this.entries, { ...this.bindings, ...bindings });
+  }
+
+  private record(
+    level: RuntimeLogLevel,
+    message: string,
+    fields: RuntimeLogFields = {}
+  ): void {
+    this.entries.push({
+      level,
+      message,
+      fields: { ...this.bindings, ...fields }
+    });
+  }
+}
+
 describe("AgentCallService", () => {
+  test("logs a safe submit, pause, continuation, terminal and close lifecycle", async () => {
+    const logger = new RecordingLogger();
+    const input = "implement the requested adapter behavior";
+    const ordinaryQuestion = "Which scope should be used?";
+    const secretQuestion = "Enter the private deployment passphrase";
+    const secretHeader = "Private passphrase";
+    const secretAnswer = "secret-answer-must-never-appear";
+    const ordinaryAnswer = "adapter-only";
+    const artifactText = "artifact body visible only at debug";
+    let watchCycle = 0;
+    const transport: AgentCallTransport = {
+      discoverCapability: async (skillId) => ({ id: skillId, name: skillId }),
+      submitTask: async () =>
+        task("submitted", { contextId: "context-log-lifecycle" }),
+      async *watchTask() {
+        watchCycle += 1;
+        if (watchCycle === 1) {
+          yield task("input-required", {
+            contextId: "context-log-lifecycle",
+            statusMessage: secretQuestion,
+            questions: [
+              {
+                id: "scope",
+                header: "Scope",
+                question: ordinaryQuestion,
+                isOther: false,
+                isSecret: false,
+                options: null
+              },
+              {
+                id: "passphrase",
+                header: secretHeader,
+                question: secretQuestion,
+                isOther: false,
+                isSecret: true,
+                options: [
+                  {
+                    label: "Secret option",
+                    description: "Secret option description"
+                  }
+                ]
+              }
+            ]
+          });
+          return;
+        }
+        yield task("completed", {
+          contextId: "context-log-lifecycle",
+          artifacts: [{ id: "artifact-log", text: artifactText }]
+        });
+      },
+      continueTask: async () =>
+        task("working", { contextId: "context-log-lifecycle" }),
+      cancelTask: async () => task("canceled")
+    };
+    const service = new AgentCallService({
+      transport,
+      logger,
+      createId: () => "agent-call-log-lifecycle",
+      createMessageId: () => "message-log-continuation"
+    });
+
+    await service.submit({
+      runId: "run-log-lifecycle",
+      sessionId: "session-log-lifecycle",
+      skillId: "codex-code-task",
+      input,
+      contextId: "context-log-lifecycle",
+      executionMode: "async"
+    });
+    await service.waitForIdle();
+    await service.continueTask("a2a-task-01", {
+      scope: [ordinaryAnswer],
+      passphrase: [secretAnswer]
+    });
+    await service.waitForIdle();
+    await service.close();
+
+    const messages = new Set(logger.entries.map(({ message }) => message));
+    expect(messages).toEqual(
+      new Set([
+        "agent_call.submit.started",
+        "agent_call.submit.accepted",
+        "agent_call.watcher.started",
+        "agent_call.watcher.stopped",
+        "agent_call.state.changed",
+        "agent_call.paused",
+        "agent_call.continue.started",
+        "agent_call.continue.accepted",
+        "agent_call.terminal",
+        "agent_call.service.closing",
+        "agent_call.service.closed"
+      ])
+    );
+    expect(logger.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          level: "info",
+          message: "agent_call.submit.started",
+          fields: expect.objectContaining({
+            sessionId: "session-log-lifecycle",
+            runId: "run-log-lifecycle",
+            agentCallId: "agent-call-log-lifecycle",
+            contextId: "context-log-lifecycle",
+            executionMode: "async",
+            inputLength: input.length
+          })
+        }),
+        expect.objectContaining({
+          level: "info",
+          message: "agent_call.submit.accepted",
+          fields: expect.objectContaining({
+            a2aTaskId: "a2a-task-01",
+            contextId: "context-log-lifecycle",
+            state: "submitted"
+          })
+        }),
+        expect.objectContaining({
+          level: "info",
+          message: "agent_call.state.changed",
+          fields: expect.objectContaining({
+            previousState: "submitted",
+            state: "input-required"
+          })
+        }),
+        expect.objectContaining({
+          level: "info",
+          message: "agent_call.paused",
+          fields: expect.objectContaining({
+            questionIds: ["scope", "passphrase"],
+            questionCount: 2
+          })
+        }),
+        expect.objectContaining({
+          level: "info",
+          message: "agent_call.continue.started",
+          fields: expect.objectContaining({
+            questionIds: ["scope", "passphrase"],
+            count: 2
+          })
+        }),
+        expect.objectContaining({
+          level: "info",
+          message: "agent_call.terminal",
+          fields: expect.objectContaining({
+            state: "completed",
+            artifactCount: 1
+          })
+        })
+      ])
+    );
+
+    const nonDebug = JSON.stringify(
+      logger.entries.filter(({ level }) => level !== "debug")
+    );
+    const debug = JSON.stringify(
+      logger.entries.filter(({ level }) => level === "debug")
+    );
+    const allLogs = JSON.stringify(logger.entries);
+    expect(nonDebug).not.toContain(input);
+    expect(nonDebug).not.toContain(ordinaryQuestion);
+    expect(nonDebug).not.toContain(ordinaryAnswer);
+    expect(nonDebug).not.toContain(artifactText);
+    expect(debug).toContain(input);
+    expect(debug).toContain(ordinaryQuestion);
+    expect(debug).toContain(ordinaryAnswer);
+    expect(debug).toContain(artifactText);
+    expect(debug).toContain("[Redacted]");
+    expect(allLogs).not.toContain(secretQuestion);
+    expect(allLogs).not.toContain(secretHeader);
+    expect(allLogs).not.toContain(secretAnswer);
+    expect(allLogs).not.toContain("Secret option description");
+  });
+
+  test("logs cancel start and completion", async () => {
+    const logger = new RecordingLogger();
+    const canceledArtifact = "canceled artifact visible only at debug";
+    const transport: AgentCallTransport = {
+      discoverCapability: async (skillId) => ({ id: skillId, name: skillId }),
+      submitTask: async () => task("submitted", { contextId: "context-log-cancel" }),
+      async *watchTask(_taskId, options) {
+        await new Promise<void>((resolve) => {
+          options.signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      },
+      continueTask: async () => task("working"),
+      cancelTask: async () =>
+        task("canceled", {
+          contextId: "context-log-cancel",
+          artifacts: [{ id: "artifact-canceled", text: canceledArtifact }]
+        })
+    };
+    const service = new AgentCallService({
+      transport,
+      logger,
+      createId: () => "agent-call-log-cancel"
+    });
+    const submitted = await service.submit({
+      runId: "run-log-cancel",
+      sessionId: "session-log-cancel",
+      skillId: "codex-code-task",
+      input: "cancel this task",
+      contextId: "context-log-cancel",
+      executionMode: "async"
+    });
+
+    await service.cancel(submitted.agentCallId);
+    await service.close();
+
+    expect(logger.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          level: "info",
+          message: "agent_call.cancel.started",
+          fields: expect.objectContaining({
+            sessionId: "session-log-cancel",
+            runId: "run-log-cancel",
+            agentCallId: "agent-call-log-cancel",
+            a2aTaskId: "a2a-task-01",
+            contextId: "context-log-cancel",
+            state: "submitted"
+          })
+        }),
+        expect.objectContaining({
+          level: "info",
+          message: "agent_call.cancel.completed",
+          fields: expect.objectContaining({ state: "canceled", artifactCount: 1 })
+        })
+      ])
+    );
+    const nonDebug = JSON.stringify(
+      logger.entries.filter(({ level }) => level !== "debug")
+    );
+    const debug = JSON.stringify(
+      logger.entries.filter(({ level }) => level === "debug")
+    );
+    expect(nonDebug).not.toContain(canceledArtifact);
+    expect(debug).toContain(canceledArtifact);
+  });
+
+  test("logs submit, continuation and cancellation failures safely", async () => {
+    const logger = new RecordingLogger();
+    const submitError = new Error("remote submit rejected");
+    const continuationError = new Error("remote continuation rejected");
+    const cancellationError = new Error("remote cancellation rejected");
+    const secretQuestion = "Enter the production passphrase";
+    const secretAnswer = "never-log-this-passphrase";
+    let submitAttempt = 0;
+    let idSequence = 0;
+    const transport: AgentCallTransport = {
+      discoverCapability: async (skillId) => ({ id: skillId, name: skillId }),
+      submitTask: async () => {
+        submitAttempt += 1;
+        if (submitAttempt === 1) {
+          throw submitError;
+        }
+        return task("input-required", {
+          contextId: "context-log-failures",
+          questions: [
+            {
+              id: "passphrase",
+              header: "Production passphrase",
+              question: secretQuestion,
+              isOther: false,
+              isSecret: true,
+              options: null
+            }
+          ]
+        });
+      },
+      async *watchTask() {},
+      continueTask: async () => {
+        throw continuationError;
+      },
+      cancelTask: async () => {
+        throw cancellationError;
+      }
+    };
+    const service = new AgentCallService({
+      transport,
+      logger,
+      createId: () => `agent-call-log-failure-${++idSequence}`
+    });
+
+    await expect(
+      service.submit({
+        runId: "run-log-failures",
+        sessionId: "session-log-failures",
+        skillId: "codex-code-task",
+        input: "first submission",
+        executionMode: "async"
+      })
+    ).rejects.toBe(submitError);
+    const paused = await service.submit({
+      runId: "run-log-failures",
+      sessionId: "session-log-failures",
+      skillId: "codex-code-task",
+      input: "second submission",
+      contextId: "context-log-failures",
+      executionMode: "async"
+    });
+    await expect(
+      service.continueTask(paused.taskId, { passphrase: [secretAnswer] })
+    ).rejects.toBe(continuationError);
+    await expect(service.cancel(paused.agentCallId)).rejects.toBe(
+      cancellationError
+    );
+    await service.close();
+
+    expect(logger.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          level: "error",
+          message: "agent_call.submit.failed",
+          fields: expect.objectContaining({
+            sessionId: "session-log-failures",
+            runId: "run-log-failures",
+            errorType: "Error",
+            errorMessageLength: submitError.message.length
+          })
+        }),
+        expect.objectContaining({
+          level: "error",
+          message: "agent_call.continue.failed",
+          fields: expect.objectContaining({
+            a2aTaskId: "a2a-task-01",
+            questionIds: ["passphrase"],
+            count: 1,
+            errorType: "Error"
+          })
+        }),
+        expect.objectContaining({
+          level: "error",
+          message: "agent_call.cancel.failed",
+          fields: expect.objectContaining({
+            agentCallId: "agent-call-log-failure-2",
+            a2aTaskId: "a2a-task-01",
+            state: "input-required",
+            errorType: "Error"
+          })
+        })
+      ])
+    );
+    const allLogs = JSON.stringify(logger.entries);
+    expect(allLogs).not.toContain(secretQuestion);
+    expect(allLogs).not.toContain(secretAnswer);
+    expect(allLogs).toContain("[Redacted]");
+  });
+
   test("lists defensive copies of records for only the requested run", async () => {
     let taskSequence = 0;
     let agentCallSequence = 0;
@@ -398,6 +795,7 @@ describe("AgentCallService", () => {
   });
 
   test("converts an async watcher failure into one failed terminal record", async () => {
+    const logger = new RecordingLogger();
     const terminalListener = vi.fn();
     const transport: AgentCallTransport = {
       discoverCapability: async (skillId) => ({
@@ -413,6 +811,7 @@ describe("AgentCallService", () => {
     };
     const service = new AgentCallService({
       transport,
+      logger,
       createId: () => "agent-call-02"
     });
     service.onTerminal(terminalListener);
@@ -431,6 +830,19 @@ describe("AgentCallService", () => {
       statusMessage: "subscription disconnected"
     });
     expect(terminalListener).toHaveBeenCalledTimes(1);
+    expect(logger.entries).toContainEqual(
+      expect.objectContaining({
+        level: "error",
+        message: "agent_call.watcher.failed",
+        fields: expect.objectContaining({
+          agentCallId: "agent-call-02",
+          a2aTaskId: "a2a-task-01",
+          state: "submitted",
+          errorType: "Error",
+          errorMessageLength: "subscription disconnected".length
+        })
+      })
+    );
   });
 
   test("preserves an input-required pause when the remote subscription ends", async () => {
@@ -993,6 +1405,7 @@ describe("AgentCallService", () => {
   });
 
   test("records and reports a terminal listener failure instead of swallowing it", async () => {
+    const logger = new RecordingLogger();
     const backgroundError = vi.fn();
     const transport: AgentCallTransport = {
       discoverCapability: async (skillId) => ({ id: skillId, name: skillId }),
@@ -1005,6 +1418,7 @@ describe("AgentCallService", () => {
     };
     const service = new AgentCallService({
       transport,
+      logger,
       createId: () => "agent-call-listener-error"
     });
     service.onBackgroundError(backgroundError);
@@ -1027,5 +1441,18 @@ describe("AgentCallService", () => {
       state: "completed",
       terminalNotificationError: "MainAgent re-entry failed"
     });
+    expect(logger.entries).toContainEqual(
+      expect.objectContaining({
+        level: "error",
+        message: "agent_call.background_error",
+        fields: expect.objectContaining({
+          agentCallId: "agent-call-listener-error",
+          a2aTaskId: "a2a-task-01",
+          state: "completed",
+          errorType: "Error",
+          errorMessageLength: "MainAgent re-entry failed".length
+        })
+      })
+    );
   });
 });

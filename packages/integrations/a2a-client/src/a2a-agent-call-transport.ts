@@ -16,121 +16,228 @@ import {
   UnsupportedOperationError,
   type Client
 } from "@a2a-js/sdk/client";
-import type {
-  AgentCallArtifact,
-  AgentCallCapability,
-  AgentCallInputQuestion,
-  AgentCallTaskSnapshot,
-  AgentCallTaskState,
-  AgentCallTransport,
-  AgentCallTransportContinueRequest,
-  AgentCallTransportSubmitRequest
+import {
+  NoopRuntimeLogger,
+  type RuntimeLogFields,
+  type RuntimeLogLevel,
+  type RuntimeLogger,
+  type AgentCallArtifact,
+  type AgentCallCapability,
+  type AgentCallInputQuestion,
+  type AgentCallTaskSnapshot,
+  type AgentCallTaskState,
+  type AgentCallTransport,
+  type AgentCallTransportContinueRequest,
+  type AgentCallTransportSubmitRequest
 } from "@huanlink/core";
-
 export type A2aAgentCallTransportOptions = {
   origin: string;
+  logger?: RuntimeLogger;
 };
 
 const MAX_SUBSCRIPTION_ATTEMPTS = 3;
 const TERMINAL_RECONCILIATION_ATTEMPTS = 4;
 const RECONCILIATION_DELAY_MS = 20;
 
+class A2aProtocolError extends Error {}
+
 export class A2aAgentCallTransport implements AgentCallTransport {
   private readonly origin: string;
   private readonly clientFactory: ClientFactory;
+  private readonly logger: RuntimeLogger;
   private clientPromise: Promise<Client> | undefined;
+  private clientCreationAttempt = 0;
 
   constructor(options: A2aAgentCallTransportOptions) {
     this.origin = options.origin;
     this.clientFactory = new ClientFactory();
+    this.logger = options.logger ?? new NoopRuntimeLogger();
   }
 
   async discoverCapability(
     skillId: string,
     options: { signal?: AbortSignal } = {}
   ): Promise<AgentCallCapability> {
-    const client = await this.getClient();
-    if (client.protocolVersion !== A2A_PROTOCOL_VERSION) {
-      throw new Error(
-        `A2A agent negotiated protocol ${client.protocolVersion}; expected ${A2A_PROTOCOL_VERSION}`
+    const fields = { skillId };
+    this.writeLog("info", "a2a.discover.started", fields);
+    try {
+      const client = await this.getClient();
+      if (client.protocolVersion !== A2A_PROTOCOL_VERSION) {
+        throw new A2aProtocolError(
+          `A2A agent negotiated protocol ${client.protocolVersion}; expected ${A2A_PROTOCOL_VERSION}`
+        );
+      }
+
+      const card = await client.getAgentCard(
+        options.signal === undefined ? undefined : { signal: options.signal }
       );
-    }
+      if (!card.capabilities?.streaming) {
+        throw new A2aProtocolError(
+          "A2A agent does not advertise task streaming"
+        );
+      }
 
-    const card = await client.getAgentCard(
-      options.signal === undefined ? undefined : { signal: options.signal }
-    );
-    if (!card.capabilities?.streaming) {
-      throw new Error("A2A agent does not advertise task streaming");
-    }
+      const skill = card.skills.find((candidate) => candidate.id === skillId);
+      if (!skill) {
+        throw new A2aProtocolError(
+          `A2A Agent Card does not declare skill ${skillId}`
+        );
+      }
 
-    const skill = card.skills.find((candidate) => candidate.id === skillId);
-    if (!skill) {
-      throw new Error(`A2A Agent Card does not declare skill ${skillId}`);
+      const capability = {
+        id: skill.id,
+        name: skill.name,
+        ...(skill.description === "" ? {} : { description: skill.description })
+      };
+      this.writeLog("info", "a2a.discover.completed", fields);
+      return capability;
+    } catch (error) {
+      this.writeLog("error", "a2a.discover.failed", {
+        ...fields,
+        ...errorLogFields(error)
+      });
+      throw error;
     }
-
-    return {
-      id: skill.id,
-      name: skill.name,
-      ...(skill.description === "" ? {} : { description: skill.description })
-    };
   }
 
   async submitTask(
     request: AgentCallTransportSubmitRequest
   ): Promise<AgentCallTaskSnapshot> {
-    await this.discoverCapability(request.skillId, { signal: request.signal });
-    const client = await this.getClient();
-    const result = await client.sendMessage(
-      SendMessageRequest.fromJSON({
-        message: {
-          messageId: request.messageId,
-          ...(request.contextId === undefined
-            ? {}
-            : { contextId: request.contextId }),
-          role: "ROLE_USER",
-          parts: [{ text: request.input }]
-        },
-        configuration: { returnImmediately: true }
-      }),
-      request.signal === undefined ? undefined : { signal: request.signal }
-    );
+    const fields: RuntimeLogFields = {
+      messageId: request.messageId,
+      skillId: request.skillId,
+      ...(request.contextId === undefined
+        ? {}
+        : { contextId: request.contextId })
+    };
+    this.writeLog("info", "a2a.submit.started", fields);
+    try {
+      await this.discoverCapability(request.skillId, { signal: request.signal });
+      const client = await this.getClient();
+      const result = await client.sendMessage(
+        SendMessageRequest.fromJSON({
+          message: {
+            messageId: request.messageId,
+            ...(request.contextId === undefined
+              ? {}
+              : { contextId: request.contextId }),
+            role: "ROLE_USER",
+            parts: [{ text: request.input }]
+          },
+          configuration: { returnImmediately: true }
+        }),
+        request.signal === undefined ? undefined : { signal: request.signal }
+      );
 
-    return snapshotFromTask(requireTask(result));
+      const snapshot = snapshotFromTask(requireTask(result));
+      this.writeLog("info", "a2a.submit.completed", {
+        ...fields,
+        ...snapshotLogFields(snapshot)
+      });
+      return snapshot;
+    } catch (error) {
+      this.writeLog("error", "a2a.submit.failed", {
+        ...fields,
+        ...errorLogFields(error)
+      });
+      throw error;
+    }
   }
 
   async continueTask(
     request: AgentCallTransportContinueRequest
   ): Promise<AgentCallTaskSnapshot> {
-    const client = await this.getClient();
-    const result = await client.sendMessage(
-      SendMessageRequest.fromJSON({
-        message: {
-          messageId: request.messageId,
-          taskId: request.taskId,
-          ...(request.contextId === undefined
-            ? {}
-            : { contextId: request.contextId }),
-          role: "ROLE_USER",
-          parts: [{ data: { answers: request.answers } }]
-        },
-        configuration: { returnImmediately: true }
-      }),
-      request.signal === undefined ? undefined : { signal: request.signal }
-    );
-    const task = requireTask(result);
-    assertTaskId(request.taskId, task.id);
-    if (
-      request.contextId !== undefined &&
-      task.contextId !== request.contextId
-    ) {
-      throw new Error(
-        `A2A continuation returned context ${task.contextId}, expected ${request.contextId}`
+    const questionIds = Object.keys(request.answers);
+    const fields: RuntimeLogFields = {
+      messageId: request.messageId,
+      a2aTaskId: request.taskId,
+      ...(request.contextId === undefined
+        ? {}
+        : { contextId: request.contextId }),
+      questionIds,
+      count: questionIds.length
+    };
+    this.writeLog("info", "a2a.continue.started", fields);
+    try {
+      const client = await this.getClient();
+      const result = await client.sendMessage(
+        SendMessageRequest.fromJSON({
+          message: {
+            messageId: request.messageId,
+            taskId: request.taskId,
+            ...(request.contextId === undefined
+              ? {}
+              : { contextId: request.contextId }),
+            role: "ROLE_USER",
+            parts: [{ data: { answers: request.answers } }]
+          },
+          configuration: { returnImmediately: true }
+        }),
+        request.signal === undefined ? undefined : { signal: request.signal }
       );
+      const task = requireTask(result);
+      assertTaskId(request.taskId, task.id);
+      if (
+        request.contextId !== undefined &&
+        task.contextId !== request.contextId
+      ) {
+        throw new A2aProtocolError(
+          `A2A continuation returned context ${task.contextId}, expected ${request.contextId}`
+        );
+      }
+      const snapshot = snapshotFromTask(task);
+      this.writeLog("info", "a2a.continue.completed", {
+        ...fields,
+        ...snapshotLogFields(snapshot)
+      });
+      return snapshot;
+    } catch (error) {
+      this.writeLog("error", "a2a.continue.failed", {
+        ...fields,
+        ...errorLogFields(error)
+      });
+      throw error;
     }
-    return snapshotFromTask(task);
   }
 
   async *watchTask(
+    taskId: string,
+    options: { signal: AbortSignal }
+  ): AsyncIterable<AgentCallTaskSnapshot> {
+    this.writeLog("info", "a2a.watch.started", {
+      a2aTaskId: taskId,
+      attempt: 1
+    });
+    let failed = false;
+    let aborted = false;
+    try {
+      for await (const snapshot of this.watchTaskSnapshots(taskId, options)) {
+        this.writeLog("debug", "a2a.watch.snapshot", snapshotLogFields(snapshot));
+        yield snapshot;
+      }
+    } catch (error) {
+      if (options.signal.aborted) {
+        aborted = true;
+        this.writeLog("debug", "a2a.watch.aborted", {
+          a2aTaskId: taskId,
+          ...errorLogFields(error, "abort")
+        });
+      } else {
+        failed = true;
+        this.writeLog("error", "a2a.watch.failed", {
+          a2aTaskId: taskId,
+          ...errorLogFields(error)
+        });
+      }
+      throw error;
+    } finally {
+      if (!failed && !aborted) {
+        this.writeLog("info", "a2a.watch.ended", { a2aTaskId: taskId });
+      }
+    }
+  }
+
+  private async *watchTaskSnapshots(
     taskId: string,
     options: { signal: AbortSignal }
   ): AsyncIterable<AgentCallTaskSnapshot> {
@@ -196,6 +303,10 @@ export class A2aAgentCallTransport implements AgentCallTransport {
           ? TERMINAL_RECONCILIATION_ATTEMPTS
           : 1
       );
+      this.writeLog("info", "a2a.watch.reconciled", {
+        ...snapshotLogFields(reconciled),
+        attempt
+      });
       if (isTerminal(reconciled.state)) {
         yield reconciled;
         return;
@@ -208,7 +319,7 @@ export class A2aAgentCallTransport implements AgentCallTransport {
 
       if (attempt === MAX_SUBSCRIPTION_ATTEMPTS) {
         if (isUnsupportedOperation(lastStreamError)) {
-          throw new Error(
+          throw new A2aProtocolError(
             `A2A task ${taskId} cannot be subscribed and is not terminal`,
             { cause: lastStreamError }
           );
@@ -216,41 +327,79 @@ export class A2aAgentCallTransport implements AgentCallTransport {
         if (lastStreamError !== undefined) {
           throw lastStreamError;
         }
-        throw new Error(
+        throw new A2aProtocolError(
           `A2A task ${taskId} subscription ended while state was ${reconciled.state}`
         );
       }
 
+      this.writeLog("info", "a2a.watch.retry", {
+        ...snapshotLogFields(reconciled),
+        attempt
+      });
       await abortableDelay(RECONCILIATION_DELAY_MS * attempt, options.signal);
     }
   }
 
   async cancelTask(taskId: string): Promise<AgentCallTaskSnapshot> {
-    const client = await this.getClient();
+    const fields = { a2aTaskId: taskId };
+    this.writeLog("info", "a2a.cancel.started", fields);
     try {
-      const task = await client.cancelTask(
-        CancelTaskRequest.fromJSON({ id: taskId })
-      );
-      return snapshotFromTask(task);
-    } catch (error) {
-      if (!isTaskNotCancelable(error)) {
-        throw error;
+      const client = await this.getClient();
+      let snapshot: AgentCallTaskSnapshot;
+      try {
+        const task = await client.cancelTask(
+          CancelTaskRequest.fromJSON({ id: taskId })
+        );
+        snapshot = snapshotFromTask(task);
+      } catch (error) {
+        if (!isTaskNotCancelable(error)) {
+          throw error;
+        }
+        snapshot = await this.getTask(taskId);
       }
-      return this.getTask(taskId);
+      this.writeLog("info", "a2a.cancel.completed", {
+        ...fields,
+        ...snapshotLogFields(snapshot)
+      });
+      return snapshot;
+    } catch (error) {
+      this.writeLog("error", "a2a.cancel.failed", {
+        ...fields,
+        ...errorLogFields(error)
+      });
+      throw error;
     }
   }
 
   private getClient(): Promise<Client> {
     if (this.clientPromise === undefined) {
+      this.clientCreationAttempt += 1;
+      const attempt = this.clientCreationAttempt;
       const pending = this.clientFactory.createFromUrl(this.origin);
       this.clientPromise = pending;
-      void pending.catch(() => {
+      void pending.catch((error: unknown) => {
+        this.writeLog("error", "a2a.client.create_failed", {
+          attempt,
+          ...errorLogFields(error, "network")
+        });
         if (this.clientPromise === pending) {
           this.clientPromise = undefined;
         }
       });
     }
     return this.clientPromise;
+  }
+
+  private writeLog(
+    level: RuntimeLogLevel,
+    message: string,
+    fields: RuntimeLogFields
+  ): void {
+    try {
+      this.logger[level](message, fields);
+    } catch {
+      // Logging must never change A2A transport behavior.
+    }
   }
 
   private async reconcileTask(
@@ -283,9 +432,100 @@ export class A2aAgentCallTransport implements AgentCallTransport {
   }
 }
 
+function snapshotLogFields(snapshot: AgentCallTaskSnapshot): RuntimeLogFields {
+  return {
+    a2aTaskId: snapshot.taskId,
+    contextId: snapshot.contextId,
+    state: snapshot.state,
+    count: snapshot.artifacts.length
+  };
+}
+
+type ErrorCategory = "abort" | "network" | "protocol" | "unknown";
+
+const NETWORK_ERROR_CODES = new Set([
+  "EAI_AGAIN",
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "ENOTFOUND",
+  "ETIMEDOUT"
+]);
+const ABORT_ERROR_CODES = new Set(["ABORT_ERR", "ERR_CANCELED"]);
+
+function errorLogFields(
+  error: unknown,
+  categoryOverride?: ErrorCategory
+): RuntimeLogFields {
+  const errorCode = safeErrorCode(error);
+  return {
+    errorType: safeErrorType(error),
+    errorMessageLength: safeOwnStringLength(error, "message"),
+    errorCategory:
+      categoryOverride ?? classifyErrorCategory(error, errorCode),
+    ...(errorCode === undefined ? {} : { errorCode })
+  };
+}
+
+function classifyErrorCategory(
+  error: unknown,
+  errorCode: string | undefined
+): ErrorCategory {
+  if (errorCode !== undefined && ABORT_ERROR_CODES.has(errorCode)) {
+    return "abort";
+  }
+  if (errorCode !== undefined && NETWORK_ERROR_CODES.has(errorCode)) {
+    return "network";
+  }
+  try {
+    return error instanceof A2aProtocolError ? "protocol" : "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+function safeErrorType(error: unknown): "Error" | "ThrownValue" {
+  try {
+    return error instanceof Error ? "Error" : "ThrownValue";
+  } catch {
+    return "ThrownValue";
+  }
+}
+
+function safeErrorCode(error: unknown): string | undefined {
+  const code = safeOwnDataValue(error, "code");
+  return typeof code === "string" &&
+    (NETWORK_ERROR_CODES.has(code) || ABORT_ERROR_CODES.has(code))
+    ? code
+    : undefined;
+}
+
+function safeOwnStringLength(value: unknown, key: string): number {
+  const candidate = safeOwnDataValue(value, key);
+  return typeof candidate === "string" ? candidate.length : 0;
+}
+
+function safeOwnDataValue(value: unknown, key: string): unknown {
+  if (
+    value === null ||
+    (typeof value !== "object" && typeof value !== "function")
+  ) {
+    return undefined;
+  }
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    return descriptor !== undefined && "value" in descriptor
+      ? descriptor.value
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function requireTask(result: SendMessageResult): Task {
   if (!("status" in result)) {
-    throw new Error(
+    throw new A2aProtocolError(
       "A2A SendMessage returned a Message; AgentCall requires a Task"
     );
   }
@@ -462,7 +702,9 @@ function abortableDelay(
 
 function assertTaskId(expected: string, actual: string): void {
   if (actual !== expected) {
-    throw new Error(`A2A update belongs to task ${actual}, expected ${expected}`);
+    throw new A2aProtocolError(
+      `A2A update belongs to task ${actual}, expected ${expected}`
+    );
   }
 }
 

@@ -1,5 +1,11 @@
 import { randomUUID } from "node:crypto";
 
+import { NoopRuntimeLogger } from "../logging/noop-runtime-logger.js";
+import type {
+  RuntimeLogFields,
+  RuntimeLogLevel,
+  RuntimeLogger
+} from "../logging/types.js";
 import type { AgentCallId, RunId } from "../shared/ids.js";
 import {
   isAgentCallOutcomeState,
@@ -24,6 +30,7 @@ export type AgentCallServiceOptions = {
   transport: AgentCallTransport;
   createId?: () => AgentCallId;
   createMessageId?: () => string;
+  logger?: RuntimeLogger;
   now?: () => Date;
 };
 
@@ -49,6 +56,7 @@ export class AgentCallService
   private readonly transport: AgentCallTransport;
   private readonly createId: () => AgentCallId;
   private readonly createMessageId: () => string;
+  private readonly logger: RuntimeLogger;
   private readonly now: () => Date;
   private readonly recordsByAgentCallId = new Map<AgentCallId, AgentCallRecord>();
   private readonly agentCallIdByTaskId = new Map<string, AgentCallId>();
@@ -82,6 +90,7 @@ export class AgentCallService
     this.transport = options.transport;
     this.createId = options.createId ?? randomUUID;
     this.createMessageId = options.createMessageId ?? randomUUID;
+    this.logger = options.logger ?? new NoopRuntimeLogger();
     this.now = options.now ?? (() => new Date());
   }
 
@@ -133,77 +142,109 @@ export class AgentCallService
     request: AgentCallRequest
   ): Promise<AgentCallReceipt> {
     const agentCallId = this.createId();
-    const capability = await this.transport.discoverCapability(
-      request.skillId,
-      { signal: request.signal }
-    );
-    if (this.closed) {
-      throw new Error("AgentCallService closed during submission");
-    }
-    const submitted = await this.transport.submitTask({
-      messageId: agentCallId,
-      skillId: capability.id,
-      input: request.input,
+    const startedFields: RuntimeLogFields = {
+      sessionId: request.sessionId,
+      runId: request.runId,
+      agentCallId,
+      skillId: request.skillId,
+      executionMode: request.executionMode,
+      inputLength: request.input.length,
       ...(request.contextId === undefined
         ? {}
-        : { contextId: request.contextId }),
-      ...(request.signal === undefined ? {} : { signal: request.signal })
+        : { contextId: request.contextId })
+    };
+    this.writeLog("info", "agent_call.submit.started", startedFields);
+    this.writeLog("debug", "agent_call.submit.started", {
+      ...startedFields,
+      input: request.input
     });
-
-    if (this.closed) {
-      try {
-        await this.transport.cancelTask(submitted.taskId);
-      } catch (error) {
-        this.reportBackgroundError(
-          new Error(
-            `Failed to cancel remote task ${submitted.taskId} accepted during shutdown`,
-            { cause: error }
-          )
-        );
+    try {
+      const capability = await this.transport.discoverCapability(
+        request.skillId,
+        { signal: request.signal }
+      );
+      if (this.closed) {
+        throw new Error("AgentCallService closed during submission");
       }
-      throw new Error("AgentCallService closed during submission");
+      const submitted = await this.transport.submitTask({
+        messageId: agentCallId,
+        skillId: capability.id,
+        input: request.input,
+        ...(request.contextId === undefined
+          ? {}
+          : { contextId: request.contextId }),
+        ...(request.signal === undefined ? {} : { signal: request.signal })
+      });
+
+      if (this.closed) {
+        try {
+          await this.transport.cancelTask(submitted.taskId);
+        } catch (error) {
+          this.reportBackgroundError(
+            new Error(
+              `Failed to cancel remote task ${submitted.taskId} accepted during shutdown`,
+              { cause: error }
+            )
+          );
+        }
+        throw new Error("AgentCallService closed during submission");
+      }
+
+      if (this.agentCallIdByTaskId.has(submitted.taskId)) {
+        throw new Error(`Remote task ${submitted.taskId} is already tracked`);
+      }
+
+      const timestamp = this.now().toISOString();
+      const record: AgentCallRecord = {
+        agentCallId,
+        taskId: submitted.taskId,
+        ...(submitted.contextId === undefined
+          ? {}
+          : { contextId: submitted.contextId }),
+        runId: request.runId,
+        sessionId: request.sessionId,
+        skillId: capability.id,
+        capabilityName: capability.name,
+        input: request.input,
+        executionMode: request.executionMode,
+        state: submitted.state,
+        artifacts: cloneArtifacts(submitted.artifacts),
+        ...(submitted.questions === undefined
+          ? {}
+          : { questions: cloneQuestions(submitted.questions) }),
+        ...(submitted.statusMessage === undefined
+          ? {}
+          : { statusMessage: submitted.statusMessage }),
+        createdAt: timestamp,
+        updatedAt: timestamp
+      };
+
+      this.recordsByAgentCallId.set(agentCallId, record);
+      this.agentCallIdByTaskId.set(submitted.taskId, agentCallId);
+      const acceptedFields = {
+        ...agentCallLogFields(record),
+        ...snapshotCountFields(submitted)
+      };
+      this.writeLog("info", "agent_call.submit.accepted", acceptedFields);
+      this.writeLog("debug", "agent_call.submit.accepted", {
+        ...acceptedFields,
+        snapshot: snapshotForLog(submitted)
+      });
+      this.startWatcher(agentCallId, submitted);
+
+      return {
+        status: "accepted",
+        executionMode: request.executionMode,
+        agentCallId,
+        taskId: submitted.taskId,
+        state: submitted.state
+      };
+    } catch (error) {
+      const failedFields = { ...startedFields, ...errorLogFields(error) };
+      this.writeLog("error", "agent_call.submit.failed", failedFields);
+      this.writeLog("debug", "agent_call.submit.failed", failedFields);
+      throw error;
     }
-
-    if (this.agentCallIdByTaskId.has(submitted.taskId)) {
-      throw new Error(`Remote task ${submitted.taskId} is already tracked`);
-    }
-
-    const timestamp = this.now().toISOString();
-    const record: AgentCallRecord = {
-      agentCallId,
-      taskId: submitted.taskId,
-      ...(submitted.contextId === undefined
-        ? {}
-        : { contextId: submitted.contextId }),
-      runId: request.runId,
-      sessionId: request.sessionId,
-      skillId: capability.id,
-      capabilityName: capability.name,
-      input: request.input,
-      executionMode: request.executionMode,
-      state: submitted.state,
-      artifacts: cloneArtifacts(submitted.artifacts),
-      ...(submitted.questions === undefined
-        ? {}
-        : { questions: cloneQuestions(submitted.questions) }),
-      ...(submitted.statusMessage === undefined
-        ? {}
-        : { statusMessage: submitted.statusMessage }),
-      createdAt: timestamp,
-      updatedAt: timestamp
-    };
-
-    this.recordsByAgentCallId.set(agentCallId, record);
-    this.agentCallIdByTaskId.set(submitted.taskId, agentCallId);
-    this.startWatcher(agentCallId, submitted);
-
-    return {
-      status: "accepted",
-      executionMode: request.executionMode,
-      agentCallId,
-      taskId: submitted.taskId,
-      state: submitted.state
-    };
   }
 
   getByAgentCallId(agentCallId: AgentCallId): AgentCallRecord | undefined {
@@ -300,10 +341,37 @@ export class AgentCallService
     if (activeCancellation) {
       return activeCancellation;
     }
+    const startedFields = agentCallLogFields(record);
+    this.writeLog("info", "agent_call.cancel.started", startedFields);
+    this.writeLog("debug", "agent_call.cancel.started", {
+      ...startedFields,
+      snapshot: snapshotForLog(snapshotFromRecord(record))
+    });
     this.activeContinuationByTaskId.get(record.taskId)?.controller.abort();
-    const operation = Promise.resolve().then(() =>
-      this.performCancel(agentCallId, record.taskId)
-    );
+    const operation = Promise.resolve()
+      .then(() => this.performCancel(agentCallId, record.taskId))
+      .then((canceledRecord) => {
+        const snapshot = snapshotFromRecord(canceledRecord);
+        const completedFields = {
+          ...agentCallLogFields(canceledRecord),
+          ...snapshotCountFields(snapshot)
+        };
+        this.writeLog("info", "agent_call.cancel.completed", completedFields);
+        this.writeLog("debug", "agent_call.cancel.completed", {
+          ...completedFields,
+          snapshot: snapshotForLog(snapshot)
+        });
+        return canceledRecord;
+      })
+      .catch((error: unknown) => {
+        const failedFields = { ...startedFields, ...errorLogFields(error) };
+        this.writeLog("error", "agent_call.cancel.failed", failedFields);
+        this.writeLog("debug", "agent_call.cancel.failed", {
+          ...failedFields,
+          snapshot: snapshotForLog(snapshotFromRecord(record))
+        });
+        throw error;
+      });
     this.activeCancellationByTaskId.set(record.taskId, operation);
     this.activeCancellations.add(operation);
     void operation.then(
@@ -349,6 +417,20 @@ export class AgentCallService
     signal?: AbortSignal
   ): Promise<AgentCallRecord> {
     this.assertOpen();
+    const initialRecord = this.getByTaskId(taskId);
+    const questionIds = Object.keys(answers);
+    const startedFields: RuntimeLogFields = {
+      ...(initialRecord === undefined
+        ? { a2aTaskId: taskId }
+        : agentCallLogFields(initialRecord)),
+      questionIds,
+      count: questionIds.length
+    };
+    this.writeLog("info", "agent_call.continue.started", startedFields);
+    this.writeLog("debug", "agent_call.continue.started", {
+      ...startedFields,
+      answers: answersForLog(answers, initialRecord?.questions)
+    });
     if (this.activeCancellationByTaskId.has(taskId)) {
       return Promise.reject(
         new Error(`Remote task ${taskId} is being canceled`)
@@ -364,14 +446,38 @@ export class AgentCallService
       signal === undefined
         ? controller.signal
         : AbortSignal.any([signal, controller.signal]);
-    const operation = Promise.resolve().then(() =>
-      this.performContinueTask(
-        taskId,
-        answers,
-        continuationSignal,
-        controller.signal
+    const operation = Promise.resolve()
+      .then(() =>
+        this.performContinueTask(
+          taskId,
+          answers,
+          continuationSignal,
+          controller.signal
+        )
       )
-    );
+      .then((record) => {
+        const acceptedFields = {
+          ...agentCallLogFields(record),
+          questionIds,
+          count: questionIds.length
+        };
+        this.writeLog("info", "agent_call.continue.accepted", acceptedFields);
+        this.writeLog("debug", "agent_call.continue.accepted", {
+          ...acceptedFields,
+          answers: answersForLog(answers, initialRecord?.questions),
+          snapshot: snapshotForLog(snapshotFromRecord(record))
+        });
+        return record;
+      })
+      .catch((error: unknown) => {
+        const failedFields = { ...startedFields, ...errorLogFields(error) };
+        this.writeLog("error", "agent_call.continue.failed", failedFields);
+        this.writeLog("debug", "agent_call.continue.failed", {
+          ...failedFields,
+          answers: answersForLog(answers, initialRecord?.questions)
+        });
+        throw error;
+      });
     const activeContinuation = { controller, promise: operation };
     this.activeContinuationByTaskId.set(taskId, activeContinuation);
     void operation.then(
@@ -503,6 +609,17 @@ export class AgentCallService
       return this.closeOperation;
     }
     this.closed = true;
+    this.writeLog("info", "agent_call.service.closing", {
+      count:
+        this.activeSubmissions.size +
+        this.activeWatchers.size +
+        this.activeContinuationByTaskId.size +
+        this.activeCancellations.size,
+      submissionCount: this.activeSubmissions.size,
+      watcherCount: this.activeWatchers.size,
+      continuationCount: this.activeContinuationByTaskId.size,
+      cancellationCount: this.activeCancellations.size
+    });
     this.closeOperation = Promise.resolve().then(() => this.drainClose());
     return this.closeOperation;
   }
@@ -521,6 +638,9 @@ export class AgentCallService
       )
     );
     await this.waitForIdle();
+    this.writeLog("info", "agent_call.service.closed", {
+      count: this.recordsByAgentCallId.size
+    });
   }
 
   private cancelAfterAbortedWait(agentCallId: AgentCallId): void {
@@ -542,6 +662,13 @@ export class AgentCallService
     const controller = new AbortController();
     const promise = Promise.resolve()
       .then(async () => {
+        const startedRecord = this.requireRecord(agentCallId);
+        const startedFields = agentCallLogFields(startedRecord);
+        this.writeLog("info", "agent_call.watcher.started", startedFields);
+        this.writeLog("debug", "agent_call.watcher.started", {
+          ...startedFields,
+          snapshot: snapshotForLog(initial)
+        });
         try {
           if (isAgentCallOutcomeState(initial.state)) {
             await this.applySnapshot(agentCallId, initial);
@@ -574,6 +701,14 @@ export class AgentCallService
             );
           }
         } catch (error) {
+          if (!this.closed && !controller.signal.aborted) {
+            const failedFields = {
+              ...agentCallLogFields(this.requireRecord(agentCallId)),
+              ...errorLogFields(error)
+            };
+            this.writeLog("error", "agent_call.watcher.failed", failedFields);
+            this.writeLog("debug", "agent_call.watcher.failed", failedFields);
+          }
           if (
             isAgentCallOutcomeState(this.requireRecord(agentCallId).state)
           ) {
@@ -596,6 +731,15 @@ export class AgentCallService
             } catch (notificationError) {
               this.reportBackgroundError(notificationError, agentCallId);
             }
+          }
+        } finally {
+          const stoppedRecord = this.getByAgentCallId(agentCallId);
+          if (stoppedRecord !== undefined) {
+            this.writeLog(
+              "info",
+              "agent_call.watcher.stopped",
+              agentCallLogFields(stoppedRecord)
+            );
           }
         }
       });
@@ -648,6 +792,19 @@ export class AgentCallService
     };
     this.recordsByAgentCallId.set(agentCallId, updated);
 
+    if (current.state !== updated.state) {
+      const stateFields = {
+        ...agentCallLogFields(updated),
+        previousState: current.state,
+        ...snapshotCountFields(snapshot)
+      };
+      this.writeLog("info", "agent_call.state.changed", stateFields);
+      this.writeLog("debug", "agent_call.state.changed", {
+        ...stateFields,
+        snapshot: snapshotForLog(snapshot)
+      });
+    }
+
     if (snapshot.state === "working") {
       this.inputRequiredHandled.delete(agentCallId);
     } else if (
@@ -655,6 +812,19 @@ export class AgentCallService
       !this.inputRequiredHandled.has(agentCallId)
     ) {
       this.inputRequiredHandled.add(agentCallId);
+      const questions = updated.questions ?? [];
+      const pausedFields = {
+        ...agentCallLogFields(updated),
+        questionIds: questions.map(({ id }) => id),
+        questionCount: questions.length,
+        statusMessageLength: updated.statusMessage?.length ?? 0
+      };
+      this.writeLog("info", "agent_call.paused", pausedFields);
+      this.writeLog("debug", "agent_call.paused", {
+        ...pausedFields,
+        questions: questionsForLog(questions),
+        snapshot: snapshotForLog(snapshot)
+      });
       if (
         updated.executionMode === "async" ||
         this.notifyOutcomesAfterContinuation.has(agentCallId)
@@ -677,6 +847,17 @@ export class AgentCallService
     }
 
     this.terminalHandled.add(agentCallId);
+    const terminalFields = {
+      ...agentCallLogFields(updated),
+      artifactCount: updated.artifacts.length,
+      statusMessageLength: updated.statusMessage?.length ?? 0
+    };
+    this.writeLog("info", "agent_call.terminal", terminalFields);
+    this.writeLog("debug", "agent_call.terminal", {
+      ...terminalFields,
+      artifacts: cloneArtifacts(updated.artifacts),
+      snapshot: snapshotForLog(snapshot)
+    });
     const notifyAfterContinuation =
       this.notifyOutcomesAfterContinuation.delete(agentCallId);
     if (updated.executionMode === "blocking" && !notifyAfterContinuation) {
@@ -730,6 +911,18 @@ export class AgentCallService
     }
   }
 
+  private writeLog(
+    level: RuntimeLogLevel,
+    message: string,
+    fields?: RuntimeLogFields
+  ): void {
+    try {
+      this.logger[level](message, fields);
+    } catch {
+      // Runtime logging must never change AgentCall lifecycle semantics.
+    }
+  }
+
   private reportBackgroundError(
     error: unknown,
     agentCallId?: AgentCallId
@@ -740,6 +933,12 @@ export class AgentCallService
       agentCallId === undefined
         ? undefined
         : this.getByAgentCallId(agentCallId);
+    const fields = {
+      ...(record === undefined ? {} : agentCallLogFields(record)),
+      ...errorLogFields(normalized)
+    };
+    this.writeLog("error", "agent_call.background_error", fields);
+    this.writeLog("debug", "agent_call.background_error", fields);
     for (const listener of this.backgroundErrorListeners) {
       try {
         void Promise.resolve(listener(normalized, record)).catch(() => undefined);
@@ -773,6 +972,116 @@ function cloneArtifacts(
   artifacts: readonly AgentCallRecord["artifacts"][number][]
 ): AgentCallRecord["artifacts"] {
   return artifacts.map((artifact) => ({ ...artifact }));
+}
+
+const LOG_REDACTED_VALUE = "[Redacted]";
+
+function agentCallLogFields(record: AgentCallRecord): RuntimeLogFields {
+  return {
+    sessionId: record.sessionId,
+    runId: record.runId,
+    agentCallId: record.agentCallId,
+    a2aTaskId: record.taskId,
+    ...(record.contextId === undefined ? {} : { contextId: record.contextId }),
+    skillId: record.skillId,
+    state: record.state,
+    executionMode: record.executionMode
+  };
+}
+
+function snapshotCountFields(
+  snapshot: AgentCallTaskSnapshot
+): RuntimeLogFields {
+  return {
+    artifactCount: snapshot.artifacts.length,
+    questionCount: snapshot.questions?.length ?? 0,
+    statusMessageLength: snapshot.statusMessage?.length ?? 0
+  };
+}
+
+function errorLogFields(error: unknown): RuntimeLogFields {
+  return {
+    errorType: error instanceof Error ? error.name : typeof error,
+    errorMessageLength: errorMessage(error).length
+  };
+}
+
+function questionsForLog(
+  questions: NonNullable<AgentCallRecord["questions"]>
+): unknown[] {
+  return questions.map((question) =>
+    question.isSecret
+      ? {
+          id: question.id,
+          header: LOG_REDACTED_VALUE,
+          question: LOG_REDACTED_VALUE,
+          isOther: question.isOther,
+          isSecret: true,
+          options:
+            question.options === null
+              ? null
+              : question.options.map(() => ({
+                  label: LOG_REDACTED_VALUE,
+                  description: LOG_REDACTED_VALUE
+                }))
+        }
+      : {
+          ...question,
+          options:
+            question.options === null
+              ? null
+              : question.options.map((option) => ({ ...option }))
+        }
+  );
+}
+
+function answersForLog(
+  answers: AgentCallInputAnswers,
+  questions: AgentCallRecord["questions"]
+): AgentCallInputAnswers {
+  const ordinaryQuestionIds = new Set(
+    (questions ?? [])
+      .filter((question) => !question.isSecret)
+      .map((question) => question.id)
+  );
+  return Object.fromEntries(
+    Object.entries(answers).map(([questionId, values]) => [
+      questionId,
+      ordinaryQuestionIds.has(questionId)
+        ? [...values]
+        : values.map(() => LOG_REDACTED_VALUE)
+    ])
+  );
+}
+
+function snapshotForLog(snapshot: AgentCallTaskSnapshot): unknown {
+  const containsSecretQuestion =
+    snapshot.questions?.some((question) => question.isSecret) === true;
+  return {
+    ...snapshot,
+    artifacts: cloneArtifacts(snapshot.artifacts),
+    ...(snapshot.questions === undefined
+      ? {}
+      : { questions: questionsForLog(snapshot.questions) }),
+    ...(containsSecretQuestion && snapshot.statusMessage !== undefined
+      ? { statusMessage: LOG_REDACTED_VALUE }
+      : {})
+  };
+}
+
+function snapshotFromRecord(record: AgentCallRecord): AgentCallTaskSnapshot {
+  return {
+    taskId: record.taskId,
+    ...(record.contextId === undefined ? {} : { contextId: record.contextId }),
+    state: record.state,
+    artifacts: cloneArtifacts(record.artifacts),
+    ...(record.questions === undefined
+      ? {}
+      : { questions: cloneQuestions(record.questions) }),
+    ...(record.statusMessage === undefined
+      ? {}
+      : { statusMessage: record.statusMessage })
+  };
 }
 
 function cloneQuestions(

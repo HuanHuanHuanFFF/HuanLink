@@ -15,7 +15,14 @@ import {
   type ExecutionEventBus,
   type RequestContext
 } from "@a2a-js/sdk/server";
-import type { AgentCallTaskSnapshot } from "@huanlink/core";
+import {
+  AgentCallService,
+  type AgentCallTaskState,
+  type AgentCallTaskSnapshot,
+  type RuntimeLogFields,
+  type RuntimeLogLevel,
+  type RuntimeLogger
+} from "@huanlink/core";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import {
@@ -25,6 +32,51 @@ import {
 import { A2aAgentCallTransport } from "../src/index.js";
 
 const servers: RunningAdapterServer[] = [];
+
+type RecordedLogEntry = {
+  level: RuntimeLogLevel;
+  message: string;
+  fields: RuntimeLogFields;
+};
+
+class RecordingLogger implements RuntimeLogger {
+  constructor(
+    readonly entries: RecordedLogEntry[] = [],
+    private readonly bindings: RuntimeLogFields = {}
+  ) {}
+
+  debug(message: string, fields?: RuntimeLogFields): void {
+    this.record("debug", message, fields);
+  }
+
+  info(message: string, fields?: RuntimeLogFields): void {
+    this.record("info", message, fields);
+  }
+
+  warn(message: string, fields?: RuntimeLogFields): void {
+    this.record("warn", message, fields);
+  }
+
+  error(message: string, fields?: RuntimeLogFields): void {
+    this.record("error", message, fields);
+  }
+
+  child(bindings: RuntimeLogFields): RuntimeLogger {
+    return new RecordingLogger(this.entries, { ...this.bindings, ...bindings });
+  }
+
+  private record(
+    level: RuntimeLogLevel,
+    message: string,
+    fields: RuntimeLogFields = {}
+  ): void {
+    this.entries.push({
+      level,
+      message,
+      fields: { ...this.bindings, ...fields }
+    });
+  }
+}
 
 function deferred() {
   let resolve!: () => void;
@@ -262,10 +314,10 @@ class PauseThenContinueExecutor implements AgentExecutor {
   }
 }
 
-async function startTransport(executor: AgentExecutor) {
+async function startTransport(executor: AgentExecutor, logger?: RuntimeLogger) {
   const server = await startAdapterServer({ executor, port: 0 });
   servers.push(server);
-  return new A2aAgentCallTransport({ origin: server.origin });
+  return new A2aAgentCallTransport({ origin: server.origin, logger });
 }
 
 afterEach(async () => {
@@ -276,7 +328,12 @@ afterEach(async () => {
 describe("A2aAgentCallTransport", () => {
   test("discovers the Codex skill and observes a standard Task to its final Artifact", async () => {
     const completion = deferred();
-    const transport = await startTransport(new GateExecutor(completion.promise));
+    const logger = new RecordingLogger();
+    const input = "make a focused code change";
+    const transport = await startTransport(
+      new GateExecutor(completion.promise),
+      logger
+    );
 
     const capability = await transport.discoverCapability("codex-code-task");
     expect(capability).toMatchObject({
@@ -287,7 +344,7 @@ describe("A2aAgentCallTransport", () => {
     const submitted = await transport.submitTask({
       messageId: "message-phase3-01",
       skillId: capability.id,
-      input: "make a focused code change",
+      input,
       contextId: "session-phase3-01"
     });
     expect(submitted.taskId).not.toBe("");
@@ -322,6 +379,163 @@ describe("A2aAgentCallTransport", () => {
         }
       ]
     });
+    expect(logger.entries.map(({ message }) => message).sort()).toEqual(
+      expect.arrayContaining([
+        "a2a.discover.started",
+        "a2a.discover.completed",
+        "a2a.submit.started",
+        "a2a.submit.completed",
+        "a2a.watch.started",
+        "a2a.watch.snapshot",
+        "a2a.watch.reconciled",
+        "a2a.watch.ended"
+      ])
+    );
+    const allowedFields = new Set([
+      "messageId",
+      "contextId",
+      "skillId",
+      "a2aTaskId",
+      "state",
+      "attempt",
+      "count",
+      "questionIds"
+    ]);
+    for (const entry of logger.entries) {
+      expect(Object.keys(entry.fields).every((key) => allowedFields.has(key))).toBe(true);
+    }
+    const serializedLogs = JSON.stringify(logger.entries);
+    expect(serializedLogs).not.toContain(input);
+    expect(serializedLogs).not.toContain("changed src/example.ts");
+    expect(serializedLogs).not.toContain("agentCallId");
+  });
+
+  test.each(
+    [
+      {
+        name: "input-required",
+        remoteState: TaskState.TASK_STATE_INPUT_REQUIRED,
+        expectedState: "input-required"
+      },
+      {
+        name: "terminal",
+        remoteState: TaskState.TASK_STATE_COMPLETED,
+        expectedState: "completed"
+      }
+    ] satisfies Array<{
+      name: string;
+      remoteState: TaskState;
+      expectedState: AgentCallTaskState;
+    }>
+  )(
+    "logs watch.ended when AgentCallService stops consuming after a $name snapshot",
+    async ({ remoteState, expectedState }) => {
+      const logger = new RecordingLogger();
+      const outcome = remoteTask(remoteState);
+      const client = {
+        protocolVersion: A2A_PROTOCOL_VERSION,
+        getAgentCard: vi.fn(async () => testAgentCard()),
+        sendMessage: vi.fn(async () =>
+          remoteTask(TaskState.TASK_STATE_SUBMITTED)
+        ),
+        async *resubscribeTask() {
+          yield { payload: { $case: "task", value: outcome } };
+        },
+        getTask: vi.fn(async () => outcome)
+      } as unknown as Client;
+      vi.spyOn(ClientFactory.prototype, "createFromUrl").mockResolvedValue(client);
+      const transport = new A2aAgentCallTransport({
+        origin: "http://127.0.0.1:1",
+        logger
+      });
+      const service = new AgentCallService({
+        transport,
+        createId: () => `agent-call-consumer-${expectedState}`
+      });
+
+      const receipt = await service.submit({
+        runId: "run-consumer-return",
+        sessionId: "session-consumer-return",
+        skillId: "codex-code-task",
+        input: "exercise the real AgentCallService consumer",
+        executionMode: "async"
+      });
+      await service.waitForIdle();
+      await service.close();
+
+      expect(service.getByAgentCallId(receipt.agentCallId)?.state).toBe(
+        expectedState
+      );
+      expect(logger.entries).toContainEqual(
+        expect.objectContaining({
+          level: "info",
+          message: "a2a.watch.ended",
+          fields: { a2aTaskId: "a2a-task-lagging" }
+        })
+      );
+      expect(logger.entries.map(({ message }) => message)).not.toContain(
+        "a2a.watch.failed"
+      );
+    }
+  );
+
+  test("logs watch.aborted instead of watch.failed when AgentCallService closes", async () => {
+    const logger = new RecordingLogger();
+    const watchStarted = deferred();
+    const abortError = new Error("subscription aborted by close");
+    const client = {
+      protocolVersion: A2A_PROTOCOL_VERSION,
+      getAgentCard: vi.fn(async () => testAgentCard()),
+      sendMessage: vi.fn(async () =>
+        remoteTask(TaskState.TASK_STATE_SUBMITTED)
+      ),
+      async *resubscribeTask(
+        _request: unknown,
+        options: { signal: AbortSignal }
+      ) {
+        watchStarted.resolve();
+        await new Promise<never>((_resolve, reject) => {
+          options.signal.addEventListener(
+            "abort",
+            () => reject(abortError),
+            { once: true }
+          );
+        });
+      }
+    } as unknown as Client;
+    vi.spyOn(ClientFactory.prototype, "createFromUrl").mockResolvedValue(client);
+    const transport = new A2aAgentCallTransport({
+      origin: "http://127.0.0.1:1",
+      logger
+    });
+    const service = new AgentCallService({
+      transport,
+      createId: () => "agent-call-close-abort"
+    });
+
+    await service.submit({
+      runId: "run-close-abort",
+      sessionId: "session-close-abort",
+      skillId: "codex-code-task",
+      input: "close while the remote watch is pending",
+      executionMode: "async"
+    });
+    await watchStarted.promise;
+    await service.close();
+
+    expect(logger.entries).toContainEqual({
+      level: "debug",
+      message: "a2a.watch.aborted",
+      fields: expect.objectContaining({
+        a2aTaskId: "a2a-task-lagging",
+        errorCategory: "abort",
+        errorType: "Error",
+        errorMessageLength: abortError.message.length
+      })
+    });
+    expect(logger.entries.map(({ message }) => message)).not.toContain(
+      "a2a.watch.failed"
+    );
   });
 
   test("reconciles a task that completed before the subscription began", async () => {
@@ -347,14 +561,30 @@ describe("A2aAgentCallTransport", () => {
   });
 
   test("rejects a capability that is absent from the discovered Agent Card", async () => {
-    const transport = await startTransport(new GateExecutor(Promise.resolve()));
+    const logger = new RecordingLogger();
+    const transport = await startTransport(
+      new GateExecutor(Promise.resolve()),
+      logger
+    );
 
     await expect(
       transport.discoverCapability("not-a-real-skill")
     ).rejects.toThrow(/not-a-real-skill/);
+    expect(logger.entries).toContainEqual({
+      level: "error",
+      message: "a2a.discover.failed",
+      fields: expect.objectContaining({
+        skillId: "not-a-real-skill",
+        errorCategory: "protocol",
+        errorType: "Error",
+        errorMessageLength:
+          "A2A Agent Card does not declare skill not-a-real-skill".length
+      })
+    });
   });
 
   test("keeps reconciling when a subscription ends before the terminal snapshot is visible", async () => {
+    const logger = new RecordingLogger();
     const getTask = vi
       .fn<() => Promise<Task>>()
       .mockResolvedValueOnce(remoteTask(TaskState.TASK_STATE_WORKING))
@@ -365,7 +595,10 @@ describe("A2aAgentCallTransport", () => {
       getTask
     } as unknown as Client;
     vi.spyOn(ClientFactory.prototype, "createFromUrl").mockResolvedValue(client);
-    const transport = new A2aAgentCallTransport({ origin: "http://127.0.0.1:1" });
+    const transport = new A2aAgentCallTransport({
+      origin: "http://127.0.0.1:1",
+      logger
+    });
 
     const snapshots = [];
     for await (const snapshot of transport.watchTask("a2a-task-lagging", {
@@ -381,6 +614,23 @@ describe("A2aAgentCallTransport", () => {
         state: "completed"
       })
     ]);
+    expect(logger.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          message: "a2a.watch.retry",
+          fields: expect.objectContaining({
+            a2aTaskId: "a2a-task-lagging",
+            state: "working",
+            attempt: 1
+          })
+        }),
+        expect.objectContaining({
+          message: "a2a.watch.reconciled",
+          fields: expect.objectContaining({ state: "completed", attempt: 2 })
+        }),
+        expect.objectContaining({ message: "a2a.watch.ended" })
+      ])
+    );
   });
 
   test("preserves structured questions from an input-required status message", async () => {
@@ -521,6 +771,7 @@ describe("A2aAgentCallTransport", () => {
   });
 
   test("continues an existing task with a standard A2A user Message containing structured answers", async () => {
+    const logger = new RecordingLogger();
     const sendMessage = vi.fn(
       async (
         _request: SendMessageRequest,
@@ -536,7 +787,10 @@ describe("A2aAgentCallTransport", () => {
       sendMessage
     } as unknown as Client;
     vi.spyOn(ClientFactory.prototype, "createFromUrl").mockResolvedValue(client);
-    const transport = new A2aAgentCallTransport({ origin: "http://127.0.0.1:1" });
+    const transport = new A2aAgentCallTransport({
+      origin: "http://127.0.0.1:1",
+      logger
+    });
     const controller = new AbortController();
 
     await expect(
@@ -569,18 +823,142 @@ describe("A2aAgentCallTransport", () => {
     expect(sendMessage.mock.calls[0]?.[1]).toEqual({
       signal: controller.signal
     });
+    expect(logger.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          level: "info",
+          message: "a2a.continue.started",
+          fields: {
+            messageId: "message-input-response",
+            a2aTaskId: "a2a-task-input",
+            contextId: "a2a-context-input",
+            questionIds: ["scope"],
+            count: 1
+          }
+        }),
+        expect.objectContaining({
+          level: "info",
+          message: "a2a.continue.completed",
+          fields: expect.objectContaining({
+            a2aTaskId: "a2a-task-input",
+            state: "working"
+          })
+        })
+      ])
+    );
+    expect(JSON.stringify(logger.entries)).not.toContain("Adapter only");
+  });
+
+  test("logs failed A2A operations without raw SDK payloads or answers", async () => {
+    const logger = new RecordingLogger();
+    const sdkError = Object.assign(
+      new Error("raw SDK response must stay private"),
+      { code: "PRIVATE_SDK_CODE" }
+    );
+    const input = "private submit input";
+    const answer = "private continuation answer";
+    const cancelTask = vi
+      .fn()
+      .mockResolvedValueOnce(remoteTask(TaskState.TASK_STATE_CANCELED))
+      .mockRejectedValueOnce(sdkError);
+    const client = {
+      protocolVersion: A2A_PROTOCOL_VERSION,
+      getAgentCard: vi.fn(async () => testAgentCard()),
+      sendMessage: vi.fn(async () => {
+        throw sdkError;
+      }),
+      async *resubscribeTask() {
+        throw sdkError;
+      },
+      getTask: vi.fn(async () => {
+        throw sdkError;
+      }),
+      cancelTask
+    } as unknown as Client;
+    vi.spyOn(ClientFactory.prototype, "createFromUrl").mockResolvedValue(client);
+    const transport = new A2aAgentCallTransport({
+      origin: "http://127.0.0.1:1",
+      logger
+    });
+
+    await expect(
+      transport.submitTask({
+        messageId: "message-failed-submit",
+        skillId: "codex-code-task",
+        input
+      })
+    ).rejects.toBe(sdkError);
+    await expect(
+      transport.continueTask({
+        messageId: "message-failed-continuation",
+        taskId: "a2a-task-lagging",
+        contextId: "a2a-context-lagging",
+        answers: { passphrase: [answer] }
+      })
+    ).rejects.toBe(sdkError);
+    await expect(
+      (async () => {
+        for await (const _snapshot of transport.watchTask("a2a-task-lagging", {
+          signal: new AbortController().signal
+        })) {
+          // The mocked stream never yields.
+        }
+      })()
+    ).rejects.toBe(sdkError);
+    await expect(transport.cancelTask("a2a-task-lagging")).resolves.toMatchObject({
+      state: "canceled"
+    });
+    await expect(transport.cancelTask("a2a-task-lagging")).rejects.toBe(sdkError);
+
+    expect(logger.entries.map(({ message }) => message)).toEqual(
+      expect.arrayContaining([
+        "a2a.submit.failed",
+        "a2a.continue.failed",
+        "a2a.watch.failed",
+        "a2a.cancel.completed",
+        "a2a.cancel.failed"
+      ])
+    );
+    const failedEntries = logger.entries.filter(({ message }) =>
+      message.endsWith(".failed")
+    );
+    expect(failedEntries).toHaveLength(4);
+    for (const entry of failedEntries) {
+      expect(entry.fields).toEqual(
+        expect.objectContaining({
+          errorCategory: "unknown",
+          errorType: "Error",
+          errorMessageLength: sdkError.message.length
+        })
+      );
+      expect(entry.fields).not.toHaveProperty("errorCode");
+    }
+    const serializedLogs = JSON.stringify(logger.entries);
+    expect(serializedLogs).not.toContain(input);
+    expect(serializedLogs).not.toContain(answer);
+    expect(serializedLogs).not.toContain(sdkError.message);
+    expect(serializedLogs).not.toContain(sdkError.code);
+    expect(serializedLogs).not.toContain("agentCallId");
   });
 
   test("retries Agent Card discovery after an initial connection failure", async () => {
+    const logger = new RecordingLogger();
+    const connectionError = Object.assign(
+      new Error("adapter is still starting"),
+      { code: "ECONNREFUSED" }
+    );
     const client = {
       protocolVersion: A2A_PROTOCOL_VERSION,
       getAgentCard: vi.fn(async () => testAgentCard())
     } as unknown as Client;
     const createFromUrl = vi
       .spyOn(ClientFactory.prototype, "createFromUrl")
-      .mockRejectedValueOnce(new Error("adapter is still starting"))
+      .mockRejectedValueOnce(connectionError)
       .mockResolvedValueOnce(client);
-    const transport = new A2aAgentCallTransport({ origin: "http://127.0.0.1:1" });
+    const transport = new A2aAgentCallTransport({
+      origin: "http://127.0.0.1:1",
+      logger
+    });
 
     await expect(transport.discoverCapability("codex-code-task")).rejects.toThrow(
       /still starting/
@@ -589,6 +967,38 @@ describe("A2aAgentCallTransport", () => {
       transport.discoverCapability("codex-code-task")
     ).resolves.toMatchObject({ id: "codex-code-task" });
     expect(createFromUrl).toHaveBeenCalledTimes(2);
+    expect(logger.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          level: "error",
+          message: "a2a.client.create_failed",
+          fields: {
+            attempt: 1,
+            errorCategory: "network",
+            errorType: "Error",
+            errorMessageLength: connectionError.message.length,
+            errorCode: "ECONNREFUSED"
+          }
+        }),
+        expect.objectContaining({
+          level: "error",
+          message: "a2a.discover.failed",
+          fields: {
+            skillId: "codex-code-task",
+            errorCategory: "network",
+            errorType: "Error",
+            errorMessageLength: connectionError.message.length,
+            errorCode: "ECONNREFUSED"
+          }
+        }),
+        expect.objectContaining({
+          level: "info",
+          message: "a2a.discover.completed",
+          fields: { skillId: "codex-code-task" }
+        })
+      ])
+    );
+    expect(JSON.stringify(logger.entries)).not.toContain("still starting");
   });
 });
 
