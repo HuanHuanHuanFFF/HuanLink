@@ -17,6 +17,7 @@ export type PinoRuntimeLoggerOptions = {
   readonly level?: RuntimeLogLevel;
   readonly base?: RuntimeLogFields | null;
   readonly redact?: RuntimeLogRedact;
+  readonly redactValues?: readonly string[];
 };
 
 export type PinoRuntimeLoggerInput = PinoRuntimeLoggerOptions & {
@@ -34,4 +35,11 @@ export interface RuntimeLogger {
   warn(message: string, fields?: RuntimeLogFields): void;
   error(message: string, fields?: RuntimeLogFields): void;
   child(bindings: RuntimeLogFields): RuntimeLogger;
+}
+
+// FlushableRuntimeLogger 由拥有异步 sink 生命周期的 logger 实现。
+export interface FlushableRuntimeLogger extends RuntimeLogger {
+  child(bindings: RuntimeLogFields): FlushableRuntimeLogger;
+  flush(): Promise<void>;
+  close(): Promise<void>;
 }
