@@ -1,8 +1,4 @@
-import {
-  resolveRuntimeConfig,
-  type RuntimeConfig,
-  type RuntimeLogLevel
-} from "@huanlink/core";
+import type { RuntimeLogLevel } from "@huanlink/core";
 import { z } from "zod";
 
 const RUNTIME_LOG_LEVELS = [
@@ -11,17 +7,6 @@ const RUNTIME_LOG_LEVELS = [
   "warn",
   "error"
 ] as const satisfies readonly RuntimeLogLevel[];
-
-const runtimeConfigEnvSchema = z.object({
-  HUANLINK_EVENT_LOG_BASE_DIR: z.string().trim().min(1).optional(),
-  HUANLINK_EVENT_LOG_NEXT_SEQ_CACHE_SIZE: z.coerce
-    .number()
-    .int()
-    .positive()
-    .optional(),
-  HUANLINK_AGENT_DEFAULT_MAX_STEPS: z.coerce.number().int().positive().optional(),
-  HUANLINK_LOG_LEVEL: z.enum(RUNTIME_LOG_LEVELS).optional()
-});
 
 const codexA2aRuntimeConfigEnvSchema = z.object({
   HUANLINK_CODEX_A2A_ORIGIN: z
@@ -130,39 +115,6 @@ export type Phase4QqRuntimeConfig = {
     level: RuntimeLogLevel;
   };
 };
-
-// 启动时一次性读取环境变量，并映射成 core 可消费的 RuntimeConfig。
-export function loadRuntimeConfigFromEnv(input: {
-  envFilePath?: string;
-} = {}): RuntimeConfig {
-  loadEnvFile(input.envFilePath);
-
-  const parsed = runtimeConfigEnvSchema.safeParse({
-    HUANLINK_EVENT_LOG_BASE_DIR: process.env.HUANLINK_EVENT_LOG_BASE_DIR,
-    HUANLINK_EVENT_LOG_NEXT_SEQ_CACHE_SIZE:
-      process.env.HUANLINK_EVENT_LOG_NEXT_SEQ_CACHE_SIZE,
-    HUANLINK_AGENT_DEFAULT_MAX_STEPS:
-      process.env.HUANLINK_AGENT_DEFAULT_MAX_STEPS,
-    HUANLINK_LOG_LEVEL: process.env.HUANLINK_LOG_LEVEL
-  });
-
-  if (!parsed.success) {
-    throw new Error(formatEnvValidationError(parsed.error));
-  }
-
-  return resolveRuntimeConfig({
-    eventLog: {
-      baseDir: parsed.data.HUANLINK_EVENT_LOG_BASE_DIR,
-      nextSeqCacheSize: parsed.data.HUANLINK_EVENT_LOG_NEXT_SEQ_CACHE_SIZE
-    },
-    agent: {
-      defaultMaxSteps: parsed.data.HUANLINK_AGENT_DEFAULT_MAX_STEPS
-    },
-    logging: {
-      level: parsed.data.HUANLINK_LOG_LEVEL
-    }
-  });
-}
 
 export function loadCodexA2aRuntimeConfigFromEnv(input: {
   envFilePath?: string;

@@ -1,5 +1,4 @@
 export {
-  loadRuntimeConfigFromEnv,
   loadCodexA2aRuntimeConfigFromEnv,
   loadPhase4QqRuntimeConfigFromEnv,
   type CodexA2aRuntimeConfig,
