@@ -119,12 +119,19 @@ export class ToolGateway {
                 `Tool execution failed: ${error instanceof Error ? error.message : String(error)}`
             );
 
-            const terminalEvent = await this.emit(input, "tool.failed", {
-                result,
-                toolCall: input.toolCall
-            });
+            try {
+                const terminalEvent = await this.emit(input, "tool.failed", {
+                    result,
+                    toolCall: input.toolCall
+                });
 
-            return {result, terminalEvent};
+                return {result, terminalEvent};
+            } catch (emitError) {
+                throw new AggregateError(
+                    [error, emitError],
+                    `Tool "${input.toolCall.name}" failed and the tool.failed event could not be recorded`
+                );
+            }
         }
     }
 

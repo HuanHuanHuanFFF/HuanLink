@@ -161,16 +161,42 @@ export class AgentLoop {
                         ? error
                         : new AgentRunCancelledError();
 
-                await this.emit(input, "run.cancelled", {
-                    reason: cancelledError.message
-                });
+                await this.recordTerminalEvent(
+                    input,
+                    "run.cancelled",
+                    {reason: cancelledError.message},
+                    cancelledError
+                );
                 throw cancelledError;
             }
 
-            await this.emit(input, "run.failed", {
-                error: error instanceof Error ? error.message : String(error)
-            });
+            await this.recordTerminalEvent(
+                input,
+                "run.failed",
+                {error: error instanceof Error ? error.message : String(error)},
+                error
+            );
             throw error;
+        }
+    }
+
+    // 记录 run 的终态事件；若事件写入本身失败，则把原始错误和写入错误
+    // 一并抛出，避免根因被日志写入失败静默覆盖。
+    private async recordTerminalEvent<
+        Type extends "run.cancelled" | "run.failed"
+    >(
+        input: AgentRunInput,
+        type: Type,
+        data: AgentEventDataByType[Type],
+        primaryError: unknown
+    ): Promise<void> {
+        try {
+            await this.emit(input, type, data);
+        } catch (emitError) {
+            throw new AggregateError(
+                [primaryError, emitError],
+                `Agent run failed and the ${type} event could not be recorded`
+            );
         }
     }
 

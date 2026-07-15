@@ -4,6 +4,7 @@ import { describe, expect, test } from "vitest";
 
 import {
   AgentLoop,
+  AgentRunCancelledError,
   AllowPolicyEngine,
   FakeModelClient,
   getDefaultRuntimeConfig,
@@ -81,6 +82,23 @@ class AbortAfterEventLog extends InMemoryEventLog {
     }
 
     return completed;
+  }
+}
+
+class ThrowOnEventTypeLog extends InMemoryEventLog {
+  constructor(
+    private readonly failingType: string,
+    private readonly failure: Error
+  ) {
+    super();
+  }
+
+  override append(event: AgentEventDraft): AgentEvent {
+    if (event.type === this.failingType) {
+      throw this.failure;
+    }
+
+    return super.append(event);
   }
 }
 
@@ -1062,5 +1080,66 @@ describe("mock agent run", () => {
       "context.built",
       "run.cancelled"
     ]);
+  });
+
+  test("surfaces both the run error and the run.failed write error instead of masking the root cause", async () => {
+    const modelError = new Error("model boom");
+    const writeError = new Error("event log offline");
+    const eventLog = new ThrowOnEventTypeLog("run.failed", writeError);
+    const modelClient = new ScriptedModelClient([
+      () => {
+        throw modelError;
+      }
+    ]);
+    const loop = createLoop({ eventLog, modelClient });
+
+    const error = await loop
+      .run({
+        runId: "run_failed_write_error_01",
+        sessionId: "session_failed_write_error_01",
+        userMessage: "Trigger a masked failure"
+      })
+      .then(
+        () => {
+          throw new Error("run should have rejected");
+        },
+        (rejection: unknown) => rejection
+      );
+
+    expect(error).toBeInstanceOf(AggregateError);
+    expect((error as AggregateError).errors).toEqual([modelError, writeError]);
+  });
+
+  test("surfaces both the cancellation and the run.cancelled write error instead of masking it", async () => {
+    const writeError = new Error("event log offline");
+    const eventLog = new ThrowOnEventTypeLog("run.cancelled", writeError);
+    const modelClient = new ScriptedModelClient([
+      () => {
+        throw new Error("model should not be called after cancellation");
+      }
+    ]);
+    const loop = createLoop({ eventLog, modelClient });
+    const abortController = new AbortController();
+    abortController.abort();
+
+    const error = await loop
+      .run({
+        runId: "run_cancelled_write_error_01",
+        sessionId: "session_cancelled_write_error_01",
+        userMessage: "Cancel while the event log is offline",
+        signal: abortController.signal
+      })
+      .then(
+        () => {
+          throw new Error("run should have rejected");
+        },
+        (rejection: unknown) => rejection
+      );
+
+    expect(error).toBeInstanceOf(AggregateError);
+    const aggregate = error as AggregateError;
+    expect(aggregate.errors[0]).toBeInstanceOf(AgentRunCancelledError);
+    expect(aggregate.errors[1]).toBe(writeError);
+    expect(modelClient.calls).toHaveLength(0);
   });
 });
