@@ -1,427 +1,370 @@
-// 验证最小 replay reducer 和 reader 能从事件流恢复 RunView。
-import {describe, expect, test} from "vitest";
+// 验证 replay 只折叠 HuanLink 外层编排事件。
+import { describe, expect, test } from "vitest";
 
 import {
-    AgentLoop,
-    AllowPolicyEngine,
-    EventLogRunViewReader,
-    InMemoryEventLog,
-    ToolGateway,
-    createRunView,
-    echoTool
+  EventLogRunViewReader,
+  InMemoryEventLog,
+  createRunView
 } from "../src/index.js";
-import type {
-    AgentEventDraft,
-    ModelClient,
-    ModelMessage,
-    ModelResponse,
-    Tool
-} from "../src/index.js";
+import type { AgentEvent, AgentEventDraft } from "../src/index.js";
 
-// 用脚本化响应驱动 replay 测试里的最小 model 行为。
-class ScriptedModelClient implements ModelClient {
-    constructor(
-        private readonly responses: ModelResponse[]
-    ) {}
-
-    // 按预设顺序返回下一个模型响应。
-    async complete(): Promise<ModelResponse> {
-        const response = this.responses.shift();
-
-        if (!response) {
-            throw new Error("No scripted model response available");
-        }
-
-        return response;
-    }
-}
-
-// 复用现有测试模式，组装最小 AgentLoop。
-function createLoop(input: {
-    eventLog: InMemoryEventLog;
-    modelClient: ModelClient;
-    tools?: Tool[];
-}): AgentLoop {
-    const toolGateway = new ToolGateway({
-        eventWriter: input.eventLog,
-        policyEngine: new AllowPolicyEngine(),
-        tools: input.tools ?? [echoTool]
-    });
-
-    return new AgentLoop({
-        eventWriter: input.eventLog,
-        modelClient: input.modelClient,
-        toolGateway
-    });
-}
-
-// 把 RunView 序列化成稳定字符串，供测试在内存里收集断言。
-function formatRunView(label: string, view: unknown): string {
-    return `${label}\n${JSON.stringify(view, null, 2)}`;
-}
-
-// 向内存事件日志追加一组最小测试事件。
 function appendEvents(
-    eventLog: InMemoryEventLog,
-    events: AgentEventDraft[]
+  eventLog: InMemoryEventLog,
+  events: AgentEventDraft[]
 ): void {
-    for (const event of events) {
-        eventLog.append(event);
-    }
+  for (const event of events) {
+    eventLog.append(event);
+  }
 }
 
 describe("replay reducer", () => {
-    test("restores a completed run into the minimal RunView", async () => {
-        const logs: string[] = [];
-        const eventLog = new InMemoryEventLog();
-        const loop = createLoop({
-            eventLog,
-            modelClient: new ScriptedModelClient([
-                {
-                    message: {
-                        role: "assistant",
-                        content: "Call echo"
-                    },
-                    toolCalls: [
-                        {
-                            id: "call_replay_echo_01",
-                            name: "echo",
-                            args: {text: "hello replay"}
-                        }
-                    ]
-                },
-                {
-                    message: {
-                        role: "assistant",
-                        content: "Final answer from replay"
-                    }
-                }
-            ])
-        });
+  test("restores a completed run with aggregated AgentCall and sent reply", () => {
+    const eventLog = new InMemoryEventLog();
+    appendEvents(eventLog, [
+      channelMessage("run_success", "session_success"),
+      {
+        type: "main_agent.run.started",
+        runId: "run_success",
+        sessionId: "session_success",
+        data: { trigger: "user" }
+      },
+      {
+        type: "agent_call.created",
+        runId: "run_success",
+        sessionId: "session_success",
+        data: {
+          agentCallId: "agent_call_01",
+          taskId: "task_01",
+          skillId: "coding",
+          executionMode: "async",
+          state: "submitted"
+        }
+      },
+      {
+        type: "agent_call.state.changed",
+        runId: "run_success",
+        sessionId: "session_success",
+        data: {
+          agentCallId: "agent_call_01",
+          taskId: "task_01",
+          state: "working"
+        }
+      },
+      {
+        type: "agent_call.state.changed",
+        runId: "run_success",
+        sessionId: "session_success",
+        data: {
+          agentCallId: "agent_call_01",
+          taskId: "task_01",
+          state: "completed"
+        }
+      },
+      {
+        type: "main_agent.run.completed",
+        runId: "run_success",
+        sessionId: "session_success",
+        data: { output: "MainAgent finished" }
+      },
+      {
+        type: "channel.reply.sent",
+        runId: "run_success",
+        sessionId: "session_success",
+        data: {
+          conversationId: "group_01",
+          text: "MainAgent finished"
+        }
+      }
+    ]);
 
-        await loop.run({
-            runId: "run_replay_success_01",
-            sessionId: "session_replay_success_01",
-            userMessage: "Run replay success"
-        });
+    const view = createRunView(eventLog.readRunEvents("run_success"));
 
-        const view = createRunView(
-            eventLog.readRunEvents("run_replay_success_01")
-        );
-        logs.push(formatRunView("run_replay_success_01 RunView", view));
+    expect(view).toMatchObject({
+      runId: "run_success",
+      sessionId: "session_success",
+      status: "completed",
+      trigger: "user",
+      eventCount: 7,
+      lastSeq: 7,
+      input: {
+        channel: "onebot11",
+        conversationId: "group_01",
+        messageId: "message_01",
+        senderId: "user_01",
+        senderName: "User One",
+        text: "@bot start",
+        trigger: { kind: "mention", text: "@bot" }
+      },
+      output: "MainAgent finished",
+      agentCalls: [
+        {
+          agentCallId: "agent_call_01",
+          taskId: "task_01",
+          skillId: "coding",
+          executionMode: "async",
+          state: "completed"
+        }
+      ],
+      reply: {
+        status: "sent",
+        conversationId: "group_01",
+        text: "MainAgent finished"
+      }
+    });
+    expect(view?.startedAt).toEqual(expect.any(String));
+    expect(view?.endedAt).toEqual(expect.any(String));
+    expect(view?.agentCalls[0]?.createdAt).toEqual(expect.any(String));
+    expect(view?.agentCalls[0]?.updatedAt).toEqual(expect.any(String));
+    expect(view?.reply).toMatchObject({ sentAt: expect.any(String) });
+  });
 
-        expect(view).toMatchObject({
-            runId: "run_replay_success_01",
-            sessionId: "session_replay_success_01",
-            status: "completed",
-            eventCount: 11,
-            lastSeq: 11,
-            finalAnswer: "Final answer from replay",
-            toolCalls: [
-                {
-                    toolCallId: "call_replay_echo_01",
-                    toolName: "echo",
-                    step: 0,
-                    status: "completed",
-                    output: "hello replay"
-                }
-            ]
-        });
-        expect(view?.startedAt).toEqual(expect.any(String));
-        expect(view?.endedAt).toEqual(expect.any(String));
-        expect(view?.durationSeconds).toBe(
-            (Date.parse(view!.endedAt!) - Date.parse(view!.startedAt)) / 1000
-        );
-        expect(view?.toolCalls[0]?.parentEventId).toEqual(expect.any(String));
-        expect(logs).toHaveLength(1);
-        expect(logs[0]).toContain("run_replay_success_01 RunView");
-        expect(logs[0]).toContain('"status": "completed"');
+  test("keeps the AgentCall cause for an agent_call_terminal reentry run", () => {
+    const eventLog = new InMemoryEventLog();
+    appendEvents(eventLog, [
+      {
+        type: "main_agent.run.started",
+        runId: "run_reentry",
+        sessionId: "session_reentry",
+        data: {
+          trigger: "agent_call_terminal",
+          cause: {
+            agentCallId: "agent_call_parent",
+            taskId: "task_parent",
+            state: "completed"
+          }
+        }
+      },
+      {
+        type: "main_agent.run.completed",
+        runId: "run_reentry",
+        sessionId: "session_reentry",
+        data: { output: "continued" }
+      }
+    ]);
+
+    expect(createRunView(eventLog.readRunEvents("run_reentry"))).toMatchObject({
+      status: "completed",
+      trigger: "agent_call_terminal",
+      cause: {
+        agentCallId: "agent_call_parent",
+        taskId: "task_parent",
+        state: "completed"
+      },
+      output: "continued",
+      agentCalls: [],
+      reply: { status: "not-sent" }
+    });
+  });
+
+  test("keeps a completed run completed when sending the reply fails", () => {
+    const eventLog = new InMemoryEventLog();
+    appendEvents(eventLog, [
+      {
+        type: "main_agent.run.started",
+        runId: "run_reply_failed",
+        sessionId: "session_reply_failed",
+        data: { trigger: "user" }
+      },
+      {
+        type: "main_agent.run.completed",
+        runId: "run_reply_failed",
+        sessionId: "session_reply_failed",
+        data: { output: "done before reply" }
+      },
+      {
+        type: "channel.reply.failed",
+        runId: "run_reply_failed",
+        sessionId: "session_reply_failed",
+        data: {
+          conversationId: "group_01",
+          text: "done before reply",
+          error: "OneBot unavailable"
+        }
+      }
+    ]);
+
+    expect(
+      createRunView(eventLog.readRunEvents("run_reply_failed"))
+    ).toMatchObject({
+      status: "completed",
+      output: "done before reply",
+      reply: {
+        status: "failed",
+        conversationId: "group_01",
+        text: "done before reply",
+        error: "OneBot unavailable",
+        failedAt: expect.any(String)
+      }
+    });
+  });
+
+  test("restores failed and cancelled MainAgent runs", () => {
+    const failedLog = new InMemoryEventLog();
+    appendEvents(failedLog, [
+      {
+        type: "main_agent.run.started",
+        runId: "run_failed",
+        sessionId: "session_failed",
+        data: { trigger: "user" }
+      },
+      {
+        type: "main_agent.run.failed",
+        runId: "run_failed",
+        sessionId: "session_failed",
+        data: { error: "model failed" }
+      }
+    ]);
+
+    const cancelledLog = new InMemoryEventLog();
+    appendEvents(cancelledLog, [
+      {
+        type: "main_agent.run.started",
+        runId: "run_cancelled",
+        sessionId: "session_cancelled",
+        data: { trigger: "user" }
+      },
+      {
+        type: "main_agent.run.cancelled",
+        runId: "run_cancelled",
+        sessionId: "session_cancelled",
+        data: { reason: "user cancelled" }
+      }
+    ]);
+
+    expect(createRunView(failedLog.readRunEvents("run_failed"))).toMatchObject({
+      status: "failed",
+      error: "model failed",
+      endedAt: expect.any(String)
+    });
+    expect(
+      createRunView(cancelledLog.readRunEvents("run_cancelled"))
+    ).toMatchObject({
+      status: "cancelled",
+      error: "user cancelled",
+      endedAt: expect.any(String)
+    });
+  });
+
+  test("returns pending before MainAgent starts and running after it starts", () => {
+    const pendingLog = new InMemoryEventLog();
+    pendingLog.append(channelMessage("run_pending", "session_pending"));
+
+    const runningLog = new InMemoryEventLog();
+    runningLog.append({
+      type: "main_agent.run.started",
+      runId: "run_running",
+      sessionId: "session_running",
+      data: { trigger: "user" }
     });
 
-    test("returns null when the reducer receives no events", () => {
-        expect(createRunView([])).toBeNull();
+    expect(createRunView(pendingLog.readRunEvents("run_pending"))).toMatchObject({
+      status: "pending",
+      reply: { status: "not-sent" }
     });
-
-    test("returns running when events exist but no terminal event is present", () => {
-        const eventLog = new InMemoryEventLog();
-        appendEvents(eventLog, [
-            {
-                type: "run.created",
-                runId: "run_replay_running_01",
-                sessionId: "session_replay_running_01",
-                source: "agent_loop",
-                data: {
-                    userMessage: "Still running"
-                }
-            },
-            {
-                type: "context.built",
-                runId: "run_replay_running_01",
-                sessionId: "session_replay_running_01",
-                source: "agent_loop",
-                data: {
-                    messages: [
-                        {
-                            role: "user",
-                            content: "Still running"
-                        }
-                    ],
-                    messageCount: 1
-                }
-            },
-            {
-                type: "model.requested",
-                runId: "run_replay_running_01",
-                sessionId: "session_replay_running_01",
-                source: "agent_loop",
-                step: 0,
-                data: {
-                    step: 0
-                }
-            }
-        ]);
-
-        const view = createRunView(
-            eventLog.readRunEvents("run_replay_running_01")
-        );
-
-        expect(view).toMatchObject({
-            runId: "run_replay_running_01",
-            sessionId: "session_replay_running_01",
-            status: "running",
-            eventCount: 3,
-            lastSeq: 3
-        });
-        expect(view?.endedAt).toBeUndefined();
-        expect(view?.durationSeconds).toBeUndefined();
+    expect(createRunView(runningLog.readRunEvents("run_running"))).toMatchObject({
+      status: "running",
+      trigger: "user",
+      reply: { status: "not-sent" }
     });
+  });
 
-    test("restores run.failed explicitly from terminal run events", () => {
-        const eventLog = new InMemoryEventLog();
-        appendEvents(eventLog, [
-            {
-                type: "run.created",
-                runId: "run_replay_failed_01",
-                sessionId: "session_replay_failed_01",
-                source: "agent_loop",
-                data: {
-                    userMessage: "Fail explicitly"
-                }
-            },
-            {
-                type: "run.failed",
-                runId: "run_replay_failed_01",
-                sessionId: "session_replay_failed_01",
-                source: "agent_loop",
-                data: {
-                    error: "Explicit failure"
-                }
-            }
-        ]);
+  test("sorts by seq without mutating the caller's event array", () => {
+    const events: AgentEvent[] = [
+      completeEvent(4, "channel.reply.sent", {
+        conversationId: "group_01",
+        text: "ordered"
+      }),
+      completeEvent(2, "agent_call.created", {
+        agentCallId: "agent_call_ordered",
+        taskId: "task_ordered",
+        skillId: "coding",
+        executionMode: "blocking",
+        state: "submitted"
+      }),
+      completeEvent(1, "main_agent.run.started", { trigger: "user" }),
+      completeEvent(3, "main_agent.run.completed", { output: "ordered" })
+    ];
+    const snapshot = structuredClone(events);
 
-        const view = createRunView(
-            eventLog.readRunEvents("run_replay_failed_01")
-        );
+    const view = createRunView(events);
 
-        expect(view).toMatchObject({
-            runId: "run_replay_failed_01",
-            sessionId: "session_replay_failed_01",
-            status: "failed",
-            error: "Explicit failure",
-            eventCount: 2,
-            lastSeq: 2
-        });
-        expect(view?.endedAt).toEqual(expect.any(String));
-        expect(view?.durationSeconds).toBe(
-            (Date.parse(view!.endedAt!) - Date.parse(view!.startedAt)) / 1000
-        );
+    expect(events).toEqual(snapshot);
+    expect(events.map((event) => event.seq)).toEqual([4, 2, 1, 3]);
+    expect(view).toMatchObject({
+      status: "completed",
+      startedAt: "2026-07-15T00:00:01.000Z",
+      endedAt: "2026-07-15T00:00:03.000Z",
+      durationSeconds: 2,
+      eventCount: 4,
+      lastSeq: 4,
+      output: "ordered",
+      agentCalls: [{ agentCallId: "agent_call_ordered", state: "submitted" }],
+      reply: { status: "sent", sentAt: "2026-07-15T00:00:04.000Z" }
     });
+  });
 
-    test("restores run.cancelled explicitly from terminal run events", () => {
-        const eventLog = new InMemoryEventLog();
-        appendEvents(eventLog, [
-            {
-                type: "run.created",
-                runId: "run_replay_cancelled_01",
-                sessionId: "session_replay_cancelled_01",
-                source: "agent_loop",
-                data: {
-                    userMessage: "Cancel explicitly"
-                }
-            },
-            {
-                type: "run.cancelled",
-                runId: "run_replay_cancelled_01",
-                sessionId: "session_replay_cancelled_01",
-                source: "agent_loop",
-                data: {
-                    reason: "Explicit cancellation"
-                }
-            }
-        ]);
-
-        const view = createRunView(
-            eventLog.readRunEvents("run_replay_cancelled_01")
-        );
-
-        expect(view).toMatchObject({
-            runId: "run_replay_cancelled_01",
-            sessionId: "session_replay_cancelled_01",
-            status: "cancelled",
-            error: "Explicit cancellation",
-            eventCount: 2,
-            lastSeq: 2
-        });
-        expect(view?.endedAt).toEqual(expect.any(String));
-        expect(view?.durationSeconds).toBe(
-            (Date.parse(view!.endedAt!) - Date.parse(view!.startedAt)) / 1000
-        );
-    });
-
-    test("prefers max_steps_exceeded over the trailing run.failed event", async () => {
-        const logs: string[] = [];
-        const eventLog = new InMemoryEventLog();
-        const loop = createLoop({
-            eventLog,
-            modelClient: new ScriptedModelClient([
-                {
-                    message: {
-                        role: "assistant",
-                        content: "Loop once"
-                    },
-                    toolCalls: [
-                        {
-                            id: "call_replay_loop_01",
-                            name: "echo",
-                            args: {text: "again"}
-                        }
-                    ]
-                }
-            ])
-        });
-
-        await expect(
-            loop.run({
-                runId: "run_replay_max_steps_01",
-                sessionId: "session_replay_max_steps_01",
-                userMessage: "Loop until max steps",
-                maxSteps: 1
-            })
-        ).rejects.toThrow("AgentLoop exceeded maxSteps: 1");
-
-        const view = createRunView(
-            eventLog.readRunEvents("run_replay_max_steps_01")
-        );
-        logs.push(formatRunView("run_replay_max_steps_01 RunView", view));
-
-        expect(view).toMatchObject({
-            runId: "run_replay_max_steps_01",
-            sessionId: "session_replay_max_steps_01",
-            status: "max_steps_exceeded",
-            error: "AgentLoop exceeded maxSteps: 1",
-            toolCalls: [
-                {
-                    toolCallId: "call_replay_loop_01",
-                    toolName: "echo",
-                    status: "completed",
-                    output: "again"
-                }
-            ]
-        });
-        expect(view?.endedAt).toEqual(expect.any(String));
-        expect(view?.durationSeconds).toBe(
-            (Date.parse(view!.endedAt!) - Date.parse(view!.startedAt)) / 1000
-        );
-        expect(logs).toHaveLength(1);
-        expect(logs[0]).toContain("run_replay_max_steps_01 RunView");
-        expect(logs[0]).toContain('"status": "max_steps_exceeded"');
-    });
+  test("returns null when no events exist", () => {
+    expect(createRunView([])).toBeNull();
+  });
 });
 
 describe("EventLogRunViewReader", () => {
-    test("returns null when the reader cannot find a run", async () => {
-        const reader = new EventLogRunViewReader({
-            eventReader: new InMemoryEventLog()
-        });
+  test("reads and folds one run through the EventReader boundary", async () => {
+    const eventLog = new InMemoryEventLog();
+    appendEvents(eventLog, [
+      {
+        type: "main_agent.run.started",
+        runId: "run_reader",
+        sessionId: "session_reader",
+        data: { trigger: "user" }
+      },
+      {
+        type: "main_agent.run.completed",
+        runId: "run_reader",
+        sessionId: "session_reader",
+        data: { output: "reader output" }
+      }
+    ]);
+    const reader = new EventLogRunViewReader({ eventReader: eventLog });
 
-        await expect(reader.readRunView("run_missing_01")).resolves.toBeNull();
+    await expect(reader.readRunView("run_reader")).resolves.toMatchObject({
+      status: "completed",
+      output: "reader output"
     });
-
-    test("restores blocked tool calls from EventReader-backed events", async () => {
-        const logs: string[] = [];
-        const eventLog = new InMemoryEventLog();
-        const toolGateway = new ToolGateway({
-            eventWriter: eventLog,
-            policyEngine: {
-                decide() {
-                    return {
-                        kind: "deny",
-                        reason: "policy blocked replay tool"
-                    };
-                }
-            },
-            tools: [echoTool]
-        });
-        const loop = new AgentLoop({
-            eventWriter: eventLog,
-            modelClient: new ScriptedModelClient([
-                {
-                    message: {
-                        role: "assistant",
-                        content: "Call denied echo"
-                    },
-                    toolCalls: [
-                        {
-                            id: "call_replay_blocked_01",
-                            name: "echo",
-                            args: {text: "blocked"}
-                        }
-                    ]
-                },
-                {
-                    message: {
-                        role: "assistant",
-                        content: "Recovered after blocked tool"
-                    }
-                }
-            ]),
-            toolGateway
-        });
-
-        await loop.run({
-            runId: "run_replay_blocked_01",
-            sessionId: "session_replay_blocked_01",
-            userMessage: "Run replay blocked"
-        });
-
-        const reader = new EventLogRunViewReader({
-            eventReader: eventLog
-        });
-        const view = await reader.readRunView("run_replay_blocked_01");
-        logs.push(formatRunView("run_replay_blocked_01 RunView", view));
-
-        expect(view).toMatchObject({
-            runId: "run_replay_blocked_01",
-            sessionId: "session_replay_blocked_01",
-            status: "completed",
-            finalAnswer: "Recovered after blocked tool",
-            toolCalls: [
-                {
-                    toolCallId: "call_replay_blocked_01",
-                    toolName: "echo",
-                    step: 0,
-                    status: "blocked",
-                    output:
-                        "Tool call blocked by policy: policy blocked replay tool"
-                }
-            ]
-        });
-        expect(view?.toolCalls[0]?.parentEventId).toEqual(expect.any(String));
-        expect(view?.durationSeconds).toBe(
-            (Date.parse(view!.endedAt!) - Date.parse(view!.startedAt)) / 1000
-        );
-        expect(logs).toHaveLength(1);
-        expect(logs[0]).toContain("run_replay_blocked_01 RunView");
-        expect(logs[0]).toContain('"status": "blocked"');
-    });
+    await expect(reader.readRunView("run_missing")).resolves.toBeNull();
+  });
 });
+
+function channelMessage(runId: string, sessionId: string): AgentEventDraft {
+  return {
+    type: "channel.message.received",
+    runId,
+    sessionId,
+    data: {
+      channel: "onebot11",
+      conversationId: "group_01",
+      messageId: "message_01",
+      senderId: "user_01",
+      senderName: "User One",
+      text: "@bot start",
+      trigger: { kind: "mention", text: "@bot" }
+    }
+  };
+}
+
+function completeEvent(
+  seq: number,
+  type: AgentEvent["type"],
+  data: AgentEvent["data"]
+): AgentEvent {
+  return {
+    schemaVersion: "2.0",
+    id: `event_${seq}`,
+    seq,
+    timestamp: `2026-07-15T00:00:0${seq}.000Z`,
+    type,
+    runId: "run_ordered",
+    sessionId: "session_ordered",
+    data
+  } as AgentEvent;
+}

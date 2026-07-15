@@ -1,103 +1,93 @@
-// 验证 core 包最早暴露的公共类型可以被正常引用。
+// 验证 core 对外暴露的是外层编排事件，而不是旧 inner-loop 事件。
 
 import { describe, expect, test } from "vitest";
 
+import * as coreApi from "../src/index.js";
 import { CORE_SCHEMA_VERSION } from "../src/index.js";
 import type {
+  AgentCallId,
+  AgentCallTaskState,
   AgentEvent,
   AgentEventDraft,
   AgentEventType,
-  AgentEventSource,
+  AgentRuntimeTrigger,
+  ChannelTrigger,
   EventLog,
   EventReader,
   EventWriter,
-  ModelClient,
-  PolicyDecision,
   RunId,
   SessionId,
-  ToolCall,
-  ToolResult
+  TaskExecutionMode
 } from "../src/index.js";
 
 describe("core public types", () => {
-  // 覆盖 Milestone 1 的类型和导出形状。
-  test("exports the first milestone core API shape", async () => {
+  test("exports the outer orchestration event API shape", () => {
     const runId: RunId = "run_01";
     const sessionId: SessionId = "session_01";
-    const eventType: AgentEventType = "run.created";
-    const eventSource: AgentEventSource = "agent_loop";
-
-    const toolCall: ToolCall = {
-      id: "call_01",
-      name: "echo",
-      args: { text: "hello" }
+    const agentCallId: AgentCallId = "agent_call_01";
+    const eventType: AgentEventType = "agent_call.created";
+    const trigger: AgentRuntimeTrigger = "agent_call_terminal";
+    const channelTrigger: ChannelTrigger = {
+      kind: "mention",
+      text: "@bot continue"
     };
-
-    const toolResult: ToolResult = {
-      callId: toolCall.id,
-      toolName: toolCall.name,
-      output: "hello"
-    };
-
-    const decision: PolicyDecision = {
-      kind: "allow",
-      reason: "placeholder test fixture"
-    };
+    const state: AgentCallTaskState = "submitted";
+    const executionMode: TaskExecutionMode = "async";
 
     const event: AgentEvent = {
       schemaVersion: CORE_SCHEMA_VERSION,
       id: "event_01",
       seq: 1,
+      timestamp: "2026-07-15T00:00:00.000Z",
       type: eventType,
       runId,
       sessionId,
-      source: eventSource,
-      timestamp: "2026-06-15T00:00:00.000Z",
-      data: { userMessage: "start" }
+      data: {
+        agentCallId,
+        taskId: "task_01",
+        skillId: "coding",
+        executionMode,
+        state
+      }
     };
 
     const eventDraft: AgentEventDraft = {
-      type: eventType,
+      type: "main_agent.run.started",
       runId,
       sessionId,
-      source: eventSource,
-      data: { userMessage: "start" }
+      data: {
+        trigger,
+        cause: {
+          agentCallId,
+          taskId: "task_01",
+          state: "completed"
+        }
+      }
     };
 
-    const eventWriter: EventWriter = {
-      append: () => event
-    };
-
-    const eventReader: EventReader = {
-    readRunEvents: () => [event]
-    };
-
+    const eventWriter: EventWriter = { append: () => event };
+    const eventReader: EventReader = { readRunEvents: () => [event] };
     const eventLog: EventLog = {
       append: eventWriter.append,
-    readRunEvents: eventReader.readRunEvents
+      readRunEvents: eventReader.readRunEvents
     };
 
-    const modelClient: ModelClient = {
-      complete: async () => ({
-        message: {
-          role: "assistant",
-          content: "ready"
-        },
-        toolCalls: [toolCall]
-      })
-    };
-
-    const response = await modelClient.complete({
-      runId,
-      sessionId,
-      messages: [{ role: "user", content: "start" }]
-    });
-
+    expect(CORE_SCHEMA_VERSION).toBe("2.0");
     expect(eventWriter.append(eventDraft)).toEqual(event);
-    expect(decision.kind).toBe("allow");
-    expect(toolResult.callId).toBe(toolCall.id);
-  expect(eventLog.readRunEvents(runId)).toEqual([event]);
-    expect(response.message.content).toBe("ready");
-    expect(response.toolCalls).toEqual([toolCall]);
+    expect(eventLog.readRunEvents(runId)).toEqual([event]);
+    expect(channelTrigger).toEqual({ kind: "mention", text: "@bot continue" });
+  });
+
+  test("does not expose the retired inner-loop runtime API", () => {
+    const retiredExports = [
+      "AgentLoop",
+      "FakeModelClient",
+      "ToolGateway",
+      "AllowPolicyEngine",
+      "echoTool",
+      "StaticContextAssembler"
+    ];
+
+    expect(retiredExports.filter((name) => name in coreApi)).toEqual([]);
   });
 });

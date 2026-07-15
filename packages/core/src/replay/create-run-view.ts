@@ -1,225 +1,162 @@
-// 把单个 run 的事件流压成最小 RunView，供 replay/debug 读取。
-import type {AgentEvent} from "../events/types.js";
+import type { AgentEvent } from "../events/types.js";
 import type {
-    RunView,
-    RunViewStatus,
-    RunViewToolCallStatus,
-    ToolCallView
+  AgentCallView,
+  ChannelInputView,
+  ReplyView,
+  RunView,
+  RunViewCause,
+  RunViewStatus
 } from "./types.js";
 
-// reducer 内部使用的可变工具调用聚合对象。
-type MutableToolCallView = {
-    toolCallId: string;
-    toolName: string;
-    step?: number;
-    status: RunViewToolCallStatus;
-    output?: string;
-    parentEventId?: string;
+type MutableAgentCallView = {
+  -readonly [Key in keyof AgentCallView]: AgentCallView[Key];
 };
 
-// 终态冲突时使用的优先级，避免被后续补充事件覆盖。
-const TERMINAL_STATUS_PRIORITY: Record<Exclude<RunViewStatus, "running">, number> = {
-    completed: 1,
-    cancelled: 2,
-    failed: 3,
-    max_steps_exceeded: 4
-};
-
-// 纯 reducer：输入事件数组，输出最小但可用的 run 视图。
 export function createRunView(events: AgentEvent[]): RunView | null {
-    if (events.length === 0) {
-        return null;
-    }
+  if (events.length === 0) {
+    return null;
+  }
 
-    const orderedEvents = [...events].sort((left, right) => left.seq - right.seq);
-    const firstEvent = orderedEvents[0];
-    const lastEvent = orderedEvents[orderedEvents.length - 1];
-    const toolCalls = new Map<string, MutableToolCallView>();
-    const toolCallOrder: string[] = [];
+  const orderedEvents = [...events].sort((left, right) => left.seq - right.seq);
+  const firstEvent = orderedEvents[0]!;
+  const lastEvent = orderedEvents[orderedEvents.length - 1]!;
+  const agentCalls = new Map<string, MutableAgentCallView>();
+  const agentCallOrder: string[] = [];
 
-    let status: RunViewStatus = "running";
-    let statusPriority = 0;
-    let endedAt: string | undefined;
-    let finalAnswer: string | undefined;
-    let error: string | undefined;
+  let status: RunViewStatus = "pending";
+  let trigger: RunView["trigger"];
+  let cause: RunViewCause | undefined;
+  let input: ChannelInputView | undefined;
+  let output: string | undefined;
+  let error: string | undefined;
+  let endedAt: string | undefined;
+  let reply: ReplyView = { status: "not-sent" };
 
-    for (const event of orderedEvents) {
-        switch (event.type) {
-            case "tool.requested": {
-                mergeToolCall(
-                    toolCalls,
-                    toolCallOrder,
-                    event.toolCallId ?? event.data.toolCall.id,
-                    event.data.toolCall.name,
-                    event.step,
-                    "requested"
-                );
-                break;
-            }
-            case "tool.completed": {
-                mergeToolCall(
-                    toolCalls,
-                    toolCallOrder,
-                    event.toolCallId ?? event.data.result.callId,
-                    event.data.result.toolName,
-                    event.step,
-                    "completed",
-                    event.data.result.output
-                );
-                break;
-            }
-            case "tool.failed": {
-                mergeToolCall(
-                    toolCalls,
-                    toolCallOrder,
-                    event.toolCallId ?? event.data.result.callId,
-                    event.data.result.toolName,
-                    event.step,
-                    "failed",
-                    event.data.result.output
-                );
-                break;
-            }
-            case "tool.blocked": {
-                mergeToolCall(
-                    toolCalls,
-                    toolCallOrder,
-                    event.toolCallId ?? event.data.result.callId,
-                    event.data.result.toolName,
-                    event.step,
-                    "blocked",
-                    event.data.result.output
-                );
-                break;
-            }
-            case "observation.appended": {
-                const toolCall = mergeToolCall(
-                    toolCalls,
-                    toolCallOrder,
-                    event.data.toolCallId,
-                    event.data.toolName,
-                    event.step,
-                    "requested"
-                );
-
-                toolCall.parentEventId = event.parentEventId;
-                if (toolCall.output === undefined) {
-                    toolCall.output = event.data.message.content;
-                }
-                break;
-            }
-            case "run.completed": {
-                const nextPriority = TERMINAL_STATUS_PRIORITY.completed;
-                if (nextPriority >= statusPriority) {
-                    status = "completed";
-                    statusPriority = nextPriority;
-                    endedAt = event.timestamp;
-                    finalAnswer = event.data.finalAnswer;
-                    error = undefined;
-                }
-                break;
-            }
-            case "run.cancelled": {
-                const nextPriority = TERMINAL_STATUS_PRIORITY.cancelled;
-                if (nextPriority >= statusPriority) {
-                    status = "cancelled";
-                    statusPriority = nextPriority;
-                    endedAt = event.timestamp;
-                    error = event.data.reason;
-                }
-                break;
-            }
-            case "run.failed": {
-                const nextPriority = TERMINAL_STATUS_PRIORITY.failed;
-                if (nextPriority >= statusPriority) {
-                    status = "failed";
-                    statusPriority = nextPriority;
-                    endedAt = event.timestamp;
-                    error = event.data.error;
-                }
-                break;
-            }
-            case "run.max_steps_exceeded": {
-                const nextPriority = TERMINAL_STATUS_PRIORITY.max_steps_exceeded;
-                if (nextPriority >= statusPriority) {
-                    status = "max_steps_exceeded";
-                    statusPriority = nextPriority;
-                    endedAt = event.timestamp;
-                    error = `AgentLoop exceeded maxSteps: ${event.data.maxSteps}`;
-                }
-                break;
-            }
-            default:
-                break;
-        }
-    }
-
-    return {
-        runId: firstEvent.runId,
-        sessionId: firstEvent.sessionId,
-        status,
-        startedAt: firstEvent.timestamp,
-        endedAt,
-        durationSeconds:
-            endedAt === undefined
-                ? undefined
-                : (Date.parse(endedAt) - Date.parse(firstEvent.timestamp)) /
-                  1000,
-        eventCount: orderedEvents.length,
-        lastSeq: lastEvent.seq,
-        finalAnswer,
-        error,
-        toolCalls: toolCallOrder.map((toolCallId) =>
-            freezeToolCallView(toolCalls.get(toolCallId)!)
-        )
-    };
-}
-
-// 按 toolCallId 聚合同一次工具调用的分散事件。
-function mergeToolCall(
-    toolCalls: Map<string, MutableToolCallView>,
-    toolCallOrder: string[],
-    toolCallId: string,
-    toolName: string,
-    step: number | undefined,
-    status: RunViewToolCallStatus,
-    output?: string
-): MutableToolCallView {
-    let toolCall = toolCalls.get(toolCallId);
-
-    if (!toolCall) {
-        toolCall = {
-            toolCallId,
-            toolName,
-            step,
-            status,
-            output
+  for (const event of orderedEvents) {
+    switch (event.type) {
+      case "channel.message.received":
+        input = {
+          channel: event.data.channel,
+          conversationId: event.data.conversationId,
+          messageId: event.data.messageId,
+          senderId: event.data.senderId,
+          senderName: event.data.senderName,
+          text: event.data.text,
+          ...(event.data.trigger === undefined
+            ? {}
+            : { trigger: { ...event.data.trigger } })
         };
-        toolCalls.set(toolCallId, toolCall);
-        toolCallOrder.push(toolCallId);
-        return toolCall;
+        break;
+      case "main_agent.run.started":
+        status = "running";
+        trigger = event.data.trigger;
+        cause =
+          event.data.cause === undefined ? undefined : { ...event.data.cause };
+        break;
+      case "main_agent.run.completed":
+        status = "completed";
+        output = event.data.output;
+        error = undefined;
+        endedAt = event.timestamp;
+        break;
+      case "main_agent.run.failed":
+        status = "failed";
+        output = undefined;
+        error = event.data.error;
+        endedAt = event.timestamp;
+        break;
+      case "main_agent.run.cancelled":
+        status = "cancelled";
+        output = undefined;
+        error = event.data.reason;
+        endedAt = event.timestamp;
+        break;
+      case "agent_call.created":
+        mergeCreatedAgentCall(
+          agentCalls,
+          agentCallOrder,
+          event.data,
+          event.timestamp
+        );
+        break;
+      case "agent_call.state.changed": {
+        const agentCall = agentCalls.get(event.data.agentCallId);
+        if (agentCall !== undefined) {
+          agentCall.taskId = event.data.taskId;
+          agentCall.state = event.data.state;
+          agentCall.updatedAt = event.timestamp;
+        }
+        break;
+      }
+      case "channel.reply.sent":
+        reply = {
+          status: "sent",
+          conversationId: event.data.conversationId,
+          text: event.data.text,
+          sentAt: event.timestamp
+        };
+        break;
+      case "channel.reply.failed":
+        reply = {
+          status: "failed",
+          conversationId: event.data.conversationId,
+          text: event.data.text,
+          error: event.data.error,
+          failedAt: event.timestamp
+        };
+        break;
     }
+  }
 
-    toolCall.toolName = toolName;
-    toolCall.step ??= step;
-    if (!(status === "requested" && toolCall.status !== "requested")) {
-        toolCall.status = status;
-    }
-    if (output !== undefined) {
-        toolCall.output = output;
-    }
-
-    return toolCall;
+  return {
+    runId: firstEvent.runId,
+    sessionId: firstEvent.sessionId,
+    status,
+    trigger,
+    cause,
+    startedAt: firstEvent.timestamp,
+    endedAt,
+    durationSeconds:
+      endedAt === undefined
+        ? undefined
+        : (Date.parse(endedAt) - Date.parse(firstEvent.timestamp)) / 1000,
+    eventCount: orderedEvents.length,
+    lastSeq: lastEvent.seq,
+    input,
+    output,
+    error,
+    agentCalls: agentCallOrder.map((agentCallId) => ({
+      ...agentCalls.get(agentCallId)!
+    })),
+    reply
+  };
 }
 
-// 把内部可变聚合对象转成对外只读视图。
-function freezeToolCallView(toolCall: MutableToolCallView): ToolCallView {
-    return {
-        toolCallId: toolCall.toolCallId,
-        toolName: toolCall.toolName,
-        step: toolCall.step,
-        status: toolCall.status,
-        output: toolCall.output,
-        parentEventId: toolCall.parentEventId
-    };
+function mergeCreatedAgentCall(
+  agentCalls: Map<string, MutableAgentCallView>,
+  agentCallOrder: string[],
+  data: Extract<AgentEvent, { type: "agent_call.created" }>["data"],
+  timestamp: string
+): void {
+  const existing = agentCalls.get(data.agentCallId);
+
+  if (existing === undefined) {
+    agentCalls.set(data.agentCallId, {
+      agentCallId: data.agentCallId,
+      taskId: data.taskId,
+      skillId: data.skillId,
+      executionMode: data.executionMode,
+      state: data.state,
+      createdAt: timestamp,
+      updatedAt: timestamp
+    });
+    agentCallOrder.push(data.agentCallId);
+    return;
+  }
+
+  existing.taskId = data.taskId;
+  existing.skillId = data.skillId;
+  existing.executionMode = data.executionMode;
+  existing.state = data.state;
+  existing.updatedAt = timestamp;
 }

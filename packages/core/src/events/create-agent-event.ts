@@ -16,11 +16,6 @@ export function completeAgentEvent(
     type: draft.type,
     runId: draft.runId,
     sessionId: draft.sessionId,
-    source: draft.source,
-    ...(draft.step === undefined ? {} : { step: draft.step }),
-    ...(draft.toolCallId === undefined ? {} : { toolCallId: draft.toolCallId }),
-    ...(draft.parentEventId === undefined
-      ? {} : { parentEventId: draft.parentEventId }),
     data: draft.data
   } as AgentEvent;
 }
