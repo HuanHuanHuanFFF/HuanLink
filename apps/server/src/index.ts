@@ -1,14 +1,14 @@
-// Server 应用占位入口，后续接 Fastify 时从这里扩展。
-// 描述当前 server 还只是占位实现。
-export type ServerPlaceholderStatus = {
-  name: "huanlink-server";
-  status: "placeholder";
-};
-
-export { loadRuntimeConfigFromEnv } from "./runtime-config.js";
-
-// 暴露一个可导入的占位状态，验证 app 包可编译。
-export const serverPlaceholderStatus: ServerPlaceholderStatus = {
-  name: "huanlink-server",
-  status: "placeholder"
-};
+export {
+  loadCodexA2aRuntimeConfigFromEnv,
+  loadPhase4QqRuntimeConfigFromEnv,
+  type CodexA2aRuntimeConfig,
+  type MainAgentModelConfig,
+  type OneBot11QqRuntimeConfig,
+  type Phase4QqRuntimeConfig
+} from "./runtime-config.js";
+export * from "./main-agent-runtime.js";
+export * from "./main-agent-model.js";
+export * from "./agent-call-reentry.js";
+export * from "./phase3-runtime.js";
+export * from "./phase4-qq-runtime.js";
+export * from "./server-runtime-logger.js";

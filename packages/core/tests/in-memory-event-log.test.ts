@@ -4,32 +4,37 @@ import { CORE_SCHEMA_VERSION, InMemoryEventLog } from "../src/index.js";
 import type { RunId, SessionId } from "../src/index.js";
 
 describe("InMemoryEventLog", () => {
-  test("completes event drafts and reads events for one run in append order", () => {
+  test("completes outer event drafts and reads one run in append order", () => {
     const eventLog = new InMemoryEventLog();
     const runA: RunId = "run_a";
     const runB: RunId = "run_b";
     const sessionId: SessionId = "session_01";
 
     const first = eventLog.append({
-      type: "run.created",
+      type: "channel.message.received",
       runId: runA,
       sessionId,
-      source: "agent_loop",
-      data: { userMessage: "first" }
+      data: {
+        channel: "onebot11",
+        conversationId: "group_01",
+        messageId: "message_01",
+        senderId: "user_01",
+        senderName: "User One",
+        text: "@bot start",
+        trigger: { kind: "mention", text: "@bot" }
+      }
     });
     const otherRun = eventLog.append({
-      type: "run.created",
+      type: "main_agent.run.started",
       runId: runB,
       sessionId,
-      source: "agent_loop",
-      data: { userMessage: "other" }
+      data: { trigger: "user" }
     });
     const second = eventLog.append({
-      type: "run.completed",
+      type: "main_agent.run.completed",
       runId: runA,
       sessionId,
-      source: "agent_loop",
-      data: { finalAnswer: "done" }
+      data: { output: "done" }
     });
 
     expect(eventLog.readRunEvents(runA)).toEqual([first, second]);
@@ -37,12 +42,21 @@ describe("InMemoryEventLog", () => {
     expect(first).toMatchObject({
       schemaVersion: CORE_SCHEMA_VERSION,
       seq: 1,
-      type: "run.created",
+      type: "channel.message.received",
       runId: runA,
       sessionId,
-      source: "agent_loop",
-      data: { userMessage: "first" }
+      data: { text: "@bot start" }
     });
+    expect(Object.keys(first).sort()).toEqual([
+      "data",
+      "id",
+      "runId",
+      "schemaVersion",
+      "seq",
+      "sessionId",
+      "timestamp",
+      "type"
+    ]);
     expect(second.seq).toBe(2);
     expect(otherRun.seq).toBe(1);
     expect(first.id).toEqual(expect.any(String));
@@ -55,25 +69,28 @@ describe("InMemoryEventLog", () => {
     const sessionId: SessionId = "session_seq";
 
     eventLog.append({
-      type: "run.created",
+      type: "main_agent.run.started",
       runId,
       sessionId,
-      source: "agent_loop",
-      data: { userMessage: "start" }
+      data: { trigger: "user" }
     });
     eventLog.append({
-      type: "model.requested",
+      type: "agent_call.created",
       runId,
       sessionId,
-      source: "agent_loop",
-      data: { step: 0 }
+      data: {
+        agentCallId: "agent_call_seq",
+        taskId: "task_seq",
+        skillId: "coding",
+        executionMode: "async",
+        state: "submitted"
+      }
     });
     eventLog.append({
-      type: "run.completed",
+      type: "main_agent.run.completed",
       runId,
       sessionId,
-      source: "agent_loop",
-      data: { finalAnswer: "done" }
+      data: { output: "done" }
     });
 
     expect(eventLog.readRunEvents(runId).map((event) => event.seq)).toEqual([
@@ -85,7 +102,6 @@ describe("InMemoryEventLog", () => {
 
   test("returns an empty array for unknown run", () => {
     const eventLog = new InMemoryEventLog();
-
     expect(eventLog.readRunEvents("missing_run")).toEqual([]);
   });
 });

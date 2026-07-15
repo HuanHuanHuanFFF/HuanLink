@@ -17,11 +17,20 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "clean": "rimraf --glob dist \"*.tsbuildinfo\" \"*.tsbuildinfo.*\"",
+    "start": "node --env-file-if-exists=../../.env dist/main.js",
     "test": "vitest run",
+    "test:real:deepseek": "vitest run --config vitest.real.config.ts",
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@ai-sdk/deepseek": "2.0.47",
     "@huanlink/core": "workspace:*",
+    "@huanlink/integration-a2a-client": "workspace:*",
+    "@huanlink/integration-onebot11": "workspace:*",
+    "@huanlink/integration-openai-agents": "workspace:*",
+    "@openai/agents": "^0.12.0",
+    "@openai/agents-extensions": "0.12.0",
+    "ai": "6.0.224",
     "zod": "^4.4.3"
   }
 }

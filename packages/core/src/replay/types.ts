@@ -1,49 +1,75 @@
-// replay 侧最小视图类型，只保留当前 P0 需要的 run 恢复信息。
-import type {RunId, SessionId} from "../shared/ids.js";
+import type { AgentCallTaskState } from "../agent-call/types.js";
+import type { ChannelTrigger } from "../channels/types.js";
+import type { AgentRuntimeTrigger } from "../runtime/agent-runtime.js";
+import type { AgentCallId, RunId, SessionId } from "../shared/ids.js";
+import type { TaskExecutionMode } from "../tasks/types.js";
 
-// RunView 当前支持的最小运行状态集合。
 export const RUN_VIEW_STATUSES = [
-    "running",
-    "completed",
-    "failed",
-    "cancelled",
-    "max_steps_exceeded"
+  "pending",
+  "running",
+  "completed",
+  "failed",
+  "cancelled"
 ] as const;
 
 export type RunViewStatus = (typeof RUN_VIEW_STATUSES)[number];
 
-// ToolCallView 当前支持的最小工具调用状态集合。
-export const RUN_VIEW_TOOL_CALL_STATUSES = [
-    "requested",
-    "completed",
-    "failed",
-    "blocked"
-] as const;
-
-export type RunViewToolCallStatus =
-    (typeof RUN_VIEW_TOOL_CALL_STATUSES)[number];
-
-// 单次工具调用的最小派生视图。
-export interface ToolCallView {
-    readonly toolCallId: string;
-    readonly toolName: string;
-    readonly step?: number;
-    readonly status: RunViewToolCallStatus;
-    readonly output?: string;
-    readonly parentEventId?: string;
+export interface RunViewCause {
+  readonly agentCallId: AgentCallId;
+  readonly taskId: string;
+  readonly state: AgentCallTaskState;
 }
 
-// 单个 run 的最小 replay 摘要视图。
+export interface ChannelInputView {
+  readonly channel: "onebot11";
+  readonly conversationId: string;
+  readonly messageId: string;
+  readonly senderId: string;
+  readonly senderName: string;
+  readonly text: string;
+  readonly trigger?: ChannelTrigger;
+}
+
+export interface AgentCallView {
+  readonly agentCallId: AgentCallId;
+  readonly taskId: string;
+  readonly skillId: string;
+  readonly executionMode: TaskExecutionMode;
+  readonly state: AgentCallTaskState;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+export type ReplyView =
+  | { readonly status: "not-sent" }
+  | {
+      readonly status: "sent";
+      readonly conversationId: string;
+      readonly text: string;
+      readonly sentAt: string;
+    }
+  | {
+      readonly status: "failed";
+      readonly conversationId: string;
+      readonly text: string;
+      readonly error: string;
+      readonly failedAt: string;
+    };
+
 export interface RunView {
-    readonly runId: RunId;
-    readonly sessionId: SessionId;
-    readonly status: RunViewStatus;
-    readonly startedAt: string;
-    readonly endedAt?: string;
-    readonly durationSeconds?: number;
-    readonly eventCount: number;
-    readonly lastSeq: number;
-    readonly finalAnswer?: string;
-    readonly error?: string;
-    readonly toolCalls: ToolCallView[];
+  readonly runId: RunId;
+  readonly sessionId: SessionId;
+  readonly status: RunViewStatus;
+  readonly trigger?: AgentRuntimeTrigger;
+  readonly cause?: RunViewCause;
+  readonly startedAt: string;
+  readonly endedAt?: string;
+  readonly durationSeconds?: number;
+  readonly eventCount: number;
+  readonly lastSeq: number;
+  readonly input?: ChannelInputView;
+  readonly output?: string;
+  readonly error?: string;
+  readonly agentCalls: AgentCallView[];
+  readonly reply: ReplyView;
 }

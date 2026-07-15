@@ -4,11 +4,11 @@
 >
 > **For agentic workers:** 实施时按阶段推进，每个阶段先形成可运行结果再进入下一阶段。不要在 Demo 跑通前扩展成通用平台。
 
-**Goal:** 在真实 QQ 群中，由 HuanLink 通过标准 A2A v1.0 协议异步调用 Codex，允许 Codex 在独立 `demo` 分支执行真实代码任务，并在完成后由 MainAgent 结合最新群聊上下文返回结果。
+**Goal:** 在真实 QQ 群中，由 HuanLink 通过标准 A2A v1.0 协议异步调用 Codex，允许 Codex 在独立 `spike/demo-v0` 分支执行真实代码任务，并在完成后由 MainAgent 结合最新群聊上下文返回结果。
 
-**Architecture:** HuanLink 负责 QQ 群聊入口、MainAgent、AgentCall、异步回流和最终回复；独立的 Codex A2A Adapter 对外提供标准 A2A Server，对内通过 stdio 驱动官方 `codex app-server`。两者只通过 A2A 协议通信，不共享 Codex 内部类型。
+**Architecture:** HuanLink 负责 QQ 群聊入口、MainAgent、AgentCall、异步回流和最终回复；独立的 Codex A2A Adapter 对外提供标准 A2A Server，对内通过 stdio 驱动官方 `codex app-server`。两者只通过 A2A 协议通信，不共享 Codex 内部类型。这里的集成边界是 app-server 协议，不是 Codex CLI 终端界面或 Codex 桌面应用 UI。
 
-**Tech Stack:** TypeScript/Node.js、pnpm workspace、OpenAI Agents JS、A2A Protocol v1.0、固定版本的 `@a2a-js/sdk@next`、官方 `codex app-server`、真实 QQ/OneBot 兼容通道。
+**Tech Stack:** TypeScript/Node.js、pnpm workspace、OpenAI Agents JS、A2A Protocol v1.0、`@a2a-js/sdk@1.0.0-beta.0`、官方 `codex app-server`、真实 QQ、LLBot/NapCat 共用的 OneBot 兼容接口与协议。
 
 ---
 
@@ -46,7 +46,7 @@ QQ 消息
 -> HuanLink A2A Client 调用 Codex Agent Card 声明的能力
 -> Codex A2A Adapter 创建标准 A2A Task
 -> Adapter 启动或复用 codex app-server
--> Codex 在 demo 分支执行真实代码修改
+-> Codex 在 spike/demo-v0 分支执行真实代码修改
 -> A2A Task 持续产生状态和 Artifact
 -> HuanLink 立即向群里返回 taskId/已受理状态
 -> Task 完成后触发 MainAgent 新 turn
@@ -148,24 +148,24 @@ a2aTaskId
 <-> contextId
 <-> codexThreadId
 <-> codexTurnId
-<-> workspace/demo branch
+<-> workspace / spike/demo-v0 branch
 ```
 
-Codex app-server 通信优先使用默认 stdio JSONL。当前不依赖其仍处于实验状态的 WebSocket transport。
+Codex app-server 通信优先使用默认 stdio JSONL。当前不依赖其仍处于实验状态的 WebSocket transport。Adapter 启动固定版本的官方 `codex` 可执行程序并使用 app-server 协议，不解析 Codex CLI 终端输出，也不自动化 Codex 桌面应用 UI。
 
 ## 6. 分支和代码修改边界
 
-Demo 开发和 Codex 实际操作都在独立 `demo` 分支进行：
+Demo 开发和 Codex 实际操作都在独立 `spike/demo-v0` 分支进行：
 
 ```text
 main
-  -> demo
+  -> spike/demo-v0
 ```
 
 约束：
 
 - Codex 只允许操作配置好的 HuanLink workspace。
-- 启动任务前校验当前分支为 `demo`。
+- 启动任务前校验当前分支为 `spike/demo-v0`。
 - 不允许任务切换到 `main`。
 - 不自动 merge 到 `main`。
 - 不自动 push。
@@ -180,10 +180,10 @@ main
 
 目标：
 
-- 创建并切换到独立 `demo` 分支。
+- 创建并切换到独立 `spike/demo-v0` 分支。
 - 确认现有 pnpm workspace、OpenAI Agents JS integration 和测试基线可运行。
-- 确认服务器已安装并登录可用的 Codex CLI。
-- 记录 Codex 和 `@a2a-js/sdk@next` 的精确版本。
+- 确认服务器已安装官方 `codex` 可执行程序、ChatGPT 登录可用，并能启动 `codex app-server`。
+- 记录 Codex 和 `@a2a-js/sdk` 的精确版本；后续安装时不使用浮动 `next`。
 
 完成标准：
 
@@ -192,12 +192,21 @@ main
 - `corepack pnpm build`
 - `codex app-server` 可以启动并完成 initialize handshake。
 
+Phase 0 实际核验记录（2026-07-11）：
+
+- 当前分支为 `spike/demo-v0`，基线提交为 `95414e88d5c57aaf1b6d63cf58fd9018d6250ba9`。
+- pnpm workspace 和 OpenAI Agents JS integration 存在；typecheck、14 个测试文件中的 68 个测试以及 build 均通过。
+- 当前使用的官方 Codex 可执行程序来自 `codex-cli 0.142.5`，`codex login status` 确认为 ChatGPT 登录。
+- `codex app-server` 已通过 stdio JSONL 完成 `initialize` / `initialized` 握手；初始化后的脱敏 `account/read` 成功，进程正常退出。Phase 0 未发起模型 turn。
+- 仓库尚未声明、锁定或安装 `@a2a-js/sdk`；核验时 npm `next` 精确解析为 `1.0.0-beta.0`，Phase 1 使用该精确版本。
+- 核验结束时工作树干净；没有 commit、merge 或 push。
+
 ### Phase 1：先验证标准 A2A Server
 
 目标：
 
 - 新增独立 `apps/codex-a2a-adapter`。
-- 使用固定版本的官方 TypeScript A2A v1 SDK。
+- 使用固定版本 `@a2a-js/sdk@1.0.0-beta.0` 的官方 TypeScript A2A v1 SDK。
 - 暴露 Agent Card。
 - 实现最小 Task 创建、查询、订阅和取消。
 - 暂时用最薄执行器验证协议，不接入 HuanLink。
@@ -210,6 +219,15 @@ main
 - A2A Inspector/TCK 能识别服务。
 - Task 状态能从 submitted 进入 working，再进入终态。
 - 取消操作产生标准 canceled 状态。
+
+Phase 1 实际核验记录（2026-07-11）：
+
+- 已新增独立 `apps/codex-a2a-adapter`，精确安装并锁定 `@a2a-js/sdk@1.0.0-beta.0`；该 app 未依赖 HuanLink core、Codex app-server 或 QQ 链路。
+- Adapter 只声明 A2A v1.0 JSON-RPC interface，通过标准 `/.well-known/agent-card.json` 暴露 Agent Card；官方 `ClientFactory.createFromUrl(...)` 可以自动发现并协商到 `1.0`。
+- 黑盒测试使用官方 A2A Client 验证了 Task 创建、查询、流式 `submitted -> working -> completed`、artifact 持久化、`SubscribeToTask` 和 `CancelTask -> canceled`。包级共 3 个测试文件、14 个测试通过，typecheck 和 build 通过。
+- 编译后的独立进程已通过官方 Client 外部 smoke：初始状态为 `TASK_STATE_SUBMITTED`，取消返回并持久化为 `TASK_STATE_CANCELED`。
+- 官方 A2A TCK `5996b79f9cefa6fc390980e383e358a66fb9e49e` 已能发现和测试服务。针对 Agent Card、数据模型、错误处理、transport behavior 和 JSON-RPC 的协议核验为 43 passed、23 skipped、6 deselected，进程退出码为 0。完整 JSON-RPC MUST 运行结果为 68 passed、5 failed、162 skipped、30 deselected；Agent Card 6/6，以及 v1 方法名、错误映射、数据模型和 SSE envelope 等协议检查通过。5 个 pytest 失败来自 Phase 1 固定执行器不按 TCK 专用 messageId 生成其指定的多种 artifact 或直接 Message，不是 Agent Card 或 wire protocol 识别失败；本阶段不为刷 TCK 扩写临时场景业务，也不声称 full MUST 100% 通过。
+- 固定执行器仍明确只属于 Phase 1 协议外壳；Phase 2 必须用真实 Codex app-server executor 替换。Phase 1 已以 `d1a8bcc` 推送到 `origin/spike/demo-v0`，未 merge。
 
 ### Phase 2：接入真实 Codex app-server
 
@@ -227,9 +245,19 @@ main
 
 - 通过标准 A2A Client 提交任务。
 - 立即获得标准 Task。
-- Codex 在 `demo` 分支真实修改文件。
+- Codex 在 `spike/demo-v0` 分支真实修改文件。
 - 客户端能观察进度和终态。
 - 最终 Artifact 能说明修改内容。
+
+Phase 2 实际核验记录（2026-07-12）：
+
+- Adapter 现在直接启动并管理官方 `codex app-server --stdio` 子进程，完成 `initialize` / `initialized` 握手，并将真实 A2A Task 映射到 Codex thread/turn；生产入口已移除固定执行器，固定实现只保留在测试支持代码中。
+- Codex 通知会映射为 A2A `working`、Artifact 和终态；`tasks/cancel` 会调用真实 `turn/interrupt`，等待 Codex 的 interrupted 终态，并覆盖取消超时、app-server 异常退出、并发 thread 映射和运行时关闭等路径。
+- 真实运行使用 `codex-cli 0.144.1`，Adapter 在 `thread/start` 显式指定 `gpt-5.4-mini`，不继承用户全局模型。此前 `0.142.5` 对当前全局模型返回升级提示，因此已按实际运行版本更新锁定。
+- 标准 A2A Client 创建的真实 Task（ID 前缀 `90838f53`）经历了 returned Task、订阅初始快照、`working` 和 `completed`；最终持久化 1 个 Artifact，并包含真实 unified diff。
+- Codex 真实修改且只修改了 `src/runtime-config.ts`、`src/main.ts` 和 `tests/runtime-config.test.ts`：新增仅允许 `127.0.0.1`、`localhost`、`::1` 的 loopback host 校验，并接入生产启动配置。
+- 真实 smoke 在 `spike/demo-v0` 上完成；运行前后 HEAD 均为 `b41dd9853d0692aa533d0d6de7f850b32c6d93c7`，所有非目标 tracked/untracked 文件指纹、暂存区和工作区状态保持一致。smoke 随后独立执行 Adapter test、typecheck、build 和 host 行为检查，均通过。
+- 全仓默认测试共 21 个测试文件、109 个测试通过，其中 Adapter 为 7 个测试文件、41 个测试；真实 model-backed smoke 单独为 1/1 通过。
 
 ### Phase 3：HuanLink 原生接入 A2A
 
@@ -248,11 +276,20 @@ main
 - HuanLink 能追踪 `AgentCallId <-> A2A taskId`。
 - Task 完成时能触发新的 MainAgent turn。
 
+Phase 3 实际核验记录（2026-07-12）：
+
+- 已新增独立 `packages/integrations/a2a-client`，精确使用 `@a2a-js/sdk@1.0.0-beta.0`：通过 Agent Card 发现并校验 A2A v1.0、streaming 和目标 skill，以 `SendMessage(returnImmediately: true)` 创建 Task，在后台使用 `SubscribeToTask`/`GetTask` 跟踪终态和完整 Artifact，并映射 `CancelTask`。首次发现失败会重新建连；订阅断流或终态可见性短暂滞后会做有界重试，不会静默丢失 Task。
+- Core 新增协议无关的 `AgentCallService`，维护 `AgentCallId <-> taskId` 双向关联，并支持 `executionMode: "async" | "blocking"`。`async` 只等待远端受理并由 watcher 跟踪终态；`blocking` 在当前 turn 等到 terminal 或暂停 outcome，且不再触发重复回流。调用取消会立即结束等待、停止 watcher 并异步映射到远端 `CancelTask`；显式关闭会等待该取消收尾。Core 与构建后的 integration 公共声明均未引用 A2A SDK 类型。
+- OpenAI Agents integration 使用真实 `tool()` 暴露 `submit_codex_agent_call`，由 SDK `RunContext` 注入 `runId/sessionId` 和调用取消信号。业务任务参数仍只有代码任务文本，`executionMode` 是 HuanLink 调用控制字段；默认使用 `async`，用户明确要求等待时可选择 `blocking`。旧值 `background/wait` 会在 Tool 参数校验阶段被拒绝。MainAgent 固定使用 Demo 模型 `gpt-5.4-mini`。
+- `apps/server` 已组装真实 OpenAI Agents Runner、A2A transport 和 AgentCall 生命周期。`async` 受理后 MainAgent 会在同一 turn 继续生成自然确认，远端进入 `completed/failed/canceled/rejected` 后再读取最新上下文，为同一 session 串行触发一次 fresh turn；`blocking` 则把 outcome 交回当前 turn，不产生第二次终态回流。2026-07-15 补充终态续派语义：只有当最新上下文已经明确、无歧义地授权下一步时，MainAgent 才在终态 turn 中提交新的异步 AgentCall；QQ 出口机械附加新 HuanLink/A2A taskId，已完成或已受理任务不得重复提交。是否续派仍由 MainAgent 结合完整上下文判断，不在 Demo 中增加工作流状态机。
+- 黑盒 smoke 使用标准 A2A HTTP 服务、官方 A2A Client 和真实 OpenAI Agents Runner（确定性测试 Model）：`async` 验证当前 turn 自然确认、完整 Artifact 和单次终态回流；`blocking` 验证当前 turn 确实等待远端结果且不会再入。该测试只验收 Phase 3 的 HuanLink 原生编排，不冒充 Phase 4 的真实 QQ 或 Phase 5 的真实模型、Codex 代码修改闭环。
+- 全仓默认测试共 26 个测试文件、141 个测试通过；`corepack.cmd pnpm typecheck` 与 `corepack.cmd pnpm build` 均通过。
+
 ### Phase 4：接入真实 QQ 群
 
 目标：
 
-- 复用服务器现有 QQ Bot 网关，增加最薄的 OneBot 兼容 Channel Adapter。
+- 对接服务器现有 LLBot 或 NapCat 网关暴露的共用 OneBot 兼容接口与协议，增加最薄的 Channel Adapter；不依赖任一网关的私有接口。
 - 只支持明确 `@HuanLink` 或明确命令触发。
 - 把任务受理和任务完成结果发回原群。
 - Task 完成后的新 turn 读取当时最新群聊消息。
@@ -266,6 +303,15 @@ main
 - Codex 完成后，群内能收到结合最新上下文生成的最终结果。
 - Codex 执行期间，QQ 群消息处理不被阻塞。
 
+Phase 4 实际验收记录（2026-07-14）：
+
+- HuanLink server 已通过 LLBot 的 OneBot 11 正向 WebSocket 接入真实 QQ 群；真实 `/huanlink` 命令能够触发 DeepSeek MainAgent，普通连接测试不会调用 Codex。
+- 真实代码任务要求 Codex 重写仓库根目录的 `test.md` 项目概况。MainAgent 只创建了一个异步 AgentCall 和一个 A2A Task，群内立即收到 HuanLink taskId 与 A2A taskId。
+- Codex 执行期间，用户继续在同一群查询任务状态、询问功能并补充上下文；QQ 消息和 MainAgent turn 均正常处理，状态查询复用原任务且没有重新派发 Codex。
+- Adapter 通过独立的 `codex app-server` 进程执行任务；关闭 Codex 桌面应用不影响该任务继续运行。任务最终从 `working` 进入 `completed`，并真实写入 `test.md`（32 行、2365 bytes）。
+- A2A Task 产生 1 个 Artifact；HuanLink 只触发 1 次终态 MainAgent re-entry，将文件、结果摘要和最新群聊语义发回原群。自动完成通知与用户手动查询恰好重叠时出现两条完成说明，但没有重复任务或重复终态回流。
+- 本地 `server.jsonl` 与 `codex-a2a-adapter.jsonl` 能通过关联 ID 串起同一个 AgentCall、A2A Task、Codex thread/turn、Artifact 和终态回流。Phase 4 验收通过；真实 `input-required` 场景不作为本阶段门禁。
+
 ### Phase 5：真实闭环验收
 
 使用一个真实、可验证的小型代码任务执行完整演示：
@@ -274,11 +320,21 @@ main
 2. HuanLink 通过 Agent Card 选择 Codex 能力。
 3. A2A Task 创建成功。
 4. 群里立即收到受理信息。
-5. Codex 在 `demo` 分支完成代码修改。
+5. Codex 在 `spike/demo-v0` 分支完成代码修改。
 6. A2A 返回状态与 Artifact。
 7. HuanLink 唤醒 MainAgent。
 8. MainAgent 结合最新群聊上下文回复。
 9. 人工检查实际 diff 与群内摘要一致。
+
+Phase 5 实际验收记录（2026-07-15）：
+
+- 真实 QQ 群中的 `/huanlink` 请求由 DeepSeek MainAgent 判断后创建异步 AgentCall `cebe36e7-6145-4f5f-90c6-ee7ea576b5ca`，并通过标准 A2A 创建 Task `8f92715b-a2c6-4ad5-b7ff-71230d75ba45`；群内先收到受理消息和两类 taskId。
+- Adapter 通过独立的官方 `codex app-server` 进程执行真实 Codex turn。任务从 15:48:25 运行到 16:00:32，超过旧的 5 分钟断流窗口后仍成功进入 `completed`，产生 1 个 Artifact，并在约 16:00:40 触发 MainAgent 终态回流到原群。
+- Codex 在 `spike/demo-v0` 上真实修改 `apps/codex-a2a-adapter/src/agent-card.ts` 和 `apps/codex-a2a-adapter/tests/agent-card.test.ts`，将 Agent Card 从“硬 scope”语义修正为“workspace 是工作焦点而非硬修改边界”。人工核对实际 diff 与群内摘要一致。
+- 独立复检中 Adapter 8 个测试文件、70 个测试通过，typecheck 与 build 通过；真实链路日志能够按 AgentCall、A2A Task、Codex thread/turn 和终态回流关联。
+- 随后的“两轮连续任务”探索实际只创建了一个 blocking AgentCall/A2A Task，把两条指令放进同一个 Codex turn，因此只在整个任务结束后产生一次终态通知。它不影响本阶段单个真实异步代码任务的验收结论，但暴露了 v1 连续任务语义；当前已按“第一步终态先回报，再由 MainAgent 判断并异步续派新任务”的规则补充实现和确定性测试，未把它扩展为工作流引擎。
+
+**Phase 5 结论：通过。Phase 0～Phase 5 的 Demo 边界已经完成，可以停止扩展并进入收尾。**
 
 ## 8. Demo 阶段最小 EventLog
 
@@ -362,7 +418,7 @@ codexTurnId
 ### Codex 修改范围失控
 
 - 限制 workspace。
-- 强制 `demo` 分支。
+- 强制 `spike/demo-v0` 分支。
 - 不自动 commit、merge 或 push。
 - 最终人工检查 diff。
 
@@ -393,16 +449,16 @@ codexTurnId
 
 只有同时满足下面条件，才能称为 Demo 跑通：
 
-- [ ] 从真实 QQ 群发起任务。
-- [ ] HuanLink 使用真实 MainAgent 判断并发起 AgentCall。
-- [ ] HuanLink 与 Codex Adapter 之间使用标准 A2A v1.0。
-- [ ] Adapter 通过官方 Codex app-server 执行任务。
-- [ ] Codex 在 `demo` 分支产生真实代码修改。
-- [ ] AgentCall 异步执行且不阻塞群聊。
-- [ ] 群里先收到 taskId，再收到最终结果。
-- [ ] 最终结果来自 A2A Task/Artifact，而不是旁路读取。
-- [ ] A2A Inspector/TCK 验证所声明的能力。
-- [ ] 人工核对代码 diff 与群聊回复一致。
+- [x] 从真实 QQ 群发起任务。
+- [x] HuanLink 使用真实 MainAgent 判断并发起 AgentCall。
+- [x] HuanLink 与 Codex Adapter 之间使用标准 A2A v1.0。
+- [x] Adapter 通过官方 Codex app-server 执行任务。
+- [x] Codex 在 `spike/demo-v0` 分支产生真实代码修改。
+- [x] AgentCall 异步执行且不阻塞群聊。
+- [x] 群里先收到 taskId，再收到最终结果。
+- [x] 最终结果来自 A2A Task/Artifact，而不是旁路读取。
+- [x] A2A Inspector/TCK 验证所声明的能力。
+- [x] 人工核对代码 diff 与群聊回复一致。
 
 ## 13. Demo 后再决定的优化
 
