@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import {
+  A2A_PROTOCOL_VERSION,
   CancelTaskRequest,
   GetTaskRequest,
   SendMessageRequest,
@@ -162,6 +163,80 @@ describe("Codex A2A adapter task lifecycle", () => {
     expect(remaining.map(taskStateFrom)).toContain(
       TaskState.TASK_STATE_COMPLETED
     );
+  });
+
+  it("writes SSE comment heartbeats while a task subscription is idle", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const executor = new ControlledTaskExecutor({
+      waitBeforeComplete: async () => gate
+    });
+    const server = await startAdapterServer({
+      executor,
+      heartbeatIntervalMs: 10,
+      port: 0
+    });
+    runningServers.push(server);
+    const client = await new ClientFactory().createFromUrl(server.origin);
+    const submitted = requireTask(
+      await client.sendMessage(createSendRequest("wait for heartbeat", true))
+    );
+    await waitForTaskState(client, submitted.id, TaskState.TASK_STATE_WORKING);
+    const controller = new AbortController();
+    const abortTimeout = setTimeout(() => controller.abort(), 250);
+    let body = "";
+
+    try {
+      const response = await fetch(`${server.origin}/a2a/jsonrpc`, {
+        method: "POST",
+        headers: {
+          accept: "text/event-stream",
+          "a2a-version": A2A_PROTOCOL_VERSION,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: "heartbeat-test",
+          method: "SubscribeToTask",
+          params: SubscribeToTaskRequest.toJSON(
+            SubscribeToTaskRequest.fromJSON({ id: submitted.id })
+          )
+        }),
+        signal: controller.signal
+      });
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toContain(
+        "text/event-stream"
+      );
+      const reader = response.body?.getReader();
+      if (!reader) {
+        throw new Error("Expected an SSE response body");
+      }
+      const decoder = new TextDecoder();
+      try {
+        while (!body.includes(": heartbeat\n\n")) {
+          const chunk = await reader.read();
+          if (chunk.done) {
+            break;
+          }
+          body += decoder.decode(chunk.value, { stream: true });
+        }
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          throw error;
+        }
+      } finally {
+        reader.releaseLock();
+      }
+    } finally {
+      clearTimeout(abortTimeout);
+      controller.abort();
+      release();
+    }
+
+    expect(body).toContain(": heartbeat\n\n");
   });
 
   it("cancels a default task with the standard canceled state", async () => {

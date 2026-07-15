@@ -11,12 +11,13 @@ import {
   agentCardHandler,
   jsonRpcHandler
 } from "@a2a-js/sdk/server/express";
-import express from "express";
+import express, { type RequestHandler, type Response } from "express";
 
 import { createAgentCard } from "./agent-card.js";
 
 export interface StartAdapterServerOptions {
   executor: AgentExecutor;
+  heartbeatIntervalMs?: number;
   host?: string;
   port?: number;
 }
@@ -33,6 +34,8 @@ export async function startAdapterServer(
   const port = options.port ?? 4000;
   const app = express();
   const httpServer = createServer(app);
+
+  app.use(sseHeartbeat(options.heartbeatIntervalMs ?? 30_000));
 
   await listen(httpServer, host, port);
 
@@ -71,6 +74,42 @@ export async function startAdapterServer(
     await close(httpServer);
     throw error;
   }
+}
+
+function sseHeartbeat(intervalMs: number): RequestHandler {
+  return (_request, response, next) => {
+    const flushHeaders = response.flushHeaders.bind(response);
+    let heartbeat: ReturnType<typeof setInterval> | undefined;
+    const stopHeartbeat = () => {
+      if (heartbeat !== undefined) {
+        clearInterval(heartbeat);
+        heartbeat = undefined;
+      }
+    };
+
+    response.on("close", stopHeartbeat);
+    response.on("finish", stopHeartbeat);
+    response.flushHeaders = () => {
+      flushHeaders();
+      if (heartbeat === undefined && isSseResponse(response)) {
+        heartbeat = setInterval(() => {
+          if (!response.destroyed && !response.writableEnded) {
+            response.write(": heartbeat\n\n");
+          }
+        }, intervalMs);
+        heartbeat.unref();
+      }
+    };
+    next();
+  };
+}
+
+function isSseResponse(response: Response): boolean {
+  const contentType = response.getHeader("content-type");
+  return (
+    typeof contentType === "string" &&
+    contentType.startsWith("text/event-stream")
+  );
 }
 
 function listen(server: Server, host: string, port: number): Promise<void> {
