@@ -8,7 +8,7 @@ export function createAgentCard(origin: string): AgentCardValue {
   return AgentCard.fromJSON({
     name: "HuanLink Codex A2A Adapter",
     description:
-      "Runs scoped HuanLink code tasks through the official codex app-server.",
+      "Runs HuanLink code tasks through the official codex app-server, treating the configured workspace folder as the working focus rather than a hard modification boundary.",
     version: "0.2.0",
     supportedInterfaces: [
       {

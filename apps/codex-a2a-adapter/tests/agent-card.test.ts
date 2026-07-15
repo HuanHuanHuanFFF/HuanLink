@@ -40,8 +40,9 @@ describe("Codex A2A adapter Agent Card", () => {
         tenant: ""
       }
     ]);
-    expect(card.description).toContain("codex app-server");
-    expect(card.description).not.toContain("Phase 1");
+    expect(card.description).toBe(
+      "Runs HuanLink code tasks through the official codex app-server, treating the configured workspace folder as the working focus rather than a hard modification boundary."
+    );
     expect(card.skills.map((skill) => skill.id)).toEqual(["codex-code-task"]);
   });
 
