@@ -633,6 +633,91 @@ describe("A2aAgentCallTransport", () => {
     );
   });
 
+  test("keeps watching beyond three interrupted subscriptions until GetTask reports completion", async () => {
+    vi.useFakeTimers();
+    try {
+      const logger = new RecordingLogger();
+      const completed = remoteTask(TaskState.TASK_STATE_COMPLETED);
+      completed.artifacts = [
+        {
+          artifactId: "recovered-result",
+          name: "Recovered result",
+          description: "Result observed after reconnecting",
+          parts: [
+            {
+              content: { $case: "text", value: "completed after reconnects" },
+              metadata: undefined,
+              filename: "",
+              mediaType: "text/plain"
+            }
+          ],
+          metadata: undefined,
+          extensions: []
+        }
+      ];
+      const getTask = vi
+        .fn<() => Promise<Task>>()
+        .mockResolvedValueOnce(remoteTask(TaskState.TASK_STATE_WORKING))
+        .mockResolvedValueOnce(remoteTask(TaskState.TASK_STATE_WORKING))
+        .mockResolvedValueOnce(remoteTask(TaskState.TASK_STATE_WORKING))
+        .mockResolvedValueOnce(remoteTask(TaskState.TASK_STATE_WORKING))
+        .mockResolvedValueOnce(completed);
+      let subscriptionAttempts = 0;
+      const client = {
+        protocolVersion: A2A_PROTOCOL_VERSION,
+        async *resubscribeTask() {
+          subscriptionAttempts += 1;
+          throw new TypeError("terminated");
+        },
+        getTask
+      } as unknown as Client;
+      vi.spyOn(ClientFactory.prototype, "createFromUrl").mockResolvedValue(client);
+      const transport = new A2aAgentCallTransport({
+        origin: "http://127.0.0.1:1",
+        logger
+      });
+      const snapshots: AgentCallTaskSnapshot[] = [];
+
+      const watching = (async () => {
+        for await (const snapshot of transport.watchTask("a2a-task-lagging", {
+          signal: new AbortController().signal
+        })) {
+          snapshots.push(snapshot);
+        }
+      })();
+      const outcome = watching.then(
+        () => ({ status: "fulfilled" as const }),
+        (error: unknown) => ({ status: "rejected" as const, error })
+      );
+      await vi.runAllTimersAsync();
+
+      await expect(outcome).resolves.toEqual({ status: "fulfilled" });
+      expect(subscriptionAttempts).toBe(5);
+      expect(getTask).toHaveBeenCalledTimes(5);
+      expect(snapshots.at(-1)).toMatchObject({
+        taskId: "a2a-task-lagging",
+        state: "completed",
+        artifacts: [
+          { id: "recovered-result", text: "completed after reconnects" }
+        ]
+      });
+      expect(logger.entries).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            message: "a2a.watch.retry",
+            fields: expect.objectContaining({ attempt: 4, state: "working" })
+          }),
+          expect.objectContaining({ message: "a2a.watch.ended" })
+        ])
+      );
+      expect(logger.entries.map(({ message }) => message)).not.toContain(
+        "a2a.watch.failed"
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test("preserves structured questions from an input-required status message", async () => {
     const paused = remoteInputRequiredTask();
     const client = {

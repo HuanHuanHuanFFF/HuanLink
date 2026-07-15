@@ -35,9 +35,9 @@ export type A2aAgentCallTransportOptions = {
   logger?: RuntimeLogger;
 };
 
-const MAX_SUBSCRIPTION_ATTEMPTS = 3;
 const TERMINAL_RECONCILIATION_ATTEMPTS = 4;
 const RECONCILIATION_DELAY_MS = 20;
+const SUBSCRIPTION_RETRY_DELAYS_MS = [1_000, 2_000, 5_000] as const;
 
 class A2aProtocolError extends Error {}
 
@@ -242,9 +242,8 @@ export class A2aAgentCallTransport implements AgentCallTransport {
     options: { signal: AbortSignal }
   ): AsyncIterable<AgentCallTaskSnapshot> {
     const client = await this.getClient();
-    let lastStreamError: unknown;
 
-    for (let attempt = 1; attempt <= MAX_SUBSCRIPTION_ATTEMPTS; attempt += 1) {
+    for (let attempt = 1; ; attempt += 1) {
       let terminalEventSeen = false;
       let streamError: unknown;
 
@@ -293,7 +292,6 @@ export class A2aAgentCallTransport implements AgentCallTransport {
           throw error;
         }
         streamError = error;
-        lastStreamError = error;
       }
 
       const reconciled = await this.reconcileTask(
@@ -317,18 +315,10 @@ export class A2aAgentCallTransport implements AgentCallTransport {
         return;
       }
 
-      if (attempt === MAX_SUBSCRIPTION_ATTEMPTS) {
-        if (isUnsupportedOperation(lastStreamError)) {
-          throw new A2aProtocolError(
-            `A2A task ${taskId} cannot be subscribed and is not terminal`,
-            { cause: lastStreamError }
-          );
-        }
-        if (lastStreamError !== undefined) {
-          throw lastStreamError;
-        }
+      if (isUnsupportedOperation(streamError)) {
         throw new A2aProtocolError(
-          `A2A task ${taskId} subscription ended while state was ${reconciled.state}`
+          `A2A task ${taskId} cannot be subscribed and is not terminal`,
+          { cause: streamError }
         );
       }
 
@@ -336,7 +326,7 @@ export class A2aAgentCallTransport implements AgentCallTransport {
         ...snapshotLogFields(reconciled),
         attempt
       });
-      await abortableDelay(RECONCILIATION_DELAY_MS * attempt, options.signal);
+      await abortableDelay(subscriptionRetryDelayMs(attempt), options.signal);
     }
   }
 
@@ -677,6 +667,12 @@ function isTerminal(state: AgentCallTaskState): boolean {
 
 function isPaused(state: AgentCallTaskState): boolean {
   return state === "input-required" || state === "auth-required";
+}
+
+function subscriptionRetryDelayMs(attempt: number): number {
+  return SUBSCRIPTION_RETRY_DELAYS_MS[
+    Math.min(attempt, SUBSCRIPTION_RETRY_DELAYS_MS.length) - 1
+  ]!;
 }
 
 function abortableDelay(
