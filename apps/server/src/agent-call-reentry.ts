@@ -38,7 +38,10 @@ export function buildAgentCallReentryInput(
     artifacts || "- (none)",
     "Latest conversation context at completion:",
     latestContext || "(none)",
-    "Respond with a concise result for the user. Do not submit another AgentCall."
+    "Respond with a concise result for the user.",
+    "If the latest conversation context contains an explicit, unambiguous follow-up that the user already authorized and no confirmation is required, submit that next task as a new async AgentCall in this same session.",
+    "Never repeat the completed task or invent a follow-up; a task already accepted or completed in the supplied result or context is not pending and must not be submitted again.",
+    "Include the completed result and any newly accepted task ID in the response. If an authorized follow-up needs a material choice, ask the user instead."
   ].join("\n");
 }
 

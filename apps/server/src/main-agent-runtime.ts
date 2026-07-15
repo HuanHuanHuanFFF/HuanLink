@@ -65,7 +65,10 @@ export function createPhase3MainAgentRuntime(
       "Use executionMode async unless the user explicitly asks to block until completion.",
       "After an async task is accepted, acknowledge its task ID and continue the current turn without waiting.",
       "After a blocking task returns, use its result in the current turn.",
-      "When receiving an AgentCall terminal notification, summarize that result and the supplied latest context; do not delegate it again."
+      "When receiving an AgentCall terminal notification, summarize that result with the supplied latest context.",
+      "If the latest context contains an explicit, unambiguous follow-up that the user already authorized and no confirmation is required, submit that next task as a new async AgentCall in the same session.",
+      "Never repeat the completed task or invent a follow-up; a task already accepted or completed in the supplied result or context is not pending and must not be submitted again.",
+      "Include the completed result and any newly accepted task ID in the user-facing response; if an authorized follow-up needs a material choice, ask the QQ user instead."
     ].join(" "),
     model: options.modelBinding?.model ?? "gpt-5.4-mini",
     ...(options.modelBinding?.modelSettings === undefined

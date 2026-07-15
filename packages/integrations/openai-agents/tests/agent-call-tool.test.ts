@@ -401,7 +401,7 @@ describe("createCodexAgentCallTool", () => {
     }
   );
 
-  test("is enabled only for user-triggered runs", async () => {
+  test("is enabled for user and terminal re-entry runs", async () => {
     const tool = createCodexAgentCallTool({
       invoker: {
         invoke: vi.fn(async () => ({
@@ -430,6 +430,34 @@ describe("createCodexAgentCallTool", () => {
 
     await expect(isEnabled("user")).resolves.toBe(true);
     await expect(isEnabled("agent_call_input_required")).resolves.toBe(false);
-    await expect(isEnabled("agent_call_terminal")).resolves.toBe(false);
+    await expect(isEnabled("agent_call_terminal")).resolves.toBe(true);
+  });
+
+  test("forces terminal re-entry submissions to stay asynchronous", async () => {
+    const invoke = vi.fn<AgentCallInvoker["invoke"]>(async (request) => ({
+      status: "accepted" as const,
+      executionMode: request.executionMode,
+      agentCallId: "terminal-follow-up-agent-call",
+      taskId: "terminal-follow-up-a2a-task",
+      state: "submitted" as const
+    }));
+    const tool = createCodexAgentCallTool({ invoker: { invoke } });
+    const context = new RunContext<OpenAiAgentsRunContext>({
+      runId: "run-terminal-follow-up",
+      sessionId: "session-terminal-follow-up",
+      trigger: "agent_call_terminal"
+    });
+
+    await tool.invoke(
+      context,
+      JSON.stringify({
+        task: "run the already authorized follow-up",
+        executionMode: "blocking"
+      })
+    );
+
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({ executionMode: "async" })
+    );
   });
 });

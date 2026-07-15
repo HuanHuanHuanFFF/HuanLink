@@ -329,6 +329,69 @@ class DelegateContinueThenSummarizeModel implements Model {
   }
 }
 
+class DelegateFollowUpAfterTerminalModel implements Model {
+  readonly requests: ModelRequest[] = [];
+
+  async getResponse(request: ModelRequest): Promise<ModelResponse> {
+    this.requests.push(request);
+    if (this.requests.length === 1) {
+      return {
+        usage: new Usage(),
+        output: [
+          {
+            type: "function_call",
+            callId: "phase3-sequence-first",
+            name: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
+            arguments: JSON.stringify({ task: "run the first sequence step" })
+          }
+        ]
+      };
+    }
+    if (this.requests.length === 2) {
+      return {
+        usage: new Usage(),
+        output: [assistantMessage("The first sequence step was accepted.")]
+      };
+    }
+    if (this.requests.length === 3) {
+      return {
+        usage: new Usage(),
+        output: [
+          {
+            type: "function_call",
+            callId: "phase3-sequence-follow-up",
+            name: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
+            arguments: JSON.stringify({
+              task: "run the pre-authorized second sequence step"
+            })
+          }
+        ]
+      };
+    }
+    if (this.requests.length === 4) {
+      return {
+        usage: new Usage(),
+        output: [
+          assistantMessage(
+            "The first step completed and the second step was accepted."
+          )
+        ]
+      };
+    }
+
+    return {
+      usage: new Usage(),
+      output: [assistantMessage("The second sequence step completed.")]
+    };
+  }
+
+  async *getStreamedResponse(
+    _request: ModelRequest
+  ): AsyncIterable<StreamEvent> {
+    throw new Error("Streaming is not used in this test");
+  }
+}
+
 class SingleModelProvider implements ModelProvider {
   constructor(private readonly model: Model) {}
 
@@ -365,6 +428,59 @@ function terminalTransport(state: AgentCallTaskState): AgentCallTransport {
       artifacts: []
     })
   };
+}
+
+function sequentialTerminalTransport() {
+  const completions = [deferred(), deferred()];
+  let submissionCount = 0;
+  const submitTask = vi.fn<AgentCallTransport["submitTask"]>(
+    async (request) => {
+      submissionCount += 1;
+      return {
+        taskId: `a2a-task-sequence-${submissionCount}`,
+        contextId: request.contextId,
+        state: "working",
+        artifacts: []
+      };
+    }
+  );
+  const transport: AgentCallTransport = {
+    discoverCapability: async (skillId) => ({
+      id: skillId,
+      name: "Codex code task"
+    }),
+    submitTask,
+    async *watchTask(taskId) {
+      const index = Number(taskId.at(-1)) - 1;
+      const completion = completions[index];
+      if (completion === undefined) {
+        throw new Error(`Unexpected sequence task ${taskId}`);
+      }
+      yield {
+        taskId,
+        contextId: "session-phase3-sequence",
+        state: "working",
+        artifacts: []
+      };
+      await completion.promise;
+      yield {
+        taskId,
+        contextId: "session-phase3-sequence",
+        state: "completed",
+        artifacts: [
+          { id: `artifact-${taskId}`, text: `${taskId} completed` }
+        ]
+      };
+    },
+    continueTask: rejectUnexpectedContinuation,
+    cancelTask: async (taskId) => ({
+      taskId,
+      state: "canceled",
+      artifacts: []
+    })
+  };
+
+  return { transport, submitTask, completions };
 }
 
 function pendingTransport() {
@@ -900,10 +1016,83 @@ describe("Phase 3 HuanLink orchestration", () => {
       }
     });
     expect(model.requests).toHaveLength(3);
-    expect(model.requests[2]?.tools).toEqual([]);
+    expect(model.requests[2]?.tools.map(({ name }) => name)).toEqual([
+      SUBMIT_CODEX_AGENT_CALL_TOOL_NAME
+    ]);
     const reentryModelInput = JSON.stringify(model.requests[2]?.input);
     expect(reentryModelInput).toContain(latestContext);
     expect(reentryModelInput).toContain(accepted.taskId);
+    expect(reentryModelInput).toContain("explicit, unambiguous follow-up");
+    expect(reentryModelInput).toContain("Never repeat the completed task");
+  });
+
+  test("submits a pre-authorized follow-up from terminal re-entry and reports both terminal steps", async () => {
+    const model = new DelegateFollowUpAfterTerminalModel();
+    const { transport, submitTask, completions } = sequentialTerminalTransport();
+    const reentries: Phase3ReentryResult[] = [];
+    const firstReentry = deferred<Phase3ReentryResult>();
+    const secondReentry = deferred<Phase3ReentryResult>();
+    const runIds = [
+      "run-phase3-sequence-follow-up",
+      "run-phase3-sequence-finished"
+    ];
+    const runtime = createPhase3HuanLinkRuntime({
+      codexA2aOrigin: "http://127.0.0.1:1",
+      transport,
+      runner: new Runner({
+        modelProvider: new SingleModelProvider(model),
+        tracingDisabled: true
+      }),
+      createRunId: () => runIds.shift() ?? "run-phase3-sequence-extra",
+      getLatestContext: () =>
+        "The user explicitly authorized the second step without confirmation.",
+      onReentry: (result) => {
+        reentries.push(result);
+        if (reentries.length === 1) {
+          firstReentry.resolve(result);
+        } else if (reentries.length === 2) {
+          secondReentry.resolve(result);
+        }
+      }
+    });
+    runtimes.push(runtime);
+
+    await runtime.runMainAgent({
+      runId: "run-phase3-sequence-initial",
+      sessionId: "session-phase3-sequence",
+      input: "run two authorized Codex steps without asking between them"
+    });
+
+    completions[0]!.resolve();
+    await firstReentry.promise;
+    expect(submitTask).toHaveBeenCalledTimes(2);
+    expect(model.requests[2]?.tools.map(({ name }) => name)).toEqual([
+      SUBMIT_CODEX_AGENT_CALL_TOOL_NAME
+    ]);
+    expect(acceptedAgentCall(model.requests[3])).toMatchObject({
+      taskId: "a2a-task-sequence-2",
+      executionMode: "async"
+    });
+    expect(reentries[0]?.output).toBe(
+      "The first step completed and the second step was accepted."
+    );
+
+    completions[1]!.resolve();
+    await secondReentry.promise;
+    await runtime.agentCalls.waitForIdle();
+
+    expect(reentries.map(({ output }) => output)).toEqual([
+      "The first step completed and the second step was accepted.",
+      "The second sequence step completed."
+    ]);
+    expect(submitTask.mock.calls.map(([request]) => request.contextId)).toEqual([
+      "session-phase3-sequence",
+      "session-phase3-sequence"
+    ]);
+    expect(runtime.agentCalls.listByRunId("run-phase3-sequence-initial"))
+      .toHaveLength(1);
+    expect(runtime.agentCalls.listByRunId("run-phase3-sequence-follow-up"))
+      .toHaveLength(1);
   });
 
   test.each(["failed", "canceled", "rejected"] as const)(
@@ -946,7 +1135,9 @@ describe("Phase 3 HuanLink orchestration", () => {
         }
       });
       expect(model.requests).toHaveLength(3);
-      expect(model.requests[2]?.tools).toEqual([]);
+      expect(model.requests[2]?.tools.map(({ name }) => name)).toEqual([
+        SUBMIT_CODEX_AGENT_CALL_TOOL_NAME
+      ]);
     }
   );
 

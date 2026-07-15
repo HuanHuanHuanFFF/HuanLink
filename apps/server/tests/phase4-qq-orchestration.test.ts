@@ -190,6 +190,8 @@ class BoundReplyModel implements Model {
 class DelegateThenSummarizeModel implements Model {
   readonly requests: ModelRequest[] = [];
 
+  constructor(private readonly delegateTerminalFollowUp = false) {}
+
   async getResponse(request: ModelRequest): Promise<ModelResponse> {
     this.requests.push(request);
     if (this.requests.length === 1) {
@@ -211,6 +213,32 @@ class DelegateThenSummarizeModel implements Model {
       return {
         usage: new Usage(),
         output: [assistantMessage("Codex task accepted by MainAgent.")]
+      };
+    }
+    if (this.requests.length === 3 && this.delegateTerminalFollowUp) {
+      return {
+        usage: new Usage(),
+        output: [
+          {
+            type: "function_call",
+            callId: "phase4-terminal-follow-up",
+            name: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
+            arguments: JSON.stringify({
+              task: "run the explicitly authorized second step",
+              executionMode: "blocking"
+            })
+          }
+        ]
+      };
+    }
+    if (this.requests.length === 4 && this.delegateTerminalFollowUp) {
+      return {
+        usage: new Usage(),
+        output: [
+          assistantMessage(
+            "The first task completed and the authorized follow-up was accepted."
+          )
+        ]
       };
     }
     return {
@@ -249,6 +277,8 @@ class SingleModelProvider implements ModelProvider {
 class ControlledTransport implements AgentCallTransport {
   readonly submitted = deferred<AgentCallTransportSubmitRequest>();
   readonly completion = deferred();
+  readonly followUpCompletion = deferred();
+  readonly submissions: AgentCallTransportSubmitRequest[] = [];
 
   constructor(
     readonly taskId = "a2a-task-phase4",
@@ -260,9 +290,12 @@ class ControlledTransport implements AgentCallTransport {
   }
 
   async submitTask(request: AgentCallTransportSubmitRequest) {
+    this.submissions.push(request);
     this.submitted.resolve(request);
+    const taskId =
+      this.submissions.length === 1 ? this.taskId : `${this.taskId}-follow-up`;
     return {
-      taskId: this.taskId,
+      taskId,
       contextId: "a2a-context-phase4",
       state: "submitted" as const,
       artifacts: []
@@ -275,6 +308,7 @@ class ControlledTransport implements AgentCallTransport {
     taskId: string,
     options: { signal: AbortSignal }
   ) {
+    const isFollowUp = taskId === `${this.taskId}-follow-up`;
     yield {
       taskId,
       contextId: "a2a-context-phase4",
@@ -283,7 +317,9 @@ class ControlledTransport implements AgentCallTransport {
     };
     if (!this.completeImmediately) {
       const released = await waitUntilReleased(
-        this.completion.promise,
+        isFollowUp
+          ? this.followUpCompletion.promise
+          : this.completion.promise,
         options.signal
       );
       if (!released) {
@@ -294,7 +330,9 @@ class ControlledTransport implements AgentCallTransport {
       taskId,
       contextId: "a2a-context-phase4",
       state: "completed" as const,
-      artifacts: [{ id: "artifact-phase4", text: "controlled diff" }]
+      artifacts: [
+        { id: `artifact-${taskId}`, text: `${taskId} controlled diff` }
+      ]
     };
   }
 
@@ -724,7 +762,7 @@ describe("Phase 4 QQ orchestration", () => {
 
   test("keeps receiving group context while Codex works and uses it for terminal re-entry", async () => {
     const channel = new ControlledChannel();
-    const model = new DelegateThenSummarizeModel();
+    const model = new DelegateThenSummarizeModel(true);
     const transport = new ControlledTransport();
     const runtime = createPhase4QqRuntime({
       channel,
@@ -732,7 +770,11 @@ describe("Phase 4 QQ orchestration", () => {
       codexA2aOrigin: "http://127.0.0.1:1",
       transport,
       runner: runner(model),
-      createRunId: runIds("run-pending", "run-terminal")
+      createRunId: runIds(
+        "run-pending",
+        "run-terminal",
+        "run-follow-up-terminal"
+      )
     });
     runtimes.push(runtime);
 
@@ -751,12 +793,12 @@ describe("Phase 4 QQ orchestration", () => {
         message("follow-up", {
           senderId: "40004",
           senderName: "Bob",
-          text: "also preserve number-or-string group IDs"
+          text: "after this completes, run the connection check without asking me"
         })
       )
     ).resolves.toBeUndefined();
     expect(runtime.conversations.formatLatestContext(SESSION_ID)).toContain(
-      "also preserve number-or-string group IDs"
+      "after this completes, run the connection check without asking me"
     );
 
     transport.completion.resolve();
@@ -766,8 +808,17 @@ describe("Phase 4 QQ orchestration", () => {
       TARGET_GROUP,
       TARGET_GROUP
     ]);
-    expect(channel.sent[1]?.text).toBe(
-      "Codex task completed with the latest context."
+    const [followUp] = runtime.agentCalls.listByRunId("run-terminal");
+    expect(followUp).toBeDefined();
+    expect(followUp?.executionMode).toBe("async");
+    expect(channel.sent[1]?.text).toContain(
+      "The first task completed and the authorized follow-up was accepted."
+    );
+    expect(channel.sent[1]?.text).toContain(
+      `HuanLink taskId: ${followUp?.agentCallId}`
+    );
+    expect(channel.sent[1]?.text).toContain(
+      `A2A taskId: ${transport.taskId}-follow-up`
     );
     const contextAfterCompletion = runtime.conversations.formatLatestContext(
       SESSION_ID
@@ -784,12 +835,17 @@ describe("Phase 4 QQ orchestration", () => {
       );
     const terminalInput = JSON.stringify(model.requests[2]?.input);
     expect(terminalInput).toContain(
-      "also preserve number-or-string group IDs"
+      "after this completes, run the connection check without asking me"
     );
-    expect(model.requests).toHaveLength(3);
-    expect(model.requests[2]?.tools).toEqual([]);
+    expect(model.requests).toHaveLength(4);
+    expect(model.requests[2]?.tools.map(({ name }) => name)).toEqual([
+      SUBMIT_CODEX_AGENT_CALL_TOOL_NAME
+    ]);
+    transport.followUpCompletion.resolve();
+    await waitForSendCount(channel, 3);
     await runtime.agentCalls.waitForIdle();
-    expect(channel.sendCalls).toHaveLength(2);
+    expect(transport.submissions).toHaveLength(2);
+    expect(channel.sendCalls).toHaveLength(3);
   });
 
   test("ignores even triggered messages from groups outside the configured target", async () => {

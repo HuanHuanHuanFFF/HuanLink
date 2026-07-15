@@ -43,9 +43,11 @@ export function createCodexAgentCallTool(
   return tool<typeof parameters, OpenAiAgentsRunContext>({
     name: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
     description:
-      "Submit a coding task to the remote Codex agent. Async mode returns an accepted task ID; blocking mode returns the observed task outcome.",
+      "Submit a coding task to the remote Codex agent. Async mode returns an accepted task ID; blocking mode returns the observed task outcome. Terminal re-entry follow-ups always run asynchronously.",
     parameters,
-    isEnabled: ({ runContext }) => runContext.context.trigger === "user",
+    isEnabled: ({ runContext }) =>
+      runContext.context.trigger === "user" ||
+      runContext.context.trigger === "agent_call_terminal",
     execute: async (
       { task, executionMode = "async" },
       runContext,
@@ -55,13 +57,18 @@ export function createCodexAgentCallTool(
         throw new Error("Codex AgentCall tool requires a HuanLink RunContext");
       }
 
+      const effectiveExecutionMode =
+        runContext.context.trigger === "agent_call_terminal"
+          ? "async"
+          : executionMode;
+
       const toolLogger = logger.child({
         runId: runContext.context.runId,
         sessionId: runContext.context.sessionId,
         toolName: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME
       });
       const inputFields = {
-        executionMode,
+        executionMode: effectiveExecutionMode,
         inputLength: task.length
       };
       toolLogger.info("main_agent.tool.started", inputFields);
@@ -82,7 +89,7 @@ export function createCodexAgentCallTool(
           contextId: runContext.context.sessionId,
           skillId,
           input: task,
-          executionMode,
+          executionMode: effectiveExecutionMode,
           ...(signal === undefined ? {} : { signal })
         });
         toolLogger.info("main_agent.tool.completed", {

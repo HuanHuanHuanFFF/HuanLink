@@ -133,7 +133,12 @@ export function createPhase4QqRuntime(
     getLatestContext: (sessionId) =>
       conversations.formatLatestContext(sessionId),
     onReentry: async (result) => {
-      const fields = reentryResultLogFields(result);
+      const followUpAgentCalls = phase3.agentCalls.listByRunId(result.runId);
+      const reply = appendTaskIds(result.output, followUpAgentCalls);
+      const fields = {
+        ...reentryResultLogFields(result),
+        ...agentCallsLogFields(followUpAgentCalls)
+      };
       if (closed) {
         qqLogger.debug("qq.reply.discarded_after_close", fields);
         return;
@@ -151,7 +156,7 @@ export function createPhase4QqRuntime(
       try {
         const sent = await sendReply(
           route.conversationId,
-          result.output,
+          reply,
           fields
         );
         if (!sent) {
@@ -179,7 +184,7 @@ export function createPhase4QqRuntime(
         });
         return;
       }
-      conversations.appendOutbound(result.sessionId, result.output);
+      conversations.appendOutbound(result.sessionId, reply);
     },
     onBackgroundError: reportBackgroundError
   });
