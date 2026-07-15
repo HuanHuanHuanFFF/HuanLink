@@ -12,6 +12,7 @@ import {
   echoTool
 } from "../index.js";
 import type { AgentEvent, AgentRunResult } from "../index.js";
+import { getEventFilePath } from "../events/event-file-paths.js";
 
 type DemoInput = {
   eventLogBaseDir?: string;
@@ -67,7 +68,7 @@ export async function runMockAgentDemo(
     log(`${eventIndex}. ${event.type} ${eventData}`);
   }
 
-  log(`eventLog: ${eventFilePath(eventLogBaseDir, runInput.runId)}`);
+  log(`eventLog: ${getEventFilePath(eventLogBaseDir, runInput.runId)}`);
 
   return {
     eventLogBaseDir,
@@ -97,15 +98,6 @@ function resolveEventLogBaseDir(inputBaseDir?: string): string {
   }
 
   return path.resolve(process.env.INIT_CWD ?? process.cwd(), ".huanlink");
-}
-
-function eventFilePath(eventLogBaseDir: string, runId: string): string {
-  return path.join(
-    eventLogBaseDir,
-    "runs",
-    Buffer.from(runId, "utf8").toString("base64url") || "_",
-    "events.jsonl"
-  );
 }
 
 function createDemoRunSuffix(): string {

@@ -7,3 +7,8 @@ export function errorMessage(error: unknown): string {
 export function isNodeError(error: unknown): error is NodeJS.ErrnoException {
     return error instanceof Error && "code" in error;
 }
+
+// 判断是否为文件或目录不存在（ENOENT）错误。
+export function isNotFoundError(error: unknown): boolean {
+    return isNodeError(error) && error.code === "ENOENT";
+}

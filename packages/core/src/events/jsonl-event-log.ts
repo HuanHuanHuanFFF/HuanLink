@@ -4,7 +4,7 @@ import path from "node:path";
 import {completeAgentEvent} from "./create-agent-event.js";
 import {getEventFilePath} from "./event-file-paths.js";
 import {parseEventsJsonl, serializeEvent} from "./event-json-codec.js";
-import {errorMessage, isNodeError} from "../shared/errors.js";
+import {errorMessage, isNotFoundError} from "../shared/errors.js";
 import {resolveRuntimeConfig} from "../runtime/runtime-config.js";
 import {SimpleLruMap} from "../shared/simple-lru-map.js";
 import type {
@@ -63,7 +63,7 @@ export class JsonlEventLog implements EventLog {
         try {
             content = await readFile(eventFilePath, "utf8");
         } catch (error) {
-            if (isNodeError(error) && error.code === "ENOENT") {
+            if (isNotFoundError(error)) {
                 return [];
             }
 
@@ -121,7 +121,7 @@ export class JsonlEventLog implements EventLog {
         try {
             content = await readFile(eventFilePath, "utf8");
         } catch (error) {
-            if (isNodeError(error) && error.code === "ENOENT") {
+            if (isNotFoundError(error)) {
                 return 0;
             }
 

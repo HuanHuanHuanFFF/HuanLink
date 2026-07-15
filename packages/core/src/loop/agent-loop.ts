@@ -1,6 +1,8 @@
 // 最小 AgentLoop，跑通 fake model 到工具调用再到最终回答的链路。
 
 import {StaticContextAssembler} from "../context/static-context-assembler.js";
+import {appendAgentEvent} from "../events/append-agent-event.js";
+import {isSignalCancellation} from "../shared/cancellation.js";
 import {resolveRuntimeConfig} from "../runtime/runtime-config.js";
 import type {
     AgentEvent,
@@ -184,14 +186,16 @@ export class AgentLoop {
             "step" | "toolCallId" | "parentEventId"
         > = {}
     ): Promise<AgentEvent> {
-        return this.eventWriter.append({
-            type,
-            runId: input.runId,
-            sessionId: input.sessionId,
-            source: "agent_loop",
-            ...correlation,
-            data
-        } as AgentEventDraft);
+        return Promise.resolve(
+            appendAgentEvent(this.eventWriter, {
+                type,
+                runId: input.runId,
+                sessionId: input.sessionId,
+                source: "agent_loop",
+                ...correlation,
+                data
+            })
+        );
     }
 
     private createToolMessage(result: ToolResult): ModelMessage {
@@ -213,8 +217,7 @@ export class AgentLoop {
     private isCancellation(input: AgentRunInput, error: unknown): boolean {
         return (
             error instanceof AgentRunCancelledError ||
-            input.signal?.aborted === true ||
-            (error instanceof Error && error.name === "AbortError")
+            isSignalCancellation(input.signal, error)
         );
     }
 }

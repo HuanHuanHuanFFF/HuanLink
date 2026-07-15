@@ -1,12 +1,13 @@
 // 最小工具网关，负责策略检查、工具查找、执行和事件记录。
 
+import {appendAgentEvent} from "../events/append-agent-event.js";
 import type {
     AgentEvent,
     AgentEventDataByType,
-    AgentEventDraft,
     AgentEventType
 } from "../events/types.js";
 import type {EventWriter} from "../events/event-log.js";
+import {isSignalCancellation} from "../shared/cancellation.js";
 import type {PolicyEngine} from "../policy/types.js";
 import type {
     RunId,
@@ -159,15 +160,17 @@ export class ToolGateway {
         type: Type,
         data: AgentEventDataByType[Type]
     ): Promise<AgentEvent> {
-        return this.eventWriter.append({
-            type,
-            runId: input.runId,
-            sessionId: input.sessionId,
-            source: "tool_gateway",
-            step: input.step,
-            toolCallId: input.toolCall.id,
-            data
-        } as AgentEventDraft);
+        return Promise.resolve(
+            appendAgentEvent(this.eventWriter, {
+                type,
+                runId: input.runId,
+                sessionId: input.sessionId,
+                source: "tool_gateway",
+                step: input.step,
+                toolCallId: input.toolCall.id,
+                data
+            })
+        );
     }
 
     private throwIfAborted(signal?: AbortSignal): void {
@@ -182,9 +185,6 @@ export class ToolGateway {
         signal: AbortSignal | undefined,
         error: unknown
     ): boolean {
-        return (
-            signal?.aborted === true ||
-            (error instanceof Error && error.name === "AbortError")
-        );
+        return isSignalCancellation(signal, error);
     }
 }
