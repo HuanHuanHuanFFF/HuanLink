@@ -149,6 +149,45 @@ describe("JsonlEventLog", () => {
     ).toEqual([1, 2, 3]);
   });
 
+  test("stops at the maximum safe seq without corrupting the run file", async () => {
+    const runId = "run_seq_limit";
+    const sessionId = "session_seq_limit";
+    const seedingEventLog = new JsonlEventLog({ baseDir });
+    await replaceRunFile(
+      seedingEventLog,
+      runId,
+      sessionId,
+      JSON.stringify({
+        ...validRawEvent(runId, Number.MAX_SAFE_INTEGER - 1),
+        sessionId
+      })
+    );
+
+    const eventLog = new JsonlEventLog({ baseDir });
+    const lastEvent = await eventLog.append(createDraft(runId, sessionId));
+
+    expect(lastEvent.seq).toBe(Number.MAX_SAFE_INTEGER);
+    await expect(eventLog.append(createDraft(runId, sessionId))).rejects.toThrow(
+      new RegExp(
+        `^Failed to append JSONL EventLog event for run "${runId}": ` +
+          `Cannot allocate JSONL EventLog seq: maximum safe integer ` +
+          `${Number.MAX_SAFE_INTEGER} has been reached$`
+      )
+    );
+
+    const [eventFile] = await findEventsFiles(baseDir);
+    const storedSeqs = (await readJsonLines(eventFile)).map(
+      (line) => (JSON.parse(line) as AgentEvent).seq
+    );
+
+    expect(storedSeqs).toEqual([
+      Number.MAX_SAFE_INTEGER - 1,
+      Number.MAX_SAFE_INTEGER
+    ]);
+    expect(storedSeqs.every((seq) => Number.isSafeInteger(seq))).toBe(true);
+    expect(new Set(storedSeqs).size).toBe(storedSeqs.length);
+  });
+
   test("returns an empty array when the run file does not exist", async () => {
     const eventLog = new JsonlEventLog({ baseDir });
     expect(await eventLog.readRunEvents("missing_run")).toEqual([]);

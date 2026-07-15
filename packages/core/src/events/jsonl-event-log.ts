@@ -87,7 +87,11 @@ export class JsonlEventLog implements EventLog {
 
             await mkdir(path.dirname(eventFilePath), {recursive: true});
             await appendFile(eventFilePath, `${serializeEvent(completed)}\n`, "utf8");
-            this.nextSeqByRun.set(event.runId, seq + 1);
+            if (seq === Number.MAX_SAFE_INTEGER) {
+                this.nextSeqByRun.delete(event.runId);
+            } else {
+                this.nextSeqByRun.set(event.runId, seq + 1);
+            }
 
             return completed;
         } catch (error) {
@@ -107,6 +111,12 @@ export class JsonlEventLog implements EventLog {
         }
 
         const maxSeq = await this.maxExistingSeq(runId);
+        if (maxSeq === Number.MAX_SAFE_INTEGER) {
+            throw new Error(
+                `Cannot allocate JSONL EventLog seq: maximum safe integer ${Number.MAX_SAFE_INTEGER} has been reached`
+            );
+        }
+
         const nextSeq = maxSeq + 1;
         this.nextSeqByRun.set(runId, nextSeq);
 
