@@ -281,7 +281,7 @@ Phase 3 实际核验记录（2026-07-12）：
 - 已新增独立 `packages/integrations/a2a-client`，精确使用 `@a2a-js/sdk@1.0.0-beta.0`：通过 Agent Card 发现并校验 A2A v1.0、streaming 和目标 skill，以 `SendMessage(returnImmediately: true)` 创建 Task，在后台使用 `SubscribeToTask`/`GetTask` 跟踪终态和完整 Artifact，并映射 `CancelTask`。首次发现失败会重新建连；订阅断流或终态可见性短暂滞后会做有界重试，不会静默丢失 Task。
 - Core 新增协议无关的 `AgentCallService`，维护 `AgentCallId <-> taskId` 双向关联，并支持 `executionMode: "async" | "blocking"`。`async` 只等待远端受理并由 watcher 跟踪终态；`blocking` 在当前 turn 等到 terminal 或暂停 outcome，且不再触发重复回流。调用取消会立即结束等待、停止 watcher 并异步映射到远端 `CancelTask`；显式关闭会等待该取消收尾。Core 与构建后的 integration 公共声明均未引用 A2A SDK 类型。
 - OpenAI Agents integration 使用真实 `tool()` 暴露 `submit_codex_agent_call`，由 SDK `RunContext` 注入 `runId/sessionId` 和调用取消信号。业务任务参数仍只有代码任务文本，`executionMode` 是 HuanLink 调用控制字段；默认使用 `async`，用户明确要求等待时可选择 `blocking`。旧值 `background/wait` 会在 Tool 参数校验阶段被拒绝。MainAgent 固定使用 Demo 模型 `gpt-5.4-mini`。
-- `apps/server` 已组装真实 OpenAI Agents Runner、A2A transport 和 AgentCall 生命周期。`async` 受理后 MainAgent 会在同一 turn 继续生成自然确认，远端进入 `completed/failed/canceled/rejected` 后再读取最新上下文，为同一 session 串行触发一次 fresh turn；`blocking` 则把 outcome 交回当前 turn，不产生第二次终态回流。再入时委派 tool 被禁用，回流失败会记录并通过后台错误回调暴露。
+- `apps/server` 已组装真实 OpenAI Agents Runner、A2A transport 和 AgentCall 生命周期。`async` 受理后 MainAgent 会在同一 turn 继续生成自然确认，远端进入 `completed/failed/canceled/rejected` 后再读取最新上下文，为同一 session 串行触发一次 fresh turn；`blocking` 则把 outcome 交回当前 turn，不产生第二次终态回流。2026-07-15 补充终态续派语义：只有当最新上下文已经明确、无歧义地授权下一步时，MainAgent 才在终态 turn 中提交新的异步 AgentCall；QQ 出口机械附加新 HuanLink/A2A taskId，已完成或已受理任务不得重复提交。是否续派仍由 MainAgent 结合完整上下文判断，不在 Demo 中增加工作流状态机。
 - 黑盒 smoke 使用标准 A2A HTTP 服务、官方 A2A Client 和真实 OpenAI Agents Runner（确定性测试 Model）：`async` 验证当前 turn 自然确认、完整 Artifact 和单次终态回流；`blocking` 验证当前 turn 确实等待远端结果且不会再入。该测试只验收 Phase 3 的 HuanLink 原生编排，不冒充 Phase 4 的真实 QQ 或 Phase 5 的真实模型、Codex 代码修改闭环。
 - 全仓默认测试共 26 个测试文件、141 个测试通过；`corepack.cmd pnpm typecheck` 与 `corepack.cmd pnpm build` 均通过。
 
@@ -325,6 +325,16 @@ Phase 4 实际验收记录（2026-07-14）：
 7. HuanLink 唤醒 MainAgent。
 8. MainAgent 结合最新群聊上下文回复。
 9. 人工检查实际 diff 与群内摘要一致。
+
+Phase 5 实际验收记录（2026-07-15）：
+
+- 真实 QQ 群中的 `/huanlink` 请求由 DeepSeek MainAgent 判断后创建异步 AgentCall `cebe36e7-6145-4f5f-90c6-ee7ea576b5ca`，并通过标准 A2A 创建 Task `8f92715b-a2c6-4ad5-b7ff-71230d75ba45`；群内先收到受理消息和两类 taskId。
+- Adapter 通过独立的官方 `codex app-server` 进程执行真实 Codex turn。任务从 15:48:25 运行到 16:00:32，超过旧的 5 分钟断流窗口后仍成功进入 `completed`，产生 1 个 Artifact，并在约 16:00:40 触发 MainAgent 终态回流到原群。
+- Codex 在 `spike/demo-v0` 上真实修改 `apps/codex-a2a-adapter/src/agent-card.ts` 和 `apps/codex-a2a-adapter/tests/agent-card.test.ts`，将 Agent Card 从“硬 scope”语义修正为“workspace 是工作焦点而非硬修改边界”。人工核对实际 diff 与群内摘要一致。
+- 独立复检中 Adapter 8 个测试文件、70 个测试通过，typecheck 与 build 通过；真实链路日志能够按 AgentCall、A2A Task、Codex thread/turn 和终态回流关联。
+- 随后的“两轮连续任务”探索实际只创建了一个 blocking AgentCall/A2A Task，把两条指令放进同一个 Codex turn，因此只在整个任务结束后产生一次终态通知。它不影响本阶段单个真实异步代码任务的验收结论，但暴露了 v1 连续任务语义；当前已按“第一步终态先回报，再由 MainAgent 判断并异步续派新任务”的规则补充实现和确定性测试，未把它扩展为工作流引擎。
+
+**Phase 5 结论：通过。Phase 0～Phase 5 的 Demo 边界已经完成，可以停止扩展并进入收尾。**
 
 ## 8. Demo 阶段最小 EventLog
 
@@ -439,16 +449,16 @@ codexTurnId
 
 只有同时满足下面条件，才能称为 Demo 跑通：
 
-- [ ] 从真实 QQ 群发起任务。
-- [ ] HuanLink 使用真实 MainAgent 判断并发起 AgentCall。
-- [ ] HuanLink 与 Codex Adapter 之间使用标准 A2A v1.0。
-- [ ] Adapter 通过官方 Codex app-server 执行任务。
-- [ ] Codex 在 `spike/demo-v0` 分支产生真实代码修改。
-- [ ] AgentCall 异步执行且不阻塞群聊。
-- [ ] 群里先收到 taskId，再收到最终结果。
-- [ ] 最终结果来自 A2A Task/Artifact，而不是旁路读取。
-- [ ] A2A Inspector/TCK 验证所声明的能力。
-- [ ] 人工核对代码 diff 与群聊回复一致。
+- [x] 从真实 QQ 群发起任务。
+- [x] HuanLink 使用真实 MainAgent 判断并发起 AgentCall。
+- [x] HuanLink 与 Codex Adapter 之间使用标准 A2A v1.0。
+- [x] Adapter 通过官方 Codex app-server 执行任务。
+- [x] Codex 在 `spike/demo-v0` 分支产生真实代码修改。
+- [x] AgentCall 异步执行且不阻塞群聊。
+- [x] 群里先收到 taskId，再收到最终结果。
+- [x] 最终结果来自 A2A Task/Artifact，而不是旁路读取。
+- [x] A2A Inspector/TCK 验证所声明的能力。
+- [x] 人工核对代码 diff 与群聊回复一致。
 
 ## 13. Demo 后再决定的优化
 
