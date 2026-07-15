@@ -192,8 +192,132 @@ describe("JsonlEventLog", () => {
 
   test.each([
     ["schema 1.0", { ...validRawEvent("run_invalid"), schemaVersion: "1.0" }],
+    [
+      "an invalid timestamp",
+      { ...validRawEvent("run_invalid"), timestamp: "not-a-timestamp" }
+    ],
+    [
+      "an unsafe seq",
+      {
+        ...validRawEvent("run_invalid"),
+        seq: Number.MAX_SAFE_INTEGER + 1
+      }
+    ],
     ["tool.requested", { ...validRawEvent("run_invalid"), type: "tool.requested" }],
     ["policy.decided", { ...validRawEvent("run_invalid"), type: "policy.decided" }],
+    [
+      "missing main_agent.run.completed output",
+      {
+        ...validRawEvent("run_invalid"),
+        type: "main_agent.run.completed",
+        data: {}
+      }
+    ],
+    [
+      "an invalid main_agent.run.started cause",
+      {
+        ...validRawEvent("run_invalid"),
+        data: {
+          trigger: "agent_call_terminal",
+          cause: {
+            agentCallId: "agent_call_invalid",
+            taskId: "task_invalid",
+            state: "queued"
+          }
+        }
+      }
+    ],
+    [
+      "missing main_agent.run.failed error",
+      {
+        ...validRawEvent("run_invalid"),
+        type: "main_agent.run.failed",
+        data: {}
+      }
+    ],
+    [
+      "missing main_agent.run.cancelled reason",
+      {
+        ...validRawEvent("run_invalid"),
+        type: "main_agent.run.cancelled",
+        data: {}
+      }
+    ],
+    [
+      "an invalid agent_call.created executionMode",
+      {
+        ...validRawEvent("run_invalid"),
+        type: "agent_call.created",
+        data: {
+          agentCallId: "agent_call_invalid",
+          taskId: "task_invalid",
+          skillId: "coding",
+          executionMode: "parallel",
+          state: "submitted"
+        }
+      }
+    ],
+    [
+      "an invalid agent_call.created state",
+      {
+        ...validRawEvent("run_invalid"),
+        type: "agent_call.created",
+        data: {
+          agentCallId: "agent_call_invalid",
+          taskId: "task_invalid",
+          skillId: "coding",
+          executionMode: "async",
+          state: "queued"
+        }
+      }
+    ],
+    [
+      "an invalid agent_call.state.changed state",
+      {
+        ...validRawEvent("run_invalid"),
+        type: "agent_call.state.changed",
+        data: {
+          agentCallId: "agent_call_invalid",
+          taskId: "task_invalid",
+          state: "queued"
+        }
+      }
+    ],
+    [
+      "an invalid channel.message.received trigger",
+      {
+        ...validRawEvent("run_invalid"),
+        type: "channel.message.received",
+        data: {
+          channel: "onebot11",
+          conversationId: "group_invalid",
+          messageId: "message_invalid",
+          senderId: "user_invalid",
+          senderName: "Invalid User",
+          text: "hello",
+          trigger: { kind: "ambient", text: "hello" }
+        }
+      }
+    ],
+    [
+      "missing channel.reply.sent text",
+      {
+        ...validRawEvent("run_invalid"),
+        type: "channel.reply.sent",
+        data: { conversationId: "group_invalid" }
+      }
+    ],
+    [
+      "missing channel.reply.failed error",
+      {
+        ...validRawEvent("run_invalid"),
+        type: "channel.reply.failed",
+        data: {
+          conversationId: "group_invalid",
+          text: "reply"
+        }
+      }
+    ],
     [
       "legacy envelope fields",
       {

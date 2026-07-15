@@ -48,10 +48,14 @@ export function createRunView(events: AgentEvent[]): RunView | null {
         };
         break;
       case "main_agent.run.started":
-        status = "running";
-        trigger = event.data.trigger;
-        cause =
-          event.data.cause === undefined ? undefined : { ...event.data.cause };
+        if (status === "pending" || status === "running") {
+          status = "running";
+          trigger = event.data.trigger;
+          cause =
+            event.data.cause === undefined
+              ? undefined
+              : { ...event.data.cause };
+        }
         break;
       case "main_agent.run.completed":
         status = "completed";

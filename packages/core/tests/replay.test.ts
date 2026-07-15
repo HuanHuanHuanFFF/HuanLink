@@ -303,6 +303,30 @@ describe("replay reducer", () => {
     });
   });
 
+  test("does not let a trailing started event overwrite a completed run", () => {
+    const events: AgentEvent[] = [
+      completeEvent(1, "main_agent.run.started", { trigger: "user" }),
+      completeEvent(2, "main_agent.run.completed", { output: "completed" }),
+      completeEvent(3, "main_agent.run.started", {
+        trigger: "agent_call_terminal",
+        cause: {
+          agentCallId: "agent_call_late",
+          taskId: "task_late",
+          state: "completed"
+        }
+      })
+    ];
+
+    expect(createRunView(events)).toMatchObject({
+      status: "completed",
+      output: "completed",
+      endedAt: "2026-07-15T00:00:02.000Z",
+      durationSeconds: 1,
+      eventCount: 3,
+      lastSeq: 3
+    });
+  });
+
   test("returns null when no events exist", () => {
     expect(createRunView([])).toBeNull();
   });
