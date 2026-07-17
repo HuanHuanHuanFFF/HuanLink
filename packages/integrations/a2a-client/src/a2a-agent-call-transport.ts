@@ -4,32 +4,35 @@ import {
   GetTaskRequest,
   SendMessageRequest,
   SubscribeToTaskRequest,
-  TaskState,
-  type Artifact,
-  type Message,
   type SendMessageResult,
   type Task
 } from "@a2a-js/sdk";
-import {
-  ClientFactory,
-  TaskNotCancelableError,
-  UnsupportedOperationError,
-  type Client
-} from "@a2a-js/sdk/client";
+import { ClientFactory, type Client } from "@a2a-js/sdk/client";
 import {
   NoopRuntimeLogger,
   type RuntimeLogFields,
   type RuntimeLogLevel,
   type RuntimeLogger,
-  type AgentCallArtifact,
   type AgentCallCapability,
-  type AgentCallInputQuestion,
   type AgentCallTaskSnapshot,
-  type AgentCallTaskState,
   type AgentCallTransport,
   type AgentCallTransportContinueRequest,
   type AgentCallTransportSubmitRequest
 } from "@huanlink/core";
+import {
+  isPaused,
+  isTerminal,
+  messageFields,
+  snapshotFromTask,
+  stateFromTaskState
+} from "./a2a-task-snapshot.js";
+import {
+  A2aProtocolError,
+  errorLogFields,
+  isRetryableObservationError,
+  isTaskNotCancelable,
+  isUnsupportedOperation
+} from "./a2a-transport-errors.js";
 export type A2aAgentCallTransportOptions = {
   origin: string;
   logger?: RuntimeLogger;
@@ -38,8 +41,6 @@ export type A2aAgentCallTransportOptions = {
 const TERMINAL_RECONCILIATION_ATTEMPTS = 4;
 const RECONCILIATION_DELAY_MS = 20;
 const SUBSCRIPTION_RETRY_DELAYS_MS = [1_000, 2_000, 5_000] as const;
-
-class A2aProtocolError extends Error {}
 
 export class A2aAgentCallTransport implements AgentCallTransport {
   private readonly origin: string;
@@ -445,96 +446,6 @@ function snapshotLogFields(snapshot: AgentCallTaskSnapshot): RuntimeLogFields {
   };
 }
 
-type ErrorCategory = "abort" | "network" | "protocol" | "unknown";
-
-const NETWORK_ERROR_CODES = new Set([
-  "EAI_AGAIN",
-  "ECONNREFUSED",
-  "ECONNRESET",
-  "EHOSTUNREACH",
-  "ENETUNREACH",
-  "ENOTFOUND",
-  "ETIMEDOUT",
-  "UND_ERR_BODY_TIMEOUT",
-  "UND_ERR_CONNECT_TIMEOUT",
-  "UND_ERR_HEADERS_TIMEOUT",
-  "UND_ERR_SOCKET"
-]);
-const ABORT_ERROR_CODES = new Set(["ABORT_ERR", "ERR_CANCELED"]);
-const RETRYABLE_FETCH_TYPE_ERROR_MESSAGES = new Set([
-  "fetch failed",
-  "terminated"
-]);
-
-function errorLogFields(
-  error: unknown,
-  categoryOverride?: ErrorCategory
-): RuntimeLogFields {
-  const errorCode = safeErrorCode(error);
-  return {
-    errorType: safeErrorType(error),
-    errorMessageLength: safeOwnStringLength(error, "message"),
-    errorCategory:
-      categoryOverride ?? classifyErrorCategory(error, errorCode),
-    ...(errorCode === undefined ? {} : { errorCode })
-  };
-}
-
-function classifyErrorCategory(
-  error: unknown,
-  errorCode: string | undefined
-): ErrorCategory {
-  if (errorCode !== undefined && ABORT_ERROR_CODES.has(errorCode)) {
-    return "abort";
-  }
-  if (errorCode !== undefined && NETWORK_ERROR_CODES.has(errorCode)) {
-    return "network";
-  }
-  try {
-    return error instanceof A2aProtocolError ? "protocol" : "unknown";
-  } catch {
-    return "unknown";
-  }
-}
-
-function safeErrorType(error: unknown): "Error" | "ThrownValue" {
-  try {
-    return error instanceof Error ? "Error" : "ThrownValue";
-  } catch {
-    return "ThrownValue";
-  }
-}
-
-function safeErrorCode(error: unknown): string | undefined {
-  const code = safeOwnDataValue(error, "code");
-  return typeof code === "string" &&
-    (NETWORK_ERROR_CODES.has(code) || ABORT_ERROR_CODES.has(code))
-    ? code
-    : undefined;
-}
-
-function safeOwnStringLength(value: unknown, key: string): number {
-  const candidate = safeOwnDataValue(value, key);
-  return typeof candidate === "string" ? candidate.length : 0;
-}
-
-function safeOwnDataValue(value: unknown, key: string): unknown {
-  if (
-    value === null ||
-    (typeof value !== "object" && typeof value !== "function")
-  ) {
-    return undefined;
-  }
-  try {
-    const descriptor = Object.getOwnPropertyDescriptor(value, key);
-    return descriptor !== undefined && "value" in descriptor
-      ? descriptor.value
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 function requireTask(result: SendMessageResult): Task {
   if (!("status" in result)) {
     throw new A2aProtocolError(
@@ -542,153 +453,6 @@ function requireTask(result: SendMessageResult): Task {
     );
   }
   return result;
-}
-
-function snapshotFromTask(task: Task): AgentCallTaskSnapshot {
-  return {
-    taskId: task.id,
-    contextId: task.contextId,
-    state: stateFromTaskState(task.status?.state),
-    artifacts: task.artifacts.map(artifactFromA2a),
-    ...messageFields(task.status?.message)
-  };
-}
-
-function artifactFromA2a(artifact: Artifact): AgentCallArtifact {
-  const text = artifact.parts
-    .flatMap((part) =>
-      part.content?.$case === "text" ? [part.content.value] : []
-    )
-    .join("\n");
-
-  return {
-    id: artifact.artifactId,
-    ...(artifact.name === "" ? {} : { name: artifact.name }),
-    ...(artifact.description === ""
-      ? {}
-      : { description: artifact.description }),
-    ...(text === "" ? {} : { text })
-  };
-}
-
-function messageFields(
-  message: Message | undefined
-): Pick<AgentCallTaskSnapshot, "statusMessage" | "questions"> {
-  if (!message) {
-    return {};
-  }
-  const text = message.parts
-    .flatMap((part) =>
-      part.content?.$case === "text" ? [part.content.value] : []
-    )
-    .join("\n");
-  const questions = message.parts.flatMap((part) =>
-    part.content?.$case === "data"
-      ? questionsFromData(part.content.value)
-      : []
-  );
-  return {
-    ...(text === "" ? {} : { statusMessage: text }),
-    ...(questions.length === 0 ? {} : { questions })
-  };
-}
-
-function questionsFromData(value: unknown): AgentCallInputQuestion[] {
-  const data = asRecord(value);
-  if (!data || !Array.isArray(data.questions)) {
-    return [];
-  }
-  const questions = data.questions.map(questionFromData);
-  return questions.some((question) => question === undefined)
-    ? []
-    : (questions as AgentCallInputQuestion[]);
-}
-
-function questionFromData(value: unknown): AgentCallInputQuestion | undefined {
-  const question = asRecord(value);
-  if (
-    !question ||
-    typeof question.id !== "string" ||
-    typeof question.header !== "string" ||
-    typeof question.question !== "string"
-  ) {
-    return undefined;
-  }
-  if (
-    question.options !== undefined &&
-    question.options !== null &&
-    !Array.isArray(question.options)
-  ) {
-    return undefined;
-  }
-  const options =
-    question.options === undefined || question.options === null
-      ? null
-      : question.options.map(optionFromData);
-  if (options?.some((option) => option === undefined)) {
-    return undefined;
-  }
-  return {
-    header: question.header,
-    id: question.id,
-    isOther: question.isOther === true,
-    isSecret: question.isSecret === true,
-    options: options as AgentCallInputQuestion["options"],
-    question: question.question
-  };
-}
-
-function optionFromData(
-  value: unknown
-): NonNullable<AgentCallInputQuestion["options"]>[number] | undefined {
-  const option = asRecord(value);
-  return option &&
-    typeof option.label === "string" &&
-    typeof option.description === "string"
-    ? { label: option.label, description: option.description }
-    : undefined;
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function stateFromTaskState(state: TaskState | undefined): AgentCallTaskState {
-  switch (state) {
-    case TaskState.TASK_STATE_SUBMITTED:
-      return "submitted";
-    case TaskState.TASK_STATE_WORKING:
-      return "working";
-    case TaskState.TASK_STATE_INPUT_REQUIRED:
-      return "input-required";
-    case TaskState.TASK_STATE_AUTH_REQUIRED:
-      return "auth-required";
-    case TaskState.TASK_STATE_COMPLETED:
-      return "completed";
-    case TaskState.TASK_STATE_FAILED:
-      return "failed";
-    case TaskState.TASK_STATE_CANCELED:
-      return "canceled";
-    case TaskState.TASK_STATE_REJECTED:
-      return "rejected";
-    default:
-      return "unknown";
-  }
-}
-
-function isTerminal(state: AgentCallTaskState): boolean {
-  return (
-    state === "completed" ||
-    state === "failed" ||
-    state === "canceled" ||
-    state === "rejected"
-  );
-}
-
-function isPaused(state: AgentCallTaskState): boolean {
-  return state === "input-required" || state === "auth-required";
 }
 
 function subscriptionRetryDelayMs(attempt: number): number {
@@ -724,52 +488,4 @@ function assertTaskId(expected: string, actual: string): void {
       `A2A update belongs to task ${actual}, expected ${expected}`
     );
   }
-}
-
-function isUnsupportedOperation(error: unknown): boolean {
-  return hasCause(
-    error,
-    (candidate) => candidate instanceof UnsupportedOperationError
-  );
-}
-
-function isTaskNotCancelable(error: unknown): boolean {
-  return hasCause(
-    error,
-    (candidate) => candidate instanceof TaskNotCancelableError
-  );
-}
-
-function isRetryableObservationError(error: unknown): boolean {
-  return hasCause(error, (candidate) => {
-    const code = safeOwnDataValue(candidate, "code");
-    if (typeof code === "string" && NETWORK_ERROR_CODES.has(code)) {
-      return true;
-    }
-    const message = safeOwnDataValue(candidate, "message");
-    return (
-      candidate instanceof TypeError &&
-      typeof message === "string" &&
-      RETRYABLE_FETCH_TYPE_ERROR_MESSAGES.has(message)
-    );
-  });
-}
-
-function hasCause(
-  error: unknown,
-  predicate: (candidate: unknown) => boolean
-): boolean {
-  let candidate = error;
-  const seen = new Set<unknown>();
-  while (candidate !== undefined && candidate !== null && !seen.has(candidate)) {
-    if (predicate(candidate)) {
-      return true;
-    }
-    seen.add(candidate);
-    candidate =
-      typeof candidate === "object" && "cause" in candidate
-        ? candidate.cause
-        : undefined;
-  }
-  return false;
 }
