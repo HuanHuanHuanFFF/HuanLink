@@ -294,13 +294,27 @@ export class A2aAgentCallTransport implements AgentCallTransport {
         streamError = error;
       }
 
-      const reconciled = await this.reconcileTask(
-        taskId,
-        options.signal,
-        terminalEventSeen || isUnsupportedOperation(streamError)
-          ? TERMINAL_RECONCILIATION_ATTEMPTS
-          : 1
-      );
+      let reconciled: AgentCallTaskSnapshot;
+      try {
+        reconciled = await this.reconcileTask(
+          taskId,
+          options.signal,
+          terminalEventSeen || isUnsupportedOperation(streamError)
+            ? TERMINAL_RECONCILIATION_ATTEMPTS
+            : 1
+        );
+      } catch (error) {
+        if (options.signal.aborted || !isRetryableObservationError(error)) {
+          throw error;
+        }
+        this.writeLog("warn", "a2a.watch.reconcile_failed", {
+          a2aTaskId: taskId,
+          attempt,
+          ...errorLogFields(error, "network")
+        });
+        await abortableDelay(subscriptionRetryDelayMs(attempt), options.signal);
+        continue;
+      }
       this.writeLog("info", "a2a.watch.reconciled", {
         ...snapshotLogFields(reconciled),
         attempt
@@ -440,9 +454,17 @@ const NETWORK_ERROR_CODES = new Set([
   "EHOSTUNREACH",
   "ENETUNREACH",
   "ENOTFOUND",
-  "ETIMEDOUT"
+  "ETIMEDOUT",
+  "UND_ERR_BODY_TIMEOUT",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_SOCKET"
 ]);
 const ABORT_ERROR_CODES = new Set(["ABORT_ERR", "ERR_CANCELED"]);
+const RETRYABLE_FETCH_TYPE_ERROR_MESSAGES = new Set([
+  "fetch failed",
+  "terminated"
+]);
 
 function errorLogFields(
   error: unknown,
@@ -716,6 +738,21 @@ function isTaskNotCancelable(error: unknown): boolean {
     error,
     (candidate) => candidate instanceof TaskNotCancelableError
   );
+}
+
+function isRetryableObservationError(error: unknown): boolean {
+  return hasCause(error, (candidate) => {
+    const code = safeOwnDataValue(candidate, "code");
+    if (typeof code === "string" && NETWORK_ERROR_CODES.has(code)) {
+      return true;
+    }
+    const message = safeOwnDataValue(candidate, "message");
+    return (
+      candidate instanceof TypeError &&
+      typeof message === "string" &&
+      RETRYABLE_FETCH_TYPE_ERROR_MESSAGES.has(message)
+    );
+  });
 }
 
 function hasCause(
