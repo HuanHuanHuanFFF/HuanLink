@@ -354,8 +354,23 @@ corepack.cmd pnpm --filter @huanlink/integration-a2a-client build
 - Create: `apps/server/tests/local-user-config.test.ts`
 - Modify: `apps/codex-a2a-adapter/src/runtime-config.ts`
 - Modify: `apps/codex-a2a-adapter/tests/runtime-config.test.ts`
+- Modify: `apps/codex-a2a-adapter/package.json`
+- Modify: `pnpm-lock.yaml`
 
-测试覆盖：逐文件 schema、缺失/损坏文件、重复稳定 ID、loopback origin、绝对 workspace、密钥环境变量缺失以及错误信息不泄密。解析器只返回本进程拥有的配置，不让 Server 解析 Codex 项目内容。
+**合同冻结：**
+
+- `loadServerLocalUserConfig` 和 `loadCodexAdapterLocalConfig` 默认从 `<cwd>/.huanlink/config/` 读取，并允许测试注入显式配置根；B02 不接入 `main.ts`，不监听或热更新。
+- 信任锚边界固定为：显式 `configRoot` 本身是调用方信任锚点，只校验根自身及根内路径；默认路径以 `cwd` 为信任锚点，逐段拒绝 `.huanlink`、`config` 及配置树内的符号链接或目录 junction，但不审计 `cwd`、卷根或更高祖先目录。
+- `server/main-agent.json` 与 `codex-adapter/runtime.json` 是固定必需文件；`channels/`、`agents/`、`projects/` 各自至少包含一个当前目录的常规 `*.json` 文件。目录只扫描一层、按文件名字典序读取、不递归且不跟随符号链接；其他扩展名不参与配置发现。
+- 所有 JSON 必须是 UTF-8 对象、`version` 严格等于 `1`、拒绝未知字段；字符串字段读取时 trim 后不得为空。`channelId`、`agentId`、`projectId` 在各自集合内唯一，并使用字母或数字开头、随后只含字母、数字、点、下划线或连字符的稳定 ID 格式。
+- `apiKeyEnv` 和可选 `accessTokenEnv` 只保存环境变量名；名称必须是合法环境变量标识符。只要声明引用，对应值缺失或 trim 后为空即报错；异常不得包含秘密值、原始 JSON、`.env` 内容或底层 JSON 解析消息。
+- Server 只读取 `server/**` 并返回 MainAgent、Channel 和通用 A2A 目标配置；Adapter 只读取 `codex-adapter/**` 并返回 runtime 和项目列表。B02 允许解析多个静态文件并检查重复 ID，不做多个目标选择或路由。
+- A2A `origin` 必须使用 HTTP(S) 且 host 为 `127.0.0.1`、`localhost` 或 `::1`。项目 `workspace` 本批只验证为绝对路径；路径存在性、canonical workspace、Git 分支、任务 `workingDirectory` 和模型覆盖留给 M1-B03。
+- Adapter 必须直接声明与 Server 相同主版本的 Zod 依赖，不能依赖 SDK 的传递依赖。
+
+测试覆盖：逐文件 schema、固定文件/目录缺失、空目录、损坏 JSON、重复稳定 ID、loopback origin、绝对 workspace、密钥环境变量缺失以及错误信息不泄密。解析器只返回本进程拥有的配置，不让 Server 解析 Codex 项目内容。
+
+**实际结果：** Server 与 Codex Adapter 已分别新增进程自有的本地配置加载器，并新增同形状的 5 份脱敏示例；Adapter 已直接声明 `zod@^4.4.3`。两侧加载器均默认读取 `<cwd>/.huanlink/config/`，实现严格 UTF-8、对象与 `version: 1` schema、稳定 ID、字典序单层发现、符号链接/目录 junction 拒绝、文件级安全错误和秘密不回显；真实 `main.ts` 启动入口未接入，项目存在性、canonical workspace、Git 分支及任务目标解析仍留在 B03。TDD 期间先后捕获并修复了非法 UTF-8 替换解码、显式配置根本身、默认 `.huanlink` 段与配置树内父目录的链接逃逸、秘密值被错误 trim、重复 `projectId` 未定位具体文件等问题；规格审查与代码质量复审最终均无阻断项。最终 Server 测试 98 项通过、1 项跳过，Adapter 测试 112 项通过、1 项跳过；两个跳过均因当前 Windows 无权限创建文件符号链接，默认 `.huanlink`、配置根与树内目录 junction 拒绝用例实际执行并通过。最终仓库级测试共 37 个测试文件、457 项通过、2 项跳过；此前一次仓库并发回归曾出现既有 Codex app-server `initialize` 的 2 秒瞬时超时，隔离用例 9/9、Adapter 全包及后续仓库级复验均通过，未为此修改无关超时逻辑。仓库级 typecheck、build、5 份示例 JSON 解析和 `git diff --check` 均通过。文档先行提交；代码、测试、示例配置和依赖改动仍未 commit/push，需在用户确认后另行提交，并且只推送到 `dev/v1.0`。
 
 ### M1-B03：Codex 项目注册和任务目标校验
 
