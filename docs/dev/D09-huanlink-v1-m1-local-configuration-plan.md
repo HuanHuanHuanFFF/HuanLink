@@ -40,8 +40,8 @@
 - 五分钟不能成为任务执行上限。当前 Adapter 保留 SSE 心跳，客户端断流后必须查询权威任务状态并重订阅。
 - 若使用 Undici `bodyTimeout: 0`，只能作用于 A2A SSE 订阅，不能污染 Agent Card、提交、查询、取消或进程内其他 HTTP 请求。
 - 一次订阅错误或一次状态查询错误只表示“观察链路异常”，不能据此把远端任务改成 `failed`。
-- `.huanlink/` 当前整体被 Git 忽略；其中只放本机活动配置、日志和运行态，不把它当成受版本控制的正式配置合同。
-- 配置按实际职责拆成多个 JSON，而不是强行压缩成两个大 JSON；两个进程入口不等于只能有两个配置文件。
+- `.huanlink/config/config.json` 是唯一固定配置入口；`.huanlink/config/**` 是仓库跟踪、可审查的正式配置树，`.huanlink/` 下的日志、缓存、worktree 和其他运行态仍由 Git 忽略。
+- 配置按实际职责拆成多个 JSON，而不是强行压缩成一个大 JSON；入口只显式引用实际生效的文件，不扫描目录、不回退备用位置、不做多来源覆盖合并。
 - 密钥不写入普通 JSON；本地 `.env` 或进程环境继续承载 API Key、Token 等秘密。
 - M1 配置在进程启动时读取并冻结；热更新留到产品入口稳定后再设计。
 
@@ -49,7 +49,7 @@
 
 | 决策门 | 推荐默认值 | 在哪个批次冻结 | 未确认前的行为 |
 |---|---|---|---|
-| 活动配置目录 | `.huanlink/config/`；受控示例放 `configs/examples/` | M1-B02 | B02 只按该默认值写测试和合同；用户可在批次开始前调整 |
+| 活动配置入口 | 固定 `.huanlink/config/config.json`；其余配置由该文件使用相对路径显式引用 | M1-B02R | 不扫描目录，不读取 `configs/examples/`，不存在第二配置来源 |
 | 同一 workspace 并发 | 已有修改任务时立即拒绝新任务 | M1-B05 | 不实现内存排队或持久队列 |
 | Codex 模型缺省语义 | 项目配置提供 `defaultModelId`，任务可显式覆盖 `modelId` | M1-B03 | MainAgent 模型始终独立，不作为 Codex 缺省值 |
 | SSE 失联窗口 | 使用应用层可取消活性计时；具体数值由受控测试和真实日志校准 | M1-B06 | 保留现有 30 秒 Adapter 心跳，不把 300 秒当任务失败条件 |
@@ -83,32 +83,45 @@
 
 ## 4. 目标配置结构与所有权
 
-M1 推荐的活动配置目录如下；实际文件是本机配置，不提交：
+M1 的唯一正式配置树如下。`.huanlink/config/config.json` 是代码中唯一固定的发现入口；其他 JSON 只在被入口显式引用时生效。配置树跟随仓库提交，机器秘密仍只通过被 Git 忽略的 `.env` 或进程环境提供：
 
 ```text
 .huanlink/config/
+├── config.json
+├── README.md
 ├── server/
 │   ├── main-agent.json
 │   ├── channels/
 │   │   └── onebot11.json
 │   └── agents/
 │       └── codex-local.json
-└── codex-adapter/
-    ├── runtime.json
-    └── projects/
-        └── huanlink.json
+└── adapters/
+    └── codex/
+        ├── runtime.json
+        └── projects/
+            └── huanlink.json
 ```
 
-仓库跟踪同形状的脱敏示例：
+唯一入口的 v1 合同为：
 
-```text
-configs/examples/
-├── server/main-agent.json
-├── server/channels/onebot11.json
-├── server/agents/codex-local.json
-├── codex-adapter/runtime.json
-└── codex-adapter/projects/huanlink.json
+```json
+{
+  "version": 1,
+  "server": {
+    "mainAgent": "./server/main-agent.json",
+    "channels": ["./server/channels/onebot11.json"],
+    "agents": ["./server/agents/codex-local.json"]
+  },
+  "adapters": {
+    "codex": {
+      "runtime": "./adapters/codex/runtime.json",
+      "projects": ["./adapters/codex/projects/huanlink.json"]
+    }
+  }
+}
 ```
+
+入口及其引用使用 `/` 分隔、以 `./` 开头的 JSON 相对路径；去掉开头 `./` 后，每个路径段都必须非空且不能是 `.` 或 `..`，从而让同一文件只有一种可接受写法。Server 引用必须位于 `./server/`，Codex Adapter 引用必须位于 `./adapters/codex/`；引用按数组声明顺序读取。空数组、重复引用、绝对路径、反斜杠和逃出配置根或本进程命名空间的路径均为配置错误。两个进程都读取同一入口，但 Server 只验证并解析 `server` 区块及其引用，Codex Adapter 只验证并解析 `adapters.codex` 区块及其引用；对侧区块缺失或损坏不阻塞本进程，一个进程也不会读取或合并另一个进程拥有的职责文件。
 
 ### 4.1 MainAgent 配置
 
@@ -177,13 +190,13 @@ Server 只理解上述发现和调用字段，不理解 Codex workspace、分支
 {
   "version": 1,
   "projectId": "huanlink",
-  "workspace": "D:\\CodingProject\\HuanLink",
+  "workspace": ".",
   "branch": "dev/v1.0",
   "defaultModelId": "gpt-5.4-mini"
 }
 ```
 
-该文件属于 Adapter。任务只能提交稳定 `projectId`；绝对 `workspace` 只存在本机配置中，不能从 QQ、MainAgent 或 A2A 自然语言参数直接注入。
+该文件属于 Adapter。任务只能提交稳定 `projectId`；`workspace` 使用预期相对于“包含 `.huanlink` 的 HuanLink 项目根”的可移植路径。B02R 只校验并返回原始相对表示，不根据 `process.cwd()`、Adapter 包目录或配置目录进行解析；B03 必须显式定义并注入项目根解析基准，再完成存在性、canonical path、Git 仓库和分支校验。`workspace` 不能从 QQ、MainAgent 或 A2A 自然语言参数直接注入。
 
 ## 5. 协议中性 AgentCall 与 A2A 合同
 
@@ -371,6 +384,47 @@ corepack.cmd pnpm --filter @huanlink/integration-a2a-client build
 测试覆盖：逐文件 schema、固定文件/目录缺失、空目录、损坏 JSON、重复稳定 ID、loopback origin、绝对 workspace、密钥环境变量缺失以及错误信息不泄密。解析器只返回本进程拥有的配置，不让 Server 解析 Codex 项目内容。
 
 **实际结果：** Server 与 Codex Adapter 已分别新增进程自有的本地配置加载器，并新增同形状的 5 份脱敏示例；Adapter 已直接声明 `zod@^4.4.3`。两侧加载器均默认读取 `<cwd>/.huanlink/config/`，实现严格 UTF-8、对象与 `version: 1` schema、稳定 ID、字典序单层发现、符号链接/目录 junction 拒绝、文件级安全错误和秘密不回显；真实 `main.ts` 启动入口未接入，项目存在性、canonical workspace、Git 分支及任务目标解析仍留在 B03。TDD 期间先后捕获并修复了非法 UTF-8 替换解码、显式配置根本身、默认 `.huanlink` 段与配置树内父目录的链接逃逸、秘密值被错误 trim、重复 `projectId` 未定位具体文件等问题；提交前复审另发现并修复了 Server 测试清理时删除进程原有环境变量的隔离问题，并增加回归用例。规格审查与代码质量复审最终均无阻断项。最终 Server 测试 99 项通过、1 项跳过，Adapter 测试 112 项通过、1 项跳过；两个跳过均因当前 Windows 无权限创建文件符号链接，默认 `.huanlink`、配置根与树内目录 junction 拒绝用例实际执行并通过。最终仓库级测试共 37 个测试文件、458 项通过、2 项跳过；此前一次仓库并发回归曾出现既有 Codex app-server `initialize` 的 2 秒瞬时超时，隔离用例 9/9、Adapter 全包及后续仓库级复验均通过，未为此修改无关超时逻辑。仓库级 typecheck、build、5 份示例 JSON 解析和 `git diff --check` 均通过。本批按文档与代码分开提交，并且只推送到 `dev/v1.0`；未 merge `main`。
+
+上述 B02 初版采用“固定文件 + 单层目录扫描”，后续被用户确认的 B02R 唯一入口合同取代；该段保留为历史实施证据，不再代表最终配置发现规则。
+
+### M1-B02R：唯一入口配置树收敛
+
+**目标：** 把 B02 的目录扫描合同收敛为“一个固定入口、一棵配置树、多个职责清晰的 JSON、没有隐式来源”，删除旧示例入口，但仍不接入真实 `main.ts`，不提前进入 B03。
+
+**Files:**
+
+- Modify: `docs/dev/D09-huanlink-v1-m1-local-configuration-plan.md`
+- Modify: `.gitignore`
+- Create: `.huanlink/config/config.json`
+- Create: `.huanlink/config/README.md`
+- Move: `configs/examples/server/**` → `.huanlink/config/server/**`
+- Move: `configs/examples/codex-adapter/**` → `.huanlink/config/adapters/codex/**`
+- Modify: `apps/server/src/local-user-config.ts`
+- Modify: `apps/server/tests/local-user-config.test.ts`
+- Modify: `apps/codex-a2a-adapter/src/runtime-config.ts`
+- Modify: `apps/codex-a2a-adapter/tests/runtime-config.test.ts`
+
+**合同冻结：**
+
+- 代码唯一固定发现路径为 `<cwd>/.huanlink/config/config.json`。测试可注入 `configRoot`，但它只替换固定入口所在根目录，不形成环境变量、备用目录或旧布局回退。
+- `config.json` 是严格 UTF-8、`version: 1` 的 JSON 对象，顶层只允许 `version`、`server`、`adapters`。两个 loader 都拒绝顶层未知字段，但只验证本进程区块：Server 要求严格的 `server` 对象，Adapter 要求严格的 `adapters.codex` 对象；对侧区块缺失、类型错误、含未知字段或错误引用均不阻塞本进程。
+- Server 区块必须且只包含字符串 `mainAgent`、非空字符串数组 `channels`、非空字符串数组 `agents`；Adapter 的 `codex` 区块必须且只包含字符串 `runtime`、非空字符串数组 `projects`。缺失、类型错误、空数组和本区块未知字段均以 `config.json` 加安全字段路径报错。
+- 引用必须以 `./` 开头、使用 `/`、以 `.json` 结尾；去掉开头 `./` 后，每个路径段都必须非空且不能是 `.` 或 `..`。Server 只允许 `./server/**`，Codex Adapter 只允许 `./adapters/codex/**`。数组在路径结构校验后检查重复；加载顺序就是声明顺序。未被引用的同级或嵌套 JSON 一律不读取。
+- 不支持目录扫描、默认文件名推断、include 链、全局/用户/项目多层合并、后者覆盖前者或 `configs/examples` 兼容回退。旧布局明确失败，便于直接暴露迁移错误。
+- `.huanlink/config/**` 纳入版本控制；`.huanlink` 下的日志、缓存、worktree 和其他运行态继续忽略。普通 JSON 只保存非秘密值和环境变量名，不保存 API Key 或 Token。
+- 项目 `workspace` 在 JSON 中改为预期相对于“包含 `.huanlink` 的 HuanLink 项目根”的路径（当前仓库为 `.`）；只接受 `.` 或使用 `/`、不含空段、`.` 段、`..` 段的普通相对路径，不接受绝对路径或反斜杠。B02R 只返回该相对字符串，不选择或执行解析基准；B03 必须显式注入项目根并完成 realpath、存在性、Git 仓库和分支校验，B04 才接入运行入口。
+
+**TDD 实施步骤：**
+
+- [ ] 在两个 loader 的 fixture 中写入同一 `config.json`，把主成功用例改为验证“只按入口数组顺序读取明确引用的文件”。
+- [ ] 新增缺失/损坏/顶层未知字段入口、本侧区块缺失或字段错误、空数组、重复与别名引用、绝对/反斜杠/逃逸引用，以及未引用 JSON 不生效的用例；两侧各新增一个“对侧坏配置不阻塞本侧加载”用例。
+- [ ] 把 Adapter workspace 用例改为接受 `.` 与普通相对路径、拒绝绝对路径和空值；运行两个包级测试并确认因旧扫描与绝对路径合同而 RED。
+- [ ] 两个 loader 先读取 `config.json`，分别解析自己拥有的区块；删除 `readdir` 扫描，复用现有 UTF-8、schema、秘密引用、稳定 ID 和逐段 link/junction 防护。
+- [ ] 迁移 5 个职责 JSON，新增唯一入口与配置 README；README 必须说明固定入口、引用语法与所有权、无扫描/回退/合并、秘密环境变量规则，以及增加 Channel、Agent 或 Codex 项目时必须同时新增职责文件和入口引用。修改 `.gitignore` 只放行 `.huanlink/config/**`，删除 `configs/examples/**`。
+- [ ] 运行两个包级测试直到 GREEN，再运行仓库级 `corepack pnpm test`、`corepack pnpm typecheck`、`corepack pnpm build`、JSON 解析检查和 `git diff --check`；用 `git check-ignore` 分别证明 `.huanlink/config/config.json` 未被忽略、`.huanlink/logs/server.jsonl` 仍被忽略。
+- [ ] 独立执行规格审查与代码质量审查；修复阻断项后，把实际结果回写本节，保持文档与代码分开提交并只 push `dev/v1.0`。
+
+**验收：** 两个进程从同一固定入口取得各自配置；增加一个未引用 JSON 不改变结果，删除或写错任一已引用文件会定位到安全相对位置并失败；仓库不再含 `configs/examples` 配置来源，README 足以让后续 Agent 在不猜测发现规则的情况下修改配置；真实启动入口仍未切换。
 
 ### M1-B03：Codex 项目注册和任务目标校验
 
