@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "projectId": "huanlink",
+  "workspace": "D:\\CodingProject\\HuanLink",
+  "branch": "dev/v1.0",
+  "defaultModelId": "gpt-5.4-mini"
+}
