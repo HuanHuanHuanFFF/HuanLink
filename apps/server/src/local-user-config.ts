@@ -1,5 +1,4 @@
-import type { Dirent } from "node:fs";
-import { lstat, readdir, readFile } from "node:fs/promises";
+import { lstat, readFile } from "node:fs/promises";
 import path from "node:path";
 import { TextDecoder } from "node:util";
 
@@ -56,6 +55,22 @@ const agentFileSchema = z
   })
   .strict();
 
+const configEntrySchema = z
+  .object({
+    version: z.literal(1),
+    server: z.unknown().optional(),
+    adapters: z.unknown().optional()
+  })
+  .strict();
+
+const serverConfigReferenceSchema = z
+  .object({
+    mainAgent: z.string(),
+    channels: z.array(z.string()).min(1),
+    agents: z.array(z.string()).min(1)
+  })
+  .strict();
+
 export type ServerLocalUserConfig = {
   mainAgent: {
     provider: "deepseek";
@@ -93,14 +108,37 @@ export async function loadServerLocalUserConfig(input: {
     input.configRoot ?? path.join(cwd, ".huanlink", "config")
   );
   const env = input.env ?? process.env;
-  const mainAgentRelativePath = "server/main-agent.json";
+  const entryRelativePath = "config.json";
+  const entry = parseConfigFile(
+    configEntrySchema,
+    await readJsonObject(configRoot, entryRelativePath),
+    entryRelativePath
+  );
+  if (entry.server === undefined) {
+    throw configurationError(entryRelativePath, "server: is invalid");
+  }
+  const references = parseConfigFile(
+    serverConfigReferenceSchema,
+    entry.server,
+    entryRelativePath
+  );
+  const mainAgentRelativePath = validateServerReference(
+    references.mainAgent,
+    "mainAgent"
+  );
+  const channelFiles = references.channels.map((reference) =>
+    validateServerReference(reference, "channels")
+  );
+  const agentFiles = references.agents.map((reference) =>
+    validateServerReference(reference, "agents")
+  );
+  ensureUniqueReferences(channelFiles, "channels");
+  ensureUniqueReferences(agentFiles, "agents");
   const mainAgent = parseConfigFile(
     mainAgentFileSchema,
     await readJsonObject(configRoot, mainAgentRelativePath),
     mainAgentRelativePath
   );
-  const channelFiles = await findRequiredJsonFiles(configRoot, "server/channels");
-  const agentFiles = await findRequiredJsonFiles(configRoot, "server/agents");
 
   const channels = await Promise.all(
     channelFiles.map(async (relativePath) => {
@@ -200,38 +238,6 @@ async function readJsonObject(
   }
 }
 
-async function findRequiredJsonFiles(
-  configRoot: string,
-  directoryRelativePath: string
-): Promise<string[]> {
-  await requireRegularPath(configRoot, directoryRelativePath, "directory");
-  const absoluteDirectory = path.join(
-    configRoot,
-    ...directoryRelativePath.split("/")
-  );
-  let entries: Dirent<string>[];
-
-  try {
-    entries = await readdir(absoluteDirectory, { withFileTypes: true });
-  } catch {
-    throw configurationError(directoryRelativePath, "root: must be a readable directory");
-  }
-
-  const files = entries
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
-    .map((entry) => `${directoryRelativePath}/${entry.name}`)
-    .sort(compareFileNames);
-
-  if (files.length === 0) {
-    throw configurationError(
-      directoryRelativePath,
-      "root: must contain at least one regular JSON file"
-    );
-  }
-
-  return files;
-}
-
 function ensureUniqueIds<T extends Record<Key, string>, Key extends string>(
   items: readonly T[],
   field: Key,
@@ -243,10 +249,32 @@ function ensureUniqueIds<T extends Record<Key, string>, Key extends string>(
     if (seen.has(item[field])) {
       throw configurationError(
         relativePaths[index]!,
-        `${field} duplicates '${item[field]}'`
+        `${field}: duplicates another configured entry`
       );
     }
     seen.add(item[field]);
+  }
+}
+
+function validateServerReference(reference: string, field: string): string {
+  const isValid =
+    reference.startsWith("./server/") &&
+    reference.endsWith(".json") &&
+    !reference.includes("\\") &&
+    reference
+      .slice(2)
+      .split("/")
+      .every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
+  if (!isValid) {
+    throw configurationError("config.json", `${field}: is invalid`);
+  }
+
+  return reference.slice(2);
+}
+
+function ensureUniqueReferences(references: readonly string[], field: string): void {
+  if (new Set(references).size !== references.length) {
+    throw configurationError("config.json", `${field}: is invalid`);
   }
 }
 
@@ -365,10 +393,7 @@ function parseConfigFile<T>(
   }
 
   const issue = result.error.issues[0];
-  const field =
-    issue?.path.join(".") ||
-    (issue?.code === "unrecognized_keys" ? issue.keys[0] : undefined) ||
-    "root";
+  const field = issue?.path.join(".") || "root";
   throw configurationError(relativePath, `${field}: is invalid`);
 }
 
@@ -412,8 +437,4 @@ function getUrlProtocol(value: string): string | undefined {
   } catch {
     return undefined;
   }
-}
-
-function compareFileNames(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
 }

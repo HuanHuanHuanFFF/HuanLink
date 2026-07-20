@@ -34,10 +34,37 @@ const validRuntime = {
 const validProject = {
   version: 1,
   projectId: "huanlink",
-  workspace: "D:\\CodingProject\\HuanLink",
+  workspace: ".",
   branch: "dev/v1.0",
   defaultModelId: "gpt-5.4-mini"
 };
+
+const expectedRuntime = {
+  host: validRuntime.host,
+  port: validRuntime.port,
+  codexExecutable: validRuntime.codexExecutable,
+  expectedCodexVersion: validRuntime.expectedCodexVersion,
+  heartbeatIntervalMs: validRuntime.heartbeatIntervalMs
+};
+
+const expectedProject = {
+  projectId: validProject.projectId,
+  workspace: validProject.workspace,
+  branch: validProject.branch,
+  defaultModelId: validProject.defaultModelId
+};
+
+const validEntry = {
+  version: 1,
+  adapters: {
+    codex: {
+      runtime: "./adapters/codex/runtime.json",
+      projects: ["./adapters/codex/projects/huanlink.json"]
+    }
+  }
+};
+
+const codexConfigDirectory = ["adapters", "codex"];
 
 async function withConfigRoot(
   arrange: (configRoot: string) => Promise<void>,
@@ -45,10 +72,11 @@ async function withConfigRoot(
 ) {
   const sandbox = await mkdtemp(join(tmpdir(), "huanlink-codex-config-"));
   const configRoot = join(sandbox, "config");
-  await mkdir(join(configRoot, "codex-adapter", "projects"), { recursive: true });
-  await writeConfigFile(join(configRoot, "codex-adapter", "runtime.json"), validRuntime);
+  await mkdir(join(configRoot, ...codexConfigDirectory, "projects"), { recursive: true });
+  await writeConfigFile(join(configRoot, "config.json"), validEntry);
+  await writeConfigFile(join(configRoot, ...codexConfigDirectory, "runtime.json"), validRuntime);
   await writeConfigFile(
-    join(configRoot, "codex-adapter", "projects", "huanlink.json"),
+    join(configRoot, ...codexConfigDirectory, "projects", "huanlink.json"),
     validProject
   );
 
@@ -63,6 +91,14 @@ async function withConfigRoot(
 async function writeConfigFile(path: string, value: unknown) {
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, JSON.stringify(value), "utf8");
+}
+
+async function writeEntry(configRoot: string, entry: unknown): Promise<void> {
+  await writeConfigFile(join(configRoot, "config.json"), entry);
+}
+
+function codexPath(configRoot: string, ...segments: string[]): string {
+  return join(configRoot, ...codexConfigDirectory, ...segments);
 }
 
 function expectInvalidConfig(promise: Promise<unknown>) {
@@ -130,35 +166,30 @@ describe("adapter runtime config", () => {
 });
 
 describe("local Codex Adapter configuration", () => {
-  it("loads the tracked example configuration", async () => {
+  it("loads the repository's single tracked configuration tree", async () => {
     const config = await loadLocalConfig({
-      configRoot: fileURLToPath(new URL("../../../configs/examples/", import.meta.url))
+      configRoot: fileURLToPath(new URL("../../../.huanlink/config/", import.meta.url))
     });
 
     expect(config).toEqual({
-      runtime: {
-        host: "127.0.0.1",
-        port: 4000,
-        codexExecutable: "codex.cmd",
-        expectedCodexVersion: "0.144.1",
-        heartbeatIntervalMs: 30_000
-      },
-      projects: [
-        {
-          projectId: "huanlink",
-          workspace: "D:\\CodingProject\\HuanLink",
-          branch: "dev/v1.0",
-          defaultModelId: "gpt-5.4-mini"
-        }
-      ]
+      runtime: expectedRuntime,
+      projects: [expectedProject]
     });
   });
 
-  it("uses the injected configuration root", async () => {
+  it("loads only the files explicitly declared by config.json", async () => {
     await withConfigRoot(async () => {}, async (configRoot) => {
-      await expect(loadLocalConfig({ configRoot })).resolves.toMatchObject({
-        runtime: { port: 4000 },
-        projects: [{ projectId: "huanlink" }]
+      await writeConfigFile(codexPath(configRoot, "projects", "ignored.json"), {
+        ...validProject,
+        projectId: "ignored"
+      });
+      await writeConfigFile(codexPath(configRoot, "nested", "ignored.json"), {
+        unexpected: true
+      });
+
+      await expect(loadLocalConfig({ configRoot })).resolves.toEqual({
+        runtime: expectedRuntime,
+        projects: [expectedProject]
       });
     });
   });
@@ -168,10 +199,11 @@ describe("local Codex Adapter configuration", () => {
     const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(sandbox);
     const configRoot = join(sandbox, ".huanlink", "config");
     try {
-      await mkdir(join(configRoot, "codex-adapter", "projects"), { recursive: true });
-      await writeConfigFile(join(configRoot, "codex-adapter", "runtime.json"), validRuntime);
+      await mkdir(codexPath(configRoot, "projects"), { recursive: true });
+      await writeConfigFile(join(configRoot, "config.json"), validEntry);
+      await writeConfigFile(codexPath(configRoot, "runtime.json"), validRuntime);
       await writeConfigFile(
-        join(configRoot, "codex-adapter", "projects", "huanlink.json"),
+        codexPath(configRoot, "projects", "huanlink.json"),
         validProject
       );
       await expect(loadLocalConfig()).resolves.toMatchObject({
@@ -189,10 +221,11 @@ describe("local Codex Adapter configuration", () => {
     const huanlinkTarget = join(sandbox, "external-huanlink");
     const configRoot = join(huanlinkTarget, "config");
     await mkdir(cwd);
-    await mkdir(join(configRoot, "codex-adapter", "projects"), { recursive: true });
-    await writeConfigFile(join(configRoot, "codex-adapter", "runtime.json"), validRuntime);
+    await mkdir(codexPath(configRoot, "projects"), { recursive: true });
+    await writeConfigFile(join(configRoot, "config.json"), validEntry);
+    await writeConfigFile(codexPath(configRoot, "runtime.json"), validRuntime);
     await writeConfigFile(
-      join(configRoot, "codex-adapter", "projects", "huanlink.json"),
+      codexPath(configRoot, "projects", "huanlink.json"),
       validProject
     );
     await symlink(huanlinkTarget, join(cwd, ".huanlink"), "junction");
@@ -210,15 +243,16 @@ describe("local Codex Adapter configuration", () => {
 
   it.each([
     ["missing configuration root", async (root: string) => rm(root, { recursive: true })],
+    ["missing config entry", async (root: string) => rm(join(root, "config.json"))],
     [
-      "missing codex adapter directory",
-      async (root: string) => rm(join(root, "codex-adapter"), { recursive: true })
+      "missing adapter directory",
+      async (root: string) => rm(codexPath(root), { recursive: true })
     ],
-    ["missing runtime file", async (root: string) => rm(join(root, "codex-adapter", "runtime.json"))],
-    ["missing projects directory", async (root: string) => rm(join(root, "codex-adapter", "projects"), { recursive: true })],
+    ["missing runtime file", async (root: string) => rm(codexPath(root, "runtime.json"))],
+    ["missing projects directory", async (root: string) => rm(codexPath(root, "projects"), { recursive: true })],
     [
       "empty projects directory",
-      async (root: string) => rm(join(root, "codex-adapter", "projects", "huanlink.json"))
+      async (root: string) => rm(codexPath(root, "projects", "huanlink.json"))
     ]
   ])("rejects a %s", async (_name, arrange) => {
     await withConfigRoot(arrange, async (configRoot) => {
@@ -227,12 +261,82 @@ describe("local Codex Adapter configuration", () => {
   });
 
   it.each([
+    ["damaged entry JSON", "{ \"adapters\": "],
+    ["non-object entry JSON", "[]"]
+  ])("rejects %s", async (_name, contents) => {
+    await withConfigRoot(
+      async (configRoot) => {
+        await writeFile(join(configRoot, "config.json"), contents);
+      },
+      async (configRoot) => {
+        await expect(loadLocalConfig({ configRoot })).rejects.toThrow("config.json");
+      }
+    );
+  });
+
+  it.each([
+    ["an unknown top-level field", { ...validEntry, unexpected: true }],
+    ["a missing adapters block", { version: 1 }],
+    ["a non-object adapters block", { version: 1, adapters: [] }],
+    ["a missing codex block", { version: 1, adapters: {} }],
+    ["an unknown codex field", { version: 1, adapters: { codex: { ...validEntry.adapters.codex, unexpected: true } } }],
+    ["a non-string runtime reference", { version: 1, adapters: { codex: { ...validEntry.adapters.codex, runtime: [] } } }],
+    ["an empty projects array", { version: 1, adapters: { codex: { ...validEntry.adapters.codex, projects: [] } } }],
+    ["a non-array projects field", { version: 1, adapters: { codex: { ...validEntry.adapters.codex, projects: "./adapters/codex/projects/huanlink.json" } } }]
+  ])("rejects config.json with %s", async (_name, entry) => {
+    await withConfigRoot(
+      async (configRoot) => {
+        await writeEntry(configRoot, entry);
+      },
+      async (configRoot) => {
+        await expect(loadLocalConfig({ configRoot })).rejects.toThrow("config.json");
+      }
+    );
+  });
+
+  it.each([
+    "adapters/codex/runtime.json",
+    "./adapters\\codex\\runtime.json",
+    "./adapters/codex/./runtime.json",
+    "./adapters/codex/../codex/runtime.json",
+    "/adapters/codex/runtime.json"
+  ])("rejects invalid runtime reference %s", async (runtime) => {
+    await withConfigRoot(
+      async (configRoot) => {
+        await writeEntry(configRoot, {
+          ...validEntry,
+          adapters: { codex: { ...validEntry.adapters.codex, runtime } }
+        });
+      },
+      async (configRoot) => {
+        await expect(loadLocalConfig({ configRoot })).rejects.toThrow("config.json");
+      }
+    );
+  });
+
+  it("ignores malformed server configuration while loading the adapter", async () => {
+    await withConfigRoot(
+      async (configRoot) => {
+        await writeEntry(configRoot, {
+          ...validEntry,
+          server: { mainAgent: 42, channels: [], agents: [], unexpected: true }
+        });
+      },
+      async (configRoot) => {
+        await expect(loadLocalConfig({ configRoot })).resolves.toMatchObject({
+          projects: [{ projectId: "huanlink" }]
+        });
+      }
+    );
+  });
+
+  it.each([
     ["damaged JSON", "{ \"projectId\": "],
     ["a non-object JSON value", "[]"]
   ])("rejects %s", async (_name, contents) => {
     await withConfigRoot(
       async (configRoot) => {
-        await writeFile(join(configRoot, "codex-adapter", "runtime.json"), contents);
+        await writeFile(codexPath(configRoot, "runtime.json"), contents);
       },
       async (configRoot) => {
         await expectInvalidConfig(loadLocalConfig({ configRoot }));
@@ -244,7 +348,7 @@ describe("local Codex Adapter configuration", () => {
     await withConfigRoot(
       async (configRoot) => {
         await writeFile(
-          join(configRoot, "codex-adapter", "runtime.json"),
+          codexPath(configRoot, "runtime.json"),
           Buffer.from([0xc3, 0x28])
         );
       },
@@ -257,7 +361,7 @@ describe("local Codex Adapter configuration", () => {
   it("rejects unknown fields", async () => {
     await withConfigRoot(
       async (configRoot) => {
-        await writeConfigFile(join(configRoot, "codex-adapter", "runtime.json"), {
+        await writeConfigFile(codexPath(configRoot, "runtime.json"), {
           ...validRuntime,
           unexpected: true
         });
@@ -271,7 +375,7 @@ describe("local Codex Adapter configuration", () => {
   it("accepts inclusive port and heartbeat boundaries", async () => {
     await withConfigRoot(
       async (configRoot) => {
-        await writeConfigFile(join(configRoot, "codex-adapter", "runtime.json"), {
+        await writeConfigFile(codexPath(configRoot, "runtime.json"), {
           ...validRuntime,
           port: 0,
           heartbeatIntervalMs: 1
@@ -288,16 +392,16 @@ describe("local Codex Adapter configuration", () => {
   it("trims supported string fields before returning them", async () => {
     await withConfigRoot(
       async (configRoot) => {
-        await writeConfigFile(join(configRoot, "codex-adapter", "runtime.json"), {
+        await writeConfigFile(codexPath(configRoot, "runtime.json"), {
           ...validRuntime,
           host: " localhost ",
           codexExecutable: " codex.cmd ",
           expectedCodexVersion: " 0.144.1 "
         });
-        await writeConfigFile(join(configRoot, "codex-adapter", "projects", "huanlink.json"), {
+        await writeConfigFile(codexPath(configRoot, "projects", "huanlink.json"), {
           ...validProject,
           projectId: " huanlink ",
-          workspace: " D:\\CodingProject\\HuanLink ",
+          workspace: ".",
           branch: " dev/v1.0 ",
           defaultModelId: " gpt-5.4-mini "
         });
@@ -314,7 +418,7 @@ describe("local Codex Adapter configuration", () => {
           projects: [
             {
               projectId: "huanlink",
-              workspace: "D:\\CodingProject\\HuanLink",
+              workspace: ".",
               branch: "dev/v1.0",
               defaultModelId: "gpt-5.4-mini"
             }
@@ -335,7 +439,7 @@ describe("local Codex Adapter configuration", () => {
   ])("rejects %s", async (_name, override) => {
     await withConfigRoot(
       async (configRoot) => {
-        await writeConfigFile(join(configRoot, "codex-adapter", "runtime.json"), {
+        await writeConfigFile(codexPath(configRoot, "runtime.json"), {
           ...validRuntime,
           ...override
         });
@@ -352,7 +456,7 @@ describe("local Codex Adapter configuration", () => {
   ])("rejects %s fields", async (_name, emptyValue) => {
     await withConfigRoot(
       async (configRoot) => {
-        await writeConfigFile(join(configRoot, "codex-adapter", "runtime.json"), {
+        await writeConfigFile(codexPath(configRoot, "runtime.json"), {
           ...validRuntime,
           codexExecutable: emptyValue
         });
@@ -385,7 +489,7 @@ describe("local Codex Adapter configuration", () => {
   ])("rejects %s", async (_name, relativePath, value) => {
     await withConfigRoot(
       async (configRoot) => {
-        await writeConfigFile(join(configRoot, "codex-adapter", relativePath), value);
+        await writeConfigFile(codexPath(configRoot, relativePath), value);
       },
       async (configRoot) => {
         await expectInvalidConfig(loadLocalConfig({ configRoot }));
@@ -393,39 +497,71 @@ describe("local Codex Adapter configuration", () => {
     );
   });
 
-  it("reports the duplicate project file without disclosing the project ID", async () => {
-    const projectId = "do-not-disclose-duplicate-project-id";
+  it("rejects duplicate project references in config.json", async () => {
     await withConfigRoot(
       async (configRoot) => {
-        await writeConfigFile(join(configRoot, "codex-adapter", "projects", "a.json"), {
-          ...validProject,
-          projectId
+        await writeEntry(configRoot, {
+          ...validEntry,
+          adapters: {
+            codex: {
+              ...validEntry.adapters.codex,
+              projects: [
+                "./adapters/codex/projects/huanlink.json",
+                "./adapters/codex/projects/huanlink.json"
+              ]
+            }
+          }
         });
-        await writeConfigFile(join(configRoot, "codex-adapter", "projects", "z-duplicate.json"), {
+      },
+      async (configRoot) => {
+        await expect(loadLocalConfig({ configRoot })).rejects.toThrow("config.json");
+      }
+    );
+  });
+
+  it("rejects duplicate project IDs from distinct referenced files without disclosing the ID", async () => {
+    const duplicateProjectId = "do-not-disclose-duplicate-project-id";
+    await withConfigRoot(
+      async (configRoot) => {
+        await writeConfigFile(codexPath(configRoot, "projects", "duplicate.json"), {
           ...validProject,
-          projectId
+          projectId: duplicateProjectId
         });
-        await rm(join(configRoot, "codex-adapter", "projects", "huanlink.json"));
+        await writeConfigFile(codexPath(configRoot, "projects", "huanlink.json"), {
+          ...validProject,
+          projectId: duplicateProjectId
+        });
+        await writeEntry(configRoot, {
+          ...validEntry,
+          adapters: {
+            codex: {
+              ...validEntry.adapters.codex,
+              projects: [
+                "./adapters/codex/projects/huanlink.json",
+                "./adapters/codex/projects/duplicate.json"
+              ]
+            }
+          }
+        });
       },
       async (configRoot) => {
         const promise = loadLocalConfig({ configRoot });
         await expect(promise).rejects.toThrow(
-          "codex-adapter/projects/z-duplicate.json: projectId"
+          "adapters/codex/projects/duplicate.json: projectId"
         );
-        await expect(promise).rejects.not.toThrow(projectId);
+        await expect(promise).rejects.not.toThrow(duplicateProjectId);
         await expect(promise).rejects.not.toThrow(configRoot);
       }
     );
   });
 
-  it("rejects an invalid project ID", async () => {
+  it("rejects an invalid project ID in a referenced file", async () => {
     await withConfigRoot(
       async (configRoot) => {
-        await writeConfigFile(join(configRoot, "codex-adapter", "projects", "invalid.json"), {
+        await writeConfigFile(codexPath(configRoot, "projects", "huanlink.json"), {
           ...validProject,
           projectId: "not valid"
         });
-        await rm(join(configRoot, "codex-adapter", "projects", "huanlink.json"));
       },
       async (configRoot) => {
         await expectInvalidConfig(loadLocalConfig({ configRoot }));
@@ -433,11 +569,56 @@ describe("local Codex Adapter configuration", () => {
     );
   });
 
-  it("requires an absolute Windows or POSIX project workspace", async () => {
-    for (const workspace of ["relative/workspace", "C:relative", "", " "]) {
+  it.each([
+    "./adapters/codex/projects/./huanlink.json",
+    "./adapters/codex/projects/nested/../huanlink.json",
+    "adapters/codex/projects/huanlink.json",
+    "./adapters\\codex\\projects\\huanlink.json",
+    "/adapters/codex/projects/huanlink.json"
+  ])("rejects invalid project reference %s", async (projectReference) => {
+    await withConfigRoot(
+      async (configRoot) => {
+        await writeEntry(configRoot, {
+          ...validEntry,
+          adapters: {
+            codex: {
+              ...validEntry.adapters.codex,
+              projects: [projectReference]
+            }
+          }
+        });
+      },
+      async (configRoot) => {
+        await expect(loadLocalConfig({ configRoot })).rejects.toThrow("config.json");
+      }
+    );
+  });
+
+  it.each([".", "projects/demo"])(
+    "accepts the project workspace %s without resolving it",
+    async (workspace) => {
       await withConfigRoot(
         async (configRoot) => {
-          await writeConfigFile(join(configRoot, "codex-adapter", "projects", "huanlink.json"), {
+          await writeConfigFile(codexPath(configRoot, "projects", "huanlink.json"), {
+            ...validProject,
+            workspace
+          });
+        },
+        async (configRoot) => {
+          await expect(loadLocalConfig({ configRoot })).resolves.toMatchObject({
+            projects: [{ workspace }]
+          });
+        }
+      );
+    }
+  );
+
+  it.each(["/work/huanlink", "D:/work/huanlink", "C:relative", "projects\\demo", "../escape", " . ", "", " "])(
+    "rejects the invalid project workspace %s",
+    async (workspace) => {
+      await withConfigRoot(
+        async (configRoot) => {
+          await writeConfigFile(codexPath(configRoot, "projects", "huanlink.json"), {
             ...validProject,
             workspace
           });
@@ -447,23 +628,7 @@ describe("local Codex Adapter configuration", () => {
         }
       );
     }
-  });
-
-  it("accepts a POSIX absolute project workspace", async () => {
-    await withConfigRoot(
-      async (configRoot) => {
-        await writeConfigFile(join(configRoot, "codex-adapter", "projects", "huanlink.json"), {
-          ...validProject,
-          workspace: "/work/huanlink"
-        });
-      },
-      async (configRoot) => {
-        await expect(loadLocalConfig({ configRoot })).resolves.toMatchObject({
-          projects: [{ workspace: "/work/huanlink" }]
-        });
-      }
-    );
-  });
+  );
 
   it.each([
     ["damaged JSON", "{ \"projectId\": "],
@@ -472,7 +637,7 @@ describe("local Codex Adapter configuration", () => {
   ])("rejects a project file with %s", async (_name, contents) => {
     await withConfigRoot(
       async (configRoot) => {
-        await writeFile(join(configRoot, "codex-adapter", "projects", "huanlink.json"), contents);
+        await writeFile(codexPath(configRoot, "projects", "huanlink.json"), contents);
       },
       async (configRoot) => {
         await expectInvalidConfig(loadLocalConfig({ configRoot }));
@@ -480,29 +645,37 @@ describe("local Codex Adapter configuration", () => {
     );
   });
 
-  it("returns project files in lexical filename order and ignores nested files", async () => {
+  it("returns project files in config.json declaration order", async () => {
     await withConfigRoot(
       async (configRoot) => {
-        await writeConfigFile(join(configRoot, "codex-adapter", "projects", "a.json"), {
+        await writeConfigFile(codexPath(configRoot, "projects", "a.json"), {
           ...validProject,
           projectId: "a"
         });
-        await writeConfigFile(join(configRoot, "codex-adapter", "projects", "z.json"), {
+        await writeConfigFile(codexPath(configRoot, "projects", "z.json"), {
           ...validProject,
           projectId: "z"
         });
-        await writeConfigFile(join(configRoot, "codex-adapter", "projects", "nested", "ignored.json"), {
-          ...validProject,
-          projectId: "nested"
+        await writeEntry(configRoot, {
+          ...validEntry,
+          adapters: {
+            codex: {
+              ...validEntry.adapters.codex,
+              projects: [
+                "./adapters/codex/projects/z.json",
+                "./adapters/codex/projects/huanlink.json",
+                "./adapters/codex/projects/a.json"
+              ]
+            }
+          }
         });
-        await writeFile(join(configRoot, "codex-adapter", "projects", "ignored.txt"), "ignored");
       },
       async (configRoot) => {
         const config = await loadLocalConfig({ configRoot });
         expect(config.projects.map((project) => project.projectId)).toEqual([
-          "a",
+          "z",
           "huanlink",
-          "z"
+          "a"
         ]);
       }
     );
@@ -512,7 +685,7 @@ describe("local Codex Adapter configuration", () => {
     const secretMarker = "do-not-disclose-codex-adapter-value";
     await withConfigRoot(
       async (configRoot) => {
-        await writeConfigFile(join(configRoot, "codex-adapter", "runtime.json"), {
+        await writeConfigFile(codexPath(configRoot, "runtime.json"), {
           ...validRuntime,
           codexExecutable: secretMarker,
           unexpected: secretMarker
@@ -528,14 +701,14 @@ describe("local Codex Adapter configuration", () => {
     const secretMarker = "do-not-disclose-file-content";
     await withConfigRoot(
       async (configRoot) => {
-        await writeConfigFile(join(configRoot, "codex-adapter", "runtime.json"), {
+        await writeConfigFile(codexPath(configRoot, "runtime.json"), {
           ...validRuntime,
           unexpected: secretMarker
         });
       },
       async (configRoot) => {
         const promise = loadLocalConfig({ configRoot });
-        await expect(promise).rejects.toThrow("codex-adapter/runtime.json");
+        await expect(promise).rejects.toThrow("adapters/codex/runtime.json");
         await expect(promise).rejects.not.toThrow(secretMarker);
         await expect(promise).rejects.not.toThrow(configRoot);
       }
@@ -545,14 +718,14 @@ describe("local Codex Adapter configuration", () => {
   it("reports a safe field name for schema validation errors", async () => {
     await withConfigRoot(
       async (configRoot) => {
-        await writeConfigFile(join(configRoot, "codex-adapter", "runtime.json"), {
+        await writeConfigFile(codexPath(configRoot, "runtime.json"), {
           ...validRuntime,
           heartbeatIntervalMs: 0
         });
       },
       async (configRoot) => {
         await expect(loadLocalConfig({ configRoot })).rejects.toThrow(
-          "codex-adapter/runtime.json: heartbeatIntervalMs"
+          "adapters/codex/runtime.json: heartbeatIntervalMs"
         );
       }
     );
@@ -561,7 +734,7 @@ describe("local Codex Adapter configuration", () => {
   it("rejects a symlinked runtime file", async (context) => {
     await withConfigRoot(
       async (configRoot) => {
-        const runtimePath = join(configRoot, "codex-adapter", "runtime.json");
+        const runtimePath = codexPath(configRoot, "runtime.json");
         const targetPath = join(configRoot, "runtime-target.json");
         await writeFile(targetPath, await readFile(runtimePath));
         await rm(runtimePath);
@@ -578,7 +751,7 @@ describe("local Codex Adapter configuration", () => {
   it("rejects a junctioned projects directory", async (context) => {
     await withConfigRoot(
       async (configRoot) => {
-        const projectsPath = join(configRoot, "codex-adapter", "projects");
+        const projectsPath = codexPath(configRoot, "projects");
         const targetPath = join(configRoot, "projects-target");
         await rename(projectsPath, targetPath);
         if (!(await tryCreateLink(targetPath, projectsPath, "junction"))) {

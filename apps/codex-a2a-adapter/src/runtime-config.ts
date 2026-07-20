@@ -1,5 +1,4 @@
-import { lstat, readdir, readFile } from "node:fs/promises";
-import type { Dirent } from "node:fs";
+import { lstat, readFile } from "node:fs/promises";
 import { join, posix, win32 } from "node:path";
 
 import type { RuntimeLogLevel } from "@huanlink/core";
@@ -16,6 +15,10 @@ const LOG_LEVELS = new Set<RuntimeLogLevel>([
 
 const NON_EMPTY_STRING = z.string().trim().min(1);
 const STABLE_ID = NON_EMPTY_STRING.regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/);
+const RELATIVE_WORKSPACE = z
+  .string()
+  .min(1)
+  .refine((value) => value === value.trim() && isRelativeWorkspace(value));
 const RUNTIME_FIELD_NAMES = new Set([
   "version",
   "host",
@@ -24,6 +27,9 @@ const RUNTIME_FIELD_NAMES = new Set([
   "expectedCodexVersion",
   "heartbeatIntervalMs"
 ]);
+const ENTRY_FIELD_NAMES = new Set(["version", "server", "adapters"]);
+const ADAPTERS_FIELD_NAMES = new Set(["codex"]);
+const CODEX_ENTRY_FIELD_NAMES = new Set(["runtime", "projects"]);
 const PROJECT_FIELD_NAMES = new Set([
   "version",
   "projectId",
@@ -43,13 +49,26 @@ const adapterRuntimeSchema = z
   })
   .strict();
 
+const configEntrySchema = z
+  .object({
+    version: z.literal(1),
+    server: z.unknown().optional(),
+    adapters: z.unknown().optional()
+  })
+  .strict();
+
+const codexAdapterEntrySchema = z
+  .object({
+    runtime: explicitConfigReferenceSchema("adapters/codex"),
+    projects: z.array(explicitConfigReferenceSchema("adapters/codex/projects")).min(1)
+  })
+  .strict();
+
 const projectSchema = z
   .object({
     version: z.literal(1),
     projectId: STABLE_ID,
-    workspace: NON_EMPTY_STRING.refine(
-      (value) => win32.isAbsolute(value) || posix.isAbsolute(value)
-    ),
+    workspace: RELATIVE_WORKSPACE,
     branch: NON_EMPTY_STRING,
     defaultModelId: NON_EMPTY_STRING
   })
@@ -71,29 +90,50 @@ export async function loadCodexAdapterLocalConfig(
       configRoot = join(defaultHuanlinkRoot, "config");
     }
 
-    const adapterRoot = join(configRoot, "codex-adapter");
     await assertRegularDirectory(configRoot, "configuration root");
-    await assertRegularDirectory(adapterRoot, "codex-adapter");
+    const entry = parseConfigFile(
+      configEntrySchema,
+      await readJsonObject(configRoot, "config.json"),
+      "config.json",
+      ENTRY_FIELD_NAMES
+    );
+    const adapters = parseConfigFile(
+      z.object({ codex: z.unknown() }).strict(),
+      entry.adapters,
+      "config.json",
+      ADAPTERS_FIELD_NAMES,
+      "adapters"
+    );
+    const codexEntry = parseConfigFile(
+      codexAdapterEntrySchema,
+      adapters.codex,
+      "config.json",
+      CODEX_ENTRY_FIELD_NAMES,
+      "adapters.codex"
+    );
+    ensureUniqueReferences(codexEntry.projects, "config.json", "adapters.codex.projects");
 
-    const runtimeLocation = "codex-adapter/runtime.json";
-    const runtime = await readJsonObject(join(adapterRoot, "runtime.json"), runtimeLocation);
-    const projectsDirectory = join(adapterRoot, "projects");
-    await assertRegularDirectory(projectsDirectory, "codex-adapter/projects");
-    const projectPaths = await readProjectPaths(projectsDirectory);
-    if (projectPaths.length === 0) {
-      throw invalidLocalConfig("codex-adapter/projects");
-    }
-
+    const runtimeLocation = removeReferencePrefix(codexEntry.runtime);
     const parsedRuntime = parseConfigFile(
       adapterRuntimeSchema,
-      runtime,
+      await readJsonObject(configRoot, runtimeLocation),
       runtimeLocation,
       RUNTIME_FIELD_NAMES
     );
-    const parsedProjects = projectPaths.map(({ contents, location }) => ({
-      project: parseConfigFile(projectSchema, contents, location, PROJECT_FIELD_NAMES),
-      location
-    }));
+    const parsedProjects = await Promise.all(
+      codexEntry.projects.map(async (reference) => {
+        const location = removeReferencePrefix(reference);
+        return {
+          project: parseConfigFile(
+            projectSchema,
+            await readJsonObject(configRoot, location),
+            location,
+            PROJECT_FIELD_NAMES
+          ),
+          location
+        };
+      })
+    );
     const projectIds = new Set<string>();
     for (const { project, location } of parsedProjects) {
       if (projectIds.has(project.projectId)) {
@@ -167,42 +207,26 @@ async function assertRegularDirectory(path: string, location: string): Promise<v
   }
 }
 
-async function readProjectPaths(
-  projectsDirectory: string
-): Promise<Array<{ contents: Record<string, unknown>; location: string }>> {
-  let entries: Dirent[];
-  try {
-    entries = await readdir(projectsDirectory, { withFileTypes: true });
-  } catch {
-    throw invalidLocalConfig("codex-adapter/projects");
-  }
-  const jsonNames = entries
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
-    .map((entry) => entry.name)
-    .sort();
-
-  return Promise.all(
-    jsonNames.map(async (name) => ({
-      contents: await readJsonObject(
-        join(projectsDirectory, name),
-        `codex-adapter/projects/${name}`
-      ),
-      location: `codex-adapter/projects/${name}`
-    }))
-  );
-}
-
 async function readJsonObject(
-  path: string,
+  configRoot: string,
   location: string
 ): Promise<Record<string, unknown>> {
   try {
-    const metadata = await lstat(path);
-    if (metadata.isSymbolicLink() || !metadata.isFile()) {
-      throw invalidLocalConfig(location);
+    const segments = location.split("/");
+    let currentPath = configRoot;
+    for (const [index, segment] of segments.entries()) {
+      currentPath = join(currentPath, segment);
+      const metadata = await lstat(currentPath);
+      const isFinalSegment = index === segments.length - 1;
+      if (
+        metadata.isSymbolicLink() ||
+        (isFinalSegment ? !metadata.isFile() : !metadata.isDirectory())
+      ) {
+        throw invalidLocalConfig(segments.slice(0, index + 1).join("/"));
+      }
     }
 
-    const text = new TextDecoder("utf-8", { fatal: true }).decode(await readFile(path));
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(await readFile(currentPath));
     const parsed: unknown = JSON.parse(text);
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
       throw invalidLocalConfig(location);
@@ -218,9 +242,10 @@ async function readJsonObject(
 
 function parseConfigFile<T extends z.ZodType>(
   schema: T,
-  contents: Record<string, unknown>,
+  contents: unknown,
   location: string,
-  safeFieldNames: Set<string>
+  safeFieldNames: Set<string>,
+  fieldPrefix?: string
 ): z.output<T> {
   const result = schema.safeParse(contents);
   if (result.success) {
@@ -233,7 +258,64 @@ function parseConfigFile<T extends z.ZodType>(
       (candidate): candidate is string =>
         typeof candidate === "string" && safeFieldNames.has(candidate)
     );
-  throw invalidLocalConfig(location, fieldName);
+  throw invalidLocalConfig(
+    location,
+    fieldName === undefined
+      ? fieldPrefix
+      : fieldPrefix === undefined
+        ? fieldName
+        : `${fieldPrefix}.${fieldName}`
+  );
+}
+
+function explicitConfigReferenceSchema(prefix: string): z.ZodType<string> {
+  return z.string().refine(
+    (value) => isExplicitConfigReference(value, prefix),
+    "must be an explicit configuration reference"
+  );
+}
+
+function isExplicitConfigReference(value: string, prefix: string): boolean {
+  if (!value.startsWith("./") || !value.endsWith(".json") || value.includes("\\")) {
+    return false;
+  }
+
+  const relativePath = removeReferencePrefix(value);
+  const segments = relativePath.split("/");
+  return (
+    relativePath.startsWith(`${prefix}/`) &&
+    segments.every((segment) => segment.length > 0 && segment !== "." && segment !== "..")
+  );
+}
+
+function removeReferencePrefix(reference: string): string {
+  return reference.slice(2);
+}
+
+function ensureUniqueReferences(
+  references: readonly string[],
+  location: string,
+  fieldName: string
+): void {
+  const seen = new Set<string>();
+  for (const reference of references) {
+    if (seen.has(reference)) {
+      throw invalidLocalConfig(location, fieldName);
+    }
+    seen.add(reference);
+  }
+}
+
+function isRelativeWorkspace(value: string): boolean {
+  if (value === ".") {
+    return true;
+  }
+  if (value.includes("\\") || value.includes(":") || win32.isAbsolute(value) || posix.isAbsolute(value)) {
+    return false;
+  }
+  return value
+    .split("/")
+    .every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
 }
 
 class LocalConfigError extends Error {}

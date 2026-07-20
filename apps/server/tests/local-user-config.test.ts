@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "vitest";
 
@@ -75,7 +76,27 @@ describe("test environment isolation", () => {
 });
 
 describe("loadServerLocalUserConfig", () => {
-  test("loads only the Server-owned files in deterministic name order and resolves secret references", async () => {
+  test("loads the repository's single tracked configuration tree", async () => {
+    const configRoot = fileURLToPath(
+      new URL("../../../.huanlink/config/", import.meta.url)
+    );
+
+    await expect(
+      loadServerLocalUserConfig({
+        configRoot,
+        env: {
+          DEEPSEEK_API_KEY: API_KEY,
+          HUANLINK_ONEBOT_ACCESS_TOKEN: ACCESS_TOKEN
+        }
+      })
+    ).resolves.toMatchObject({
+      mainAgent: { provider: "deepseek" },
+      channels: [{ channelId: "qq-main" }],
+      agents: [{ agentId: "codex-local" }]
+    });
+  });
+
+  test("loads only explicitly referenced Server files in declaration order and resolves secret references", async () => {
     await writeValidServerConfig(tempRoot, {
       channels: [
         ["z-second.json", { ...oneBotChannel, channelId: "qq-second" }],
@@ -86,22 +107,6 @@ describe("loadServerLocalUserConfig", () => {
         ["a-first.json", { ...a2aAgent, agentId: "agent-first" }]
       ]
     });
-
-    await writeJson(
-      path.join(tempRoot, "codex-adapter", "runtime.json"),
-      { version: 1, workspace: "must-not-be-read" }
-    );
-
-    await mkdir(path.join(tempRoot, "server", "channels", "nested"));
-    await writeJson(
-      path.join(tempRoot, "server", "channels", "nested", "ignored.json"),
-      { invalid: true }
-    );
-    await writeFile(
-      path.join(tempRoot, "server", "channels", "ignored.txt"),
-      "not JSON",
-      "utf8"
-    );
 
     await expect(
       loadServerLocalUserConfig({ configRoot: tempRoot })
@@ -114,7 +119,7 @@ describe("loadServerLocalUserConfig", () => {
       },
       channels: [
         {
-          channelId: "qq-first",
+          channelId: "qq-second",
           type: "onebot11-forward-websocket",
           url: "ws://127.0.0.1:3001/",
           groupId: "20002000",
@@ -122,7 +127,7 @@ describe("loadServerLocalUserConfig", () => {
           accessToken: ACCESS_TOKEN
         },
         {
-          channelId: "qq-second",
+          channelId: "qq-first",
           type: "onebot11-forward-websocket",
           url: "ws://127.0.0.1:3001/",
           groupId: "20002000",
@@ -132,7 +137,7 @@ describe("loadServerLocalUserConfig", () => {
       ],
       agents: [
         {
-          agentId: "agent-first",
+          agentId: "agent-second",
           displayName: "Codex Local",
           transport: "a2a",
           origin: "http://127.0.0.1:4000",
@@ -140,7 +145,7 @@ describe("loadServerLocalUserConfig", () => {
           enabled: true
         },
         {
-          agentId: "agent-second",
+          agentId: "agent-first",
           displayName: "Codex Local",
           transport: "a2a",
           origin: "http://127.0.0.1:4000",
@@ -148,6 +153,120 @@ describe("loadServerLocalUserConfig", () => {
           enabled: true
         }
       ]
+    });
+  });
+
+  test("ignores an invalid Server JSON file that config.json does not reference", async () => {
+    await writeValidServerConfig(tempRoot);
+    await writeJson(path.join(tempRoot, "server", "channels", "unreferenced.json"), {
+      version: 1,
+      channelId: "bad id"
+    });
+
+    await expect(loadServerLocalUserConfig({ configRoot: tempRoot })).resolves.toMatchObject({
+      channels: [{ channelId: "qq-main" }]
+    });
+  });
+
+  test.each([
+    ["a missing config.json", undefined, "root"],
+    ["damaged config.json", "{ invalid JSON", "root"],
+    [
+      "an unknown config.json field",
+      { version: 1, server: serverConfigEntry(), unexpected: true },
+      "root"
+    ]
+  ])("rejects %s", async (_name, contents, field) => {
+    await writeValidServerConfig(tempRoot);
+    const configPath = path.join(tempRoot, "config.json");
+    if (contents === undefined) {
+      await rm(configPath);
+    } else if (typeof contents === "string") {
+      await writeFile(configPath, contents, "utf8");
+    } else {
+      await writeJson(configPath, contents);
+    }
+
+    await expect(loadServerLocalUserConfig({ configRoot: tempRoot })).rejects.toThrow(
+      new RegExp(`config\\.json.*${field}`)
+    );
+  });
+
+  test.each([
+    ["a missing Server section", { version: 1 }, "server"],
+    ["an unknown Server field", { version: 1, server: { ...serverConfigEntry(), unexpected: true } }, "root"],
+    ["a missing mainAgent reference", { version: 1, server: { channels: ["./server/channels/onebot11.json"], agents: ["./server/agents/codex-local.json"] } }, "mainAgent"],
+    ["an empty channels list", { version: 1, server: { ...serverConfigEntry(), channels: [] } }, "channels"],
+    ["a non-string Agent reference", { version: 1, server: { ...serverConfigEntry(), agents: [42] } }, "agents"]
+  ])("rejects config.json with %s", async (_name, entry, field) => {
+    await writeValidServerConfig(tempRoot);
+    await writeJson(path.join(tempRoot, "config.json"), entry);
+
+    await expect(loadServerLocalUserConfig({ configRoot: tempRoot })).rejects.toThrow(
+      new RegExp(`config\\.json.*${field}`)
+    );
+  });
+
+  test.each([
+    ["a reference without ./", "mainAgent", "server/main-agent.json"],
+    ["an absolute reference", "channels", "/server/channels/onebot11.json"],
+    ["a backslash reference", "agents", ".\\server\\agents\\codex-local.json"],
+    ["a parent-directory reference", "channels", "./server/channels/../channels/onebot11.json"],
+    ["a reference outside the Server namespace", "agents", "./adapters/codex/projects/huanlink.json"]
+  ])("rejects %s", async (_name, field, reference) => {
+    await writeValidServerConfig(tempRoot);
+    const server = serverConfigEntry();
+    if (field === "mainAgent") {
+      server.mainAgent = reference;
+    } else if (field === "channels") {
+      server.channels = [reference];
+    } else {
+      server.agents = [reference];
+    }
+    await writeJson(path.join(tempRoot, "config.json"), { version: 1, server });
+
+    await expect(loadServerLocalUserConfig({ configRoot: tempRoot })).rejects.toThrow(
+      new RegExp(`config\\.json.*${field}`)
+    );
+  });
+
+  test.each([
+    ["duplicate references", ["./server/channels/onebot11.json", "./server/channels/onebot11.json"]],
+    ["an alias reference", ["./server/channels/./onebot11.json"]]
+  ])("rejects %s", async (_name, channels) => {
+    await writeValidServerConfig(tempRoot);
+    await writeJson(path.join(tempRoot, "config.json"), {
+      version: 1,
+      server: { ...serverConfigEntry(), channels }
+    });
+
+    await expect(loadServerLocalUserConfig({ configRoot: tempRoot })).rejects.toThrow(
+      /config\.json.*channels/
+    );
+  });
+
+  test("loads its own explicit references while a malformed Adapter section does not block it", async () => {
+    await writeValidServerConfig(tempRoot);
+    const alternateMainAgent = { ...mainAgent, modelId: "deepseek-v4-alt" };
+    const alternateChannel = { ...oneBotChannel, channelId: "qq-alt" };
+    const alternateAgent = { ...a2aAgent, agentId: "agent-alt" };
+    await writeJson(path.join(tempRoot, "server", "main-agent-alt.json"), alternateMainAgent);
+    await writeJson(path.join(tempRoot, "server", "channels", "alt.json"), alternateChannel);
+    await writeJson(path.join(tempRoot, "server", "agents", "alt.json"), alternateAgent);
+    await writeJson(path.join(tempRoot, "config.json"), {
+      version: 1,
+      server: {
+        mainAgent: "./server/main-agent-alt.json",
+        channels: ["./server/channels/alt.json"],
+        agents: ["./server/agents/alt.json"]
+      },
+      adapters: { codex: { runtime: 42 } }
+    });
+
+    await expect(loadServerLocalUserConfig({ configRoot: tempRoot })).resolves.toMatchObject({
+      mainAgent: { modelId: "deepseek-v4-alt" },
+      channels: [{ channelId: "qq-alt" }],
+      agents: [{ agentId: "agent-alt" }]
     });
   });
 
@@ -188,7 +307,7 @@ describe("loadServerLocalUserConfig", () => {
 
   test.each([
     ["server/main-agent.json", { ...mainAgent, version: 2 }, "version"],
-    ["server/main-agent.json", { ...mainAgent, unexpected: true }, "unexpected"],
+    ["server/main-agent.json", { ...mainAgent, unexpected: true }, "root"],
     ["server/channels/onebot11.json", { ...oneBotChannel, channelId: "bad id" }, "channelId"],
     ["server/channels/onebot11.json", { ...oneBotChannel, url: "http://127.0.0.1:3001" }, "url"],
     ["server/agents/codex-local.json", { ...a2aAgent, origin: "https://example.test" }, "origin"]
@@ -202,19 +321,34 @@ describe("loadServerLocalUserConfig", () => {
   });
 
   test.each([
-    ["channels", "channelId", "qq-main"],
-    ["agents", "agentId", "codex-local"]
-  ])("rejects duplicate stable %s", async (directory, field, id) => {
+    ["channels", "channelId"],
+    ["agents", "agentId"]
+  ])("rejects duplicate stable %s without disclosing its value", async (directory, field) => {
     await writeValidServerConfig(tempRoot);
-    const fixture = directory === "channels" ? oneBotChannel : a2aAgent;
+    const secretId = `do-not-disclose-${directory}-id`;
+    const fixture = {
+      ...(directory === "channels" ? oneBotChannel : a2aAgent),
+      [field]: secretId
+    };
+    const originalFile = directory === "channels" ? "onebot11.json" : "codex-local.json";
+    await writeJson(path.join(tempRoot, "server", directory, originalFile), fixture);
     await writeJson(
       path.join(tempRoot, "server", directory, "z-duplicate.json"),
       fixture
     );
+    const server = serverConfigEntry();
+    if (directory === "channels") {
+      server.channels.push("./server/channels/z-duplicate.json");
+    } else {
+      server.agents.push("./server/agents/z-duplicate.json");
+    }
+    await writeJson(path.join(tempRoot, "config.json"), { version: 1, server });
 
-    await expect(loadServerLocalUserConfig({ configRoot: tempRoot })).rejects.toThrow(
-      new RegExp(`${directory}/z-duplicate\\.json.*${field}.*${id}`)
+    const promise = loadServerLocalUserConfig({ configRoot: tempRoot });
+    await expect(promise).rejects.toThrow(
+      new RegExp(`${directory}/z-duplicate\\.json.*${field}`)
     );
+    await expect(promise).rejects.not.toThrow(secretId);
   });
 
   test.each([
@@ -358,12 +492,13 @@ describe("loadServerLocalUserConfig", () => {
     });
   });
 
-  test("does not echo an unknown raw secret field or its JSON content", async () => {
+  test("does not echo an unknown field name or its JSON content", async () => {
     await writeValidServerConfig(tempRoot);
+    const secretField = "do-not-disclose-unknown-field";
     const rawSecret = "raw-secret-that-must-not-leak";
     await writeJson(path.join(tempRoot, "server", "main-agent.json"), {
       ...mainAgent,
-      rawSecret
+      [secretField]: rawSecret
     });
 
     let thrown: unknown;
@@ -375,9 +510,9 @@ describe("loadServerLocalUserConfig", () => {
 
     expect(thrown).toBeInstanceOf(Error);
     expect((thrown as Error).message).toContain("server/main-agent.json");
-    expect((thrown as Error).message).toContain("rawSecret");
+    expect((thrown as Error).message).toContain("root");
+    expect((thrown as Error).message).not.toContain(secretField);
     expect((thrown as Error).message).not.toContain(rawSecret);
-    expect((thrown as Error).message).not.toContain('"rawSecret"');
   });
 
   test("preserves leading and trailing whitespace in a resolved secret", async () => {
@@ -460,20 +595,48 @@ const a2aAgent = {
   enabled: true
 };
 
+type ServerConfigEntry = {
+  mainAgent: string;
+  channels: string[];
+  agents: string[];
+};
+
+function serverConfigEntry(): ServerConfigEntry {
+  return {
+    mainAgent: "./server/main-agent.json",
+    channels: ["./server/channels/onebot11.json"],
+    agents: ["./server/agents/codex-local.json"]
+  };
+}
+
 async function writeValidServerConfig(
   root: string,
   input: {
     channels?: Array<[string, object]>;
     agents?: Array<[string, object]>;
+    config?: object;
   } = {}
 ): Promise<void> {
+  const channels = input.channels ?? [["onebot11.json", oneBotChannel]];
+  const agents = input.agents ?? [["codex-local.json", a2aAgent]];
   await writeJson(path.join(root, "server", "main-agent.json"), mainAgent);
-  for (const [name, value] of input.channels ?? [["onebot11.json", oneBotChannel]]) {
+  for (const [name, value] of channels) {
     await writeJson(path.join(root, "server", "channels", name), value);
   }
-  for (const [name, value] of input.agents ?? [["codex-local.json", a2aAgent]]) {
+  for (const [name, value] of agents) {
     await writeJson(path.join(root, "server", "agents", name), value);
   }
+  await writeJson(
+    path.join(root, "config.json"),
+    input.config ?? {
+      version: 1,
+      server: {
+        mainAgent: "./server/main-agent.json",
+        channels: channels.map(([name]) => `./server/channels/${name}`),
+        agents: agents.map(([name]) => `./server/agents/${name}`)
+      }
+    }
+  );
 }
 
 async function writeJson(filePath: string, value: object): Promise<void> {
