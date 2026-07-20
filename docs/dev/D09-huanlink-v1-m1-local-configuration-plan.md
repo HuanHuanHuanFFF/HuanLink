@@ -412,19 +412,24 @@ corepack.cmd pnpm --filter @huanlink/integration-a2a-client build
 - 引用必须以 `./` 开头、使用 `/`、以 `.json` 结尾；去掉开头 `./` 后，每个路径段都必须非空且不能是 `.` 或 `..`。Server 只允许 `./server/**`，Codex Adapter 只允许 `./adapters/codex/**`。数组在路径结构校验后检查重复；加载顺序就是声明顺序。未被引用的同级或嵌套 JSON 一律不读取。
 - 不支持目录扫描、默认文件名推断、include 链、全局/用户/项目多层合并、后者覆盖前者或 `configs/examples` 兼容回退。旧布局明确失败，便于直接暴露迁移错误。
 - `.huanlink/config/**` 纳入版本控制；`.huanlink` 下的日志、缓存、worktree 和其他运行态继续忽略。普通 JSON 只保存非秘密值和环境变量名，不保存 API Key 或 Token。
+- 配置树属于本地单用户、启动时读取的可信单写者输入。加载器拒绝读取时已经存在的符号链接和目录 junction，但这不是抵御另一个本机进程并发替换路径的原子安全沙箱；修改配置时不得同时启动或重载 HuanLink。
 - 项目 `workspace` 在 JSON 中改为预期相对于“包含 `.huanlink` 的 HuanLink 项目根”的路径（当前仓库为 `.`）；只接受 `.` 或使用 `/`、不含空段、`.` 段、`..` 段的普通相对路径，不接受绝对路径或反斜杠。B02R 只返回该相对字符串，不选择或执行解析基准；B03 必须显式注入项目根并完成 realpath、存在性、Git 仓库和分支校验，B04 才接入运行入口。
 
 **TDD 实施步骤：**
 
-- [ ] 在两个 loader 的 fixture 中写入同一 `config.json`，把主成功用例改为验证“只按入口数组顺序读取明确引用的文件”。
-- [ ] 新增缺失/损坏/顶层未知字段入口、本侧区块缺失或字段错误、空数组、重复与别名引用、绝对/反斜杠/逃逸引用，以及未引用 JSON 不生效的用例；两侧各新增一个“对侧坏配置不阻塞本侧加载”用例。
-- [ ] 把 Adapter workspace 用例改为接受 `.` 与普通相对路径、拒绝绝对路径和空值；运行两个包级测试并确认因旧扫描与绝对路径合同而 RED。
-- [ ] 两个 loader 先读取 `config.json`，分别解析自己拥有的区块；删除 `readdir` 扫描，复用现有 UTF-8、schema、秘密引用、稳定 ID 和逐段 link/junction 防护。
-- [ ] 迁移 5 个职责 JSON，新增唯一入口与配置 README；README 必须说明固定入口、引用语法与所有权、无扫描/回退/合并、秘密环境变量规则，以及增加 Channel、Agent 或 Codex 项目时必须同时新增职责文件和入口引用。修改 `.gitignore` 只放行 `.huanlink/config/**`，删除 `configs/examples/**`。
-- [ ] 运行两个包级测试直到 GREEN，再运行仓库级 `corepack pnpm test`、`corepack pnpm typecheck`、`corepack pnpm build`、JSON 解析检查和 `git diff --check`；用 `git check-ignore` 分别证明 `.huanlink/config/config.json` 未被忽略、`.huanlink/logs/server.jsonl` 仍被忽略。
-- [ ] 独立执行规格审查与代码质量审查；修复阻断项后，把实际结果回写本节，保持文档与代码分开提交并只 push `dev/v1.0`。
+- [x] 在两个 loader 的 fixture 中写入同一 `config.json`，把主成功用例改为验证“只按入口数组顺序读取明确引用的文件”。
+- [x] 新增缺失/损坏/顶层未知字段入口、本侧区块缺失或字段错误、空数组、重复与别名引用、绝对/反斜杠/逃逸引用，以及未引用 JSON 不生效的用例；两侧各新增一个“对侧坏配置不阻塞本侧加载”用例。
+- [x] 把 Adapter workspace 用例改为接受 `.` 与普通相对路径、拒绝绝对路径和空值；运行两个包级测试并确认因旧扫描与绝对路径合同而 RED。
+- [x] 两个 loader 先读取 `config.json`，分别解析自己拥有的区块；删除 `readdir` 扫描，复用现有 UTF-8、schema、秘密引用、稳定 ID 和逐段 link/junction 防护。
+- [x] 迁移 5 个职责 JSON，新增唯一入口与配置 README；README 必须说明固定入口、引用语法与所有权、无扫描/回退/合并、秘密环境变量规则，以及增加 Channel、Agent 或 Codex 项目时必须同时新增职责文件和入口引用。修改 `.gitignore` 只放行 `.huanlink/config/**`，删除 `configs/examples/**`。
+- [x] 运行两个包级测试直到 GREEN，再运行仓库级 `corepack pnpm test`、`corepack pnpm typecheck`、`corepack pnpm build`、JSON 解析检查和 `git diff --check`；用 `git check-ignore` 分别证明 `.huanlink/config/config.json` 未被忽略、`.huanlink/logs/server.jsonl` 仍被忽略。
+- [x] 独立执行规格审查与代码质量审查；修复阻断项后，把实际结果回写本节，保持文档与代码分开提交并只 push `dev/v1.0`。
 
 **验收：** 两个进程从同一固定入口取得各自配置；增加一个未引用 JSON 不改变结果，删除或写错任一已引用文件会定位到安全相对位置并失败；仓库不再含 `configs/examples` 配置来源，README 足以让后续 Agent 在不猜测发现规则的情况下修改配置；真实启动入口仍未切换。
+
+**实际结果：** 已建立唯一固定入口 `.huanlink/config/config.json`，并把 5 个职责 JSON 迁入同一配置树；Server 与 Codex Adapter 各自只解析入口中属于自己的区块和显式引用，声明顺序得到保留，未引用 JSON 不生效，旧 `configs/examples/**` 已删除且没有兼容回退。`.gitignore` 只放行 `.huanlink/config/**`，日志等其他 `.huanlink` 运行态仍被忽略。Codex 项目的 `workspace` 使用未解析、未 trim 的相对表示 `.`，没有提前实现 B03 的项目根解析或 Git 校验。
+
+TDD 初始回归分别以 Server 18 项失败、Adapter 32 项失败证明旧目录扫描合同不满足新入口；随后又先用 RED 用例复现并修复了 `workspace` 首尾空白被静默 trim，以及未知字段名、重复稳定 ID 被错误回显的问题。最终 Server 测试 117 项通过、1 项跳过，Adapter 测试 143 项通过、1 项跳过；仓库级 37 个测试文件共 507 项通过、2 项跳过，两个跳过均因当前 Windows 无权限创建文件符号链接，目录 junction 防护用例实际执行并通过。仓库级 typecheck、build、6 份 JSON 解析、旧扫描逻辑检索、ignore 边界和 `git diff --check` 均通过。独立规格复审与代码质量复审最终均未发现剩余 Critical、Important 或 Minor 问题；静态 link/junction 检查的可信单写者边界已写入本计划和配置 README。计划提交 `ed79bbc` 与功能提交 `e586684` 保持分离；真实 `main.ts` 仍未切换，本批未进入 B03 或 B04，也未 merge `main`。
 
 ### M1-B03：Codex 项目注册和任务目标校验
 
