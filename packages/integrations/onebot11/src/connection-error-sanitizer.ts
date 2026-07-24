@@ -1,29 +1,13 @@
-import {
-  createRedactingRuntimeLogger,
-  NoopRuntimeLogger,
-  redactRuntimeLogString,
-  type RuntimeLogger,
-} from "@huanlink/core";
-
-export function createRedactingOneBot11RuntimeLogger(
-  logger: RuntimeLogger | undefined,
-  rawUrl: string,
-  accessToken: string | undefined,
-): RuntimeLogger {
-  return createRedactingRuntimeLogger(logger ?? new NoopRuntimeLogger(), {
-    redactValues: collectOneBot11LogSecrets(rawUrl, accessToken),
-  });
-}
-
-export function redactOneBot11LogString(
+export function sanitizeOneBot11ConnectionErrorMessage(
   value: string,
   rawUrl: string,
   accessToken: string | undefined,
 ): string {
-  return redactRuntimeLogString(
-    value,
-    collectOneBot11LogSecrets(rawUrl, accessToken),
-  );
+  let redacted = value;
+  for (const secret of collectOneBot11LogSecrets(rawUrl, accessToken)) {
+    redacted = redacted.split(secret).join("[redacted]");
+  }
+  return redacted;
 }
 
 function collectOneBot11LogSecrets(

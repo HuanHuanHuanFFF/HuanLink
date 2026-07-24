@@ -1,6 +1,7 @@
-import type {
-  RuntimeLogFields,
-  RuntimeLogger,
+import {
+  NoopRuntimeLogger,
+  type RuntimeLogFields,
+  type RuntimeLogger,
 } from "@huanlink/core";
 import WebSocket, { type RawData } from "ws";
 
@@ -17,9 +18,8 @@ import type {
   OneBot11Transport,
 } from "./types.js";
 import {
-  createRedactingOneBot11RuntimeLogger,
-  redactOneBot11LogString,
-} from "./runtime-log-secrets.js";
+  sanitizeOneBot11ConnectionErrorMessage,
+} from "./connection-error-sanitizer.js";
 
 type PendingAction = {
   socket: WebSocket;
@@ -72,11 +72,7 @@ export class ForwardWebSocketOneBot11Transport implements OneBot11Transport {
     }
 
     this.onError = options.onError ?? (() => undefined);
-    this.logger = createRedactingOneBot11RuntimeLogger(
-      options.logger,
-      this.url,
-      this.accessToken,
-    );
+    this.logger = options.logger ?? new NoopRuntimeLogger();
   }
 
   start(): Promise<void> {
@@ -498,7 +494,7 @@ export class ForwardWebSocketOneBot11Transport implements OneBot11Transport {
   }
 
   private sanitizeConnectionError(error: unknown, action = "connect"): Error {
-    const message = redactOneBot11LogString(
+    const message = sanitizeOneBot11ConnectionErrorMessage(
       normalizeError(error).message,
       this.url,
       this.accessToken,

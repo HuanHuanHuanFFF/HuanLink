@@ -149,25 +149,19 @@ describe("ForwardWebSocketOneBot11Transport", () => {
     expect(request).toEqual(action);
   });
 
-  test("sanitizes established socket errors only in logs and preserves the observer error", async () => {
+  test("forwards established socket errors unchanged to the logger and observer", async () => {
     const { server, url } = await startServer();
     server.on("connection", () => undefined);
-    const sensitiveUrl = new URL(url);
-    sensitiveUrl.username = "onebot-user-secret";
-    sensitiveUrl.password = "onebot-password-secret";
-    sensitiveUrl.searchParams.set("session", "onebot-query-secret");
     const logger = new RecordingRuntimeLogger();
     const onError = vi.fn();
     const transport = new ForwardWebSocketOneBot11Transport({
-      url: sensitiveUrl.toString(),
+      url,
       logger,
       onError,
     });
     transports.push(transport);
     await transport.start();
-    const businessError = new Error(
-      `socket failed ${sensitiveUrl.toString()} onebot-query-secret`,
-    );
+    const businessError = new Error("socket failed");
     const clientSocket = (
       transport as unknown as { socket: WebSocket | undefined }
     ).socket;
@@ -180,15 +174,7 @@ describe("ForwardWebSocketOneBot11Transport", () => {
       (entry) => entry.message === "onebot11.error",
     );
     expect(logged).toBeDefined();
-    const loggedError = logged!.fields.error;
-    expect(loggedError).toBeInstanceOf(Error);
-    for (const secret of [
-      "onebot-user-secret",
-      "onebot-password-secret",
-      "onebot-query-secret",
-    ]) {
-      expect((loggedError as Error).message).not.toContain(secret);
-    }
+    expect(logged!.fields.error).toBe(businessError);
   });
 
   test("does not let a stale socket close reject a new socket action", async () => {

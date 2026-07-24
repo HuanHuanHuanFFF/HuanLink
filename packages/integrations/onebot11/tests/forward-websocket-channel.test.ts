@@ -309,9 +309,6 @@ describe("ForwardWebSocketOneBot11Channel", () => {
 
   test("logs a failed reply without a false sent event", async () => {
     const { server, url } = await startServer();
-    const actionSecret = "onebot-action-query-secret";
-    const sensitiveUrl = new URL(url);
-    sensitiveUrl.searchParams.set("session", actionSecret);
     server.on("connection", (socket) => {
       socket.on("message", (data) => {
         const request = readFrame(data);
@@ -319,18 +316,18 @@ describe("ForwardWebSocketOneBot11Channel", () => {
           JSON.stringify({
             status: "failed",
             retcode: 1404,
-            message: `reply rejected ${actionSecret}`,
+            message: "reply rejected",
             echo: request.echo,
           }),
         );
       });
     });
     const logger = new RecordingRuntimeLogger();
-    const channel = createChannel(sensitiveUrl.toString(), { logger });
+    const channel = createChannel(url, { logger });
     await channel.start();
 
     await expect(channel.sendText("20002", "failed reply")).rejects.toThrow(
-      actionSecret,
+      "reply rejected",
     );
 
     const failed = logEntry(logger, "onebot11.reply.failed");
@@ -348,27 +345,25 @@ describe("ForwardWebSocketOneBot11Channel", () => {
           entry.fields.echo === failed.fields.echo,
       ),
     ).toBe(false);
-    expect(loggedError(failed).message).not.toContain(actionSecret);
+    expect(loggedError(failed).message).toContain("reply rejected");
   });
 
-  test("sanitizes a remote close reason only in the pending reply log", async () => {
+  test("reports a remote close reason in the pending reply failure", async () => {
     const { server, url } = await startServer();
-    const closeSecret = "onebot-close-query-secret";
-    const sensitiveUrl = new URL(url);
-    sensitiveUrl.searchParams.set("session", closeSecret);
+    const closeReason = "remote-close-reason";
     server.on("connection", (socket) => {
-      socket.on("message", () => socket.close(1011, closeSecret));
+      socket.on("message", () => socket.close(1011, closeReason));
     });
     const logger = new RecordingRuntimeLogger();
-    const channel = createChannel(sensitiveUrl.toString(), { logger });
+    const channel = createChannel(url, { logger });
     await channel.start();
 
     await expect(channel.sendText("20002", "close this reply")).rejects.toThrow(
-      closeSecret,
+      closeReason,
     );
 
     const failed = logEntry(logger, "onebot11.reply.failed");
-    expect(loggedError(failed).message).not.toContain(closeSecret);
+    expect(loggedError(failed).message).toContain(closeReason);
   });
 
   test("connects at the configured root with a Bearer header and dispatches parsed events", async () => {

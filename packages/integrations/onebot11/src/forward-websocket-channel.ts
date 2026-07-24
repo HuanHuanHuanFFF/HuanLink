@@ -1,6 +1,7 @@
+import { NoopRuntimeLogger } from "@huanlink/core";
+
 import { OneBot11ChannelAdapter } from "./channel-adapter.js";
 import { ForwardWebSocketOneBot11Transport } from "./forward-websocket-transport.js";
-import { createRedactingOneBot11RuntimeLogger } from "./runtime-log-secrets.js";
 import type { ForwardWebSocketOneBot11ChannelOptions } from "./types.js";
 
 /**
@@ -12,11 +13,7 @@ import type { ForwardWebSocketOneBot11ChannelOptions } from "./types.js";
  */
 export class ForwardWebSocketOneBot11Channel extends OneBot11ChannelAdapter {
   constructor(options: ForwardWebSocketOneBot11ChannelOptions) {
-    const logger = createRedactingOneBot11RuntimeLogger(
-      options.logger,
-      options.url,
-      options.accessToken,
-    );
+    const logger = options.logger ?? new NoopRuntimeLogger();
     const transport = new ForwardWebSocketOneBot11Transport({
       url: options.url,
       ...(options.accessToken === undefined
