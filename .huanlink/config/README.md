@@ -23,4 +23,27 @@
 
 ## 当前阶段边界
 
-M1-B02R 只建立并验证配置合同，两个 loader 尚未接入各自 `main.ts`。当前启动流程仍保留旧环境变量装配；运行入口切换属于 M1-B04，不要在本批次提前接入或删除旧启动参数。
+配置合同已经建立并验证，但两个 loader 尚未接入各自 `main.ts`。当前启动流程仍保留旧环境变量装配；运行入口切换安排在 Channel 的 B07，不要提前删除旧启动参数。
+
+## 规划中的 Channel 入站策略
+
+下面的结构已进入 D11 的 B07 计划，但当前 loader 和 Server 尚未实现。现在不要提前把这些字段写入 `server/channels/*.json`；实现和配置校验完成后再替换现有单个 `groupId`。
+
+```json
+{
+  "inboundPolicy": {
+    "groups": {
+      "mode": "allowlist",
+      "ids": ["20002000"],
+      "requireMention": true
+    }
+  }
+}
+```
+
+- `mode: "allowlist"`：只有 `ids` 中的群可以把消息送入 Agent。
+- `mode: "denylist"`：`ids` 中的群被拒绝，其他群可以把消息送入 Agent；空列表表示允许所有群。
+- `requireMention: true`：必须明确 @ Bot；只有命令前缀但没有 @ 也不会触发。
+- `requireMention: false`：明确 @ Bot 或匹配 Channel 的 `commandPrefix` 均可触发。
+- 群号使用正整数字符串且不能重复。缺少策略或配置非法时启动失败，不使用隐式默认值。
+- 被拒绝的消息不创建会话、不进入 MainAgent，也不发送回复。
