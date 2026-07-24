@@ -10,6 +10,7 @@ export * from "./logging/types.js";
 export * from "./logging/noop-runtime-logger.js";
 export * from "./logging/pino-runtime-logger.js";
 export * from "./logging/jsonl-file-runtime-logger.js";
+export * from "./logging/redacting-runtime-logger.js";
 export * from "./runtime/agent-runtime.js";
 export * from "./runtime/runtime-config.js";
 export * from "./replay/types.js";

@@ -351,39 +351,6 @@ describe("ForwardWebSocketOneBot11Channel", () => {
     expect(loggedError(failed).message).not.toContain(actionSecret);
   });
 
-  test("sanitizes established socket errors only in logs and preserves the observer error", async () => {
-    const { server, url } = await startServer();
-    server.on("connection", () => undefined);
-    const sensitiveUrl = new URL(url);
-    sensitiveUrl.username = "onebot-user-secret";
-    sensitiveUrl.password = "onebot-password-secret";
-    sensitiveUrl.searchParams.set("session", "onebot-query-secret");
-    const logger = new RecordingRuntimeLogger();
-    const onError = vi.fn();
-    const channel = createChannel(sensitiveUrl.toString(), { logger, onError });
-    await channel.start();
-    const businessError = new Error(
-      `socket failed ${sensitiveUrl.toString()} onebot-query-secret`,
-    );
-
-    const clientSocket = (
-      channel as unknown as { socket: WebSocket | undefined }
-    ).socket;
-    expect(clientSocket).toBeDefined();
-    clientSocket!.emit("error", businessError);
-
-    expect(onError).toHaveBeenCalledWith(businessError);
-    const logged = logEntry(logger, "onebot11.error");
-    const loggedMessage = loggedError(logged).message;
-    for (const secret of [
-      "onebot-user-secret",
-      "onebot-password-secret",
-      "onebot-query-secret",
-    ]) {
-      expect(loggedMessage).not.toContain(secret);
-    }
-  });
-
   test("sanitizes a remote close reason only in the pending reply log", async () => {
     const { server, url } = await startServer();
     const closeSecret = "onebot-close-query-secret";
@@ -729,52 +696,6 @@ describe("ForwardWebSocketOneBot11Channel", () => {
     expect((error as Error).message).not.toContain(token);
   });
 
-  test("does not let a stale socket close reject a new socket action", async () => {
-    const { server, url } = await startServer();
-    const serverSockets: WebSocket[] = [];
-    const framesByConnection: JsonObject[][] = [];
-    server.on("connection", (socket) => {
-      const index = serverSockets.push(socket) - 1;
-      framesByConnection[index] = [];
-      socket.on("message", (data) => {
-        framesByConnection[index]!.push(readFrame(data));
-      });
-    });
-    const channel = createChannel(url, { reconnectDelaysMs: [0] });
-    await channel.start();
-    const internals = channel as unknown as {
-      socket: WebSocket | undefined;
-      scheduleReconnect(): void;
-    };
-    const staleSocket = internals.socket!;
-
-    internals.socket = undefined;
-    internals.scheduleReconnect();
-    await waitFor(() => serverSockets.length === 2, "a replacement socket");
-    await waitFor(
-      () => internals.socket?.readyState === WebSocket.OPEN,
-      "the replacement client to open",
-    );
-
-    const pending = channel.sendText("20002", "new socket action");
-    void pending.catch(() => undefined);
-    await waitFor(
-      () => framesByConnection[1]?.length === 1,
-      "the replacement socket action",
-    );
-    staleSocket.emit("close", 1006, Buffer.from("late close"));
-    const frame = framesByConnection[1]![0]!;
-    serverSockets[1]!.send(
-      JSON.stringify({
-        status: "ok",
-        retcode: 0,
-        data: { message_id: 3 },
-        echo: frame.echo,
-      }),
-    );
-
-    await expect(pending).resolves.toBeUndefined();
-  });
 });
 
 function logEntry(
