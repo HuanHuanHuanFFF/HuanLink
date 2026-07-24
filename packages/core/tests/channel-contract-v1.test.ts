@@ -3,6 +3,7 @@ import { describe, expect, test, vi } from "vitest";
 import {
   ChannelOperationError,
   assertValidChannelMessageParts,
+  assertValidRetractChannelMessageCommand,
   channelSessionIdFor,
   type ChannelAdapterV1,
   type ChannelCapabilitiesV1,
@@ -10,7 +11,8 @@ import {
   type ChannelDescriptorV1,
   type ChannelMessageListenerV1,
   type InboundChannelMessageV1,
-  type OutboundChannelCommandV1
+  type RetractChannelMessageCommandV1,
+  type SendChannelMessageCommandV1
 } from "../src/index.js";
 
 const capabilities: ChannelCapabilitiesV1 = {
@@ -20,7 +22,7 @@ const capabilities: ChannelCapabilitiesV1 = {
   outboundPartTypes: ["text", "mention", "attachmentRef"],
   reply: true,
   edit: false,
-  retract: false,
+  retract: true,
   reaction: false,
   typing: false,
   streaming: false
@@ -62,11 +64,11 @@ function inbound(
 }
 
 describe("Channel Contract v1", () => {
-  test("supports a platform-independent fake adapter lifecycle and send receipt", async () => {
+  test("sends a message and retracts it through a platform-independent fake adapter", async () => {
     let listener: ChannelMessageListenerV1 | undefined;
     const receive = vi.fn();
     const stopListening = vi.fn();
-    const command: OutboundChannelCommandV1 = {
+    const sendCommand: SendChannelMessageCommandV1 = {
       route: route(),
       parts: [
         { type: "text", text: "result: " },
@@ -91,24 +93,88 @@ describe("Channel Contract v1", () => {
       },
       send: vi.fn(async () => ({
         channelId: descriptor.channelId,
-        platformMessageId: "sent-1"
-      }))
+        messageId: "sent-1"
+      })),
+      retract: vi.fn(async () => undefined)
     };
 
     const unsubscribe = adapter.onMessage(receive);
     await adapter.start();
     const incoming = inbound();
     listener?.(incoming);
-    await expect(adapter.send(command)).resolves.toEqual({
+    const receipt = await adapter.send(sendCommand);
+    const retractCommand: RetractChannelMessageCommandV1 = {
+      route: sendCommand.route,
+      messageId: receipt.messageId
+    };
+    await adapter.retract(retractCommand);
+    expect(receipt).toEqual({
       channelId: "qq-main",
-      platformMessageId: "sent-1"
+      messageId: "sent-1"
     });
     await adapter.close();
     unsubscribe();
 
-    expect(adapter.send).toHaveBeenCalledWith(command);
+    expect(adapter.send).toHaveBeenCalledWith(sendCommand);
+    expect(adapter.retract).toHaveBeenCalledWith(retractCommand);
     expect(receive).toHaveBeenCalledWith(incoming);
     expect(stopListening).toHaveBeenCalledTimes(1);
+  });
+
+  test.each([undefined, null, "", "   ", 123])(
+    "rejects an invalid retract messageId %j before calling a platform",
+    (messageId) => {
+      expect(() =>
+        assertValidRetractChannelMessageCommand({
+          route: route(),
+          messageId
+        } as never)
+      ).toThrow(/messageId must be a non-empty string/);
+    }
+  );
+
+  test("accepts an opaque non-empty retract messageId without parsing its format", () => {
+    expect(() =>
+      assertValidRetractChannelMessageCommand({
+        route: route(),
+        messageId: "platform:message/42"
+      })
+    ).not.toThrow();
+  });
+
+  test("returns not_supported when an adapter cannot retract messages", async () => {
+    const unsupportedAdapter: ChannelAdapterV1 = {
+      descriptor: {
+        ...descriptor,
+        capabilities: {
+          ...capabilities,
+          retract: false
+        }
+      },
+      start: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+      onMessage: vi.fn(() => vi.fn()),
+      send: vi.fn(async () => ({
+        channelId: descriptor.channelId,
+        messageId: "sent-1"
+      })),
+      retract: vi.fn(async () => {
+        throw new ChannelOperationError(
+          "not_supported",
+          "message retraction is not supported"
+        );
+      })
+    };
+
+    await expect(
+      unsupportedAdapter.retract({
+        route: route(),
+        messageId: "sent-1"
+      })
+    ).rejects.toMatchObject({
+      name: "ChannelOperationError",
+      code: "not_supported"
+    });
   });
 
   test("isolates sessions by channel, conversation kind, conversation, and thread", () => {

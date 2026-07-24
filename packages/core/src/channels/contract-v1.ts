@@ -25,8 +25,8 @@ export type ChannelAttachmentKindV1 = "image" | "audio" | "video" | "file";
  * Adapter 的能力声明，不代表所有 Channel 都支持这些能力。
  *
  * Server 调用前必须检查对应能力；Adapter 也必须对未支持操作明确返回
- * `not_supported`。其中编辑、撤回、reaction、typing 和流式消息目前只有
- * 声明位，尚无对应 v1 命令或事件合同，现阶段 Adapter 不得声明为 `true`。
+ * `not_supported`。撤回已经具有可执行合同；编辑、reaction、typing 和
+ * 流式消息目前只有声明位，尚无对应 v1 命令或事件合同。
  */
 export type ChannelCapabilitiesV1 = {
   /** 支持的私聊、群聊或频道会话形态。 */
@@ -39,8 +39,8 @@ export type ChannelCapabilitiesV1 = {
   readonly outboundPartTypes: readonly ChannelMessagePartTypeV1[];
   /** 是否支持引用某条已有消息进行回复。 */
   readonly reply: boolean;
-  /** 以下能力尚未定义执行合同，目前必须为 false。 */
   readonly edit: boolean;
+  /** 当前 Channel 实例是否支持主动撤回消息。 */
   readonly retract: boolean;
   readonly reaction: boolean;
   readonly typing: boolean;
@@ -157,17 +157,27 @@ export type InboundChannelMessageV1 = {
   readonly trigger?: ChannelTriggerV1;
 };
 
-/** Server 要求指定 Channel 实例发送的统一命令。 */
-export type OutboundChannelCommandV1 = {
+/** Server 要求指定 Channel 实例发送消息的命令。 */
+export type SendChannelMessageCommandV1 = {
   readonly route: ChannelConversationRouteV1;
   readonly parts: readonly ChannelMessagePartV1[];
   readonly replyToMessageId?: string;
 };
 
-/** 平台确认发送成功后返回的最小稳定回执。 */
+/** Server 要求指定 Channel 实例主动撤回消息的命令。 */
+export type RetractChannelMessageCommandV1 = {
+  readonly route: ChannelConversationRouteV1;
+  /** Adapter 原样解释的平台消息 ID；Core 不解析其内部格式。 */
+  readonly messageId: string;
+};
+
+/**
+ * 平台接受发送并分配消息 ID 后返回的最小稳定回执。
+ * 这不表示接收方已经收到或读取消息。
+ */
 export type DeliveryReceiptV1 = {
   readonly channelId: string;
-  readonly platformMessageId: string;
+  readonly messageId: string;
 };
 
 /** 跨平台稳定错误码；平台原始错误只作为受控 cause 或日志保留。 */
@@ -212,8 +222,28 @@ export interface ChannelAdapterV1 {
   close(): Promise<void>;
   /** 订阅规范入站消息；返回的函数用于取消订阅。 */
   onMessage(listener: ChannelMessageListenerV1): () => void;
-  /** 发送规范命令，并在平台确认后返回回执。 */
-  send(command: OutboundChannelCommandV1): Promise<DeliveryReceiptV1>;
+  /** 发送消息，并在平台接受后返回消息 ID。 */
+  send(command: SendChannelMessageCommandV1): Promise<DeliveryReceiptV1>;
+  /**
+   * 主动撤回指定消息；成功时不返回额外内容。
+   * 不支持撤回时必须拒绝并返回 `ChannelOperationError("not_supported")`。
+   */
+  retract(command: RetractChannelMessageCommandV1): Promise<void>;
+}
+
+/** 在调用平台前拒绝缺失或非法的撤回消息 ID。 */
+export function assertValidRetractChannelMessageCommand(
+  command: RetractChannelMessageCommandV1
+): void {
+  if (typeof command !== "object" || command === null) {
+    throw new Error("Channel retract command must be an object");
+  }
+
+  const rawCommand = command as unknown as Record<string, unknown>;
+  requireNonEmptyString(
+    rawCommand.messageId as string,
+    "Channel retract messageId"
+  );
 }
 
 /**
