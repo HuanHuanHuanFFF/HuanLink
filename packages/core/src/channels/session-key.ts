@@ -1,6 +1,6 @@
 import type { SessionId } from "../shared/ids.js";
 
-import type { ChannelConversationRouteV1 } from "./contract-v1.js";
+import type { ChannelConversationRouteV1 } from "./channel-instance-v1.js";
 
 export function channelSessionIdFor(
   route: ChannelConversationRouteV1
