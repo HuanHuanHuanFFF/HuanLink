@@ -146,7 +146,7 @@ apps/server/src/
 - 原 `ForwardWebSocketOneBot11Channel` 收敛为 40 行迁移期兼容外观，现有 Server 构造方式未改变。
 - `codec.ts` 只负责 OneBot JSON frame 和群文本 Action 编码；`forward-websocket-transport.ts` 只拥有 WebSocket、鉴权、连接/重连、Action/`echo`、超时与关闭状态。
 - `channel-adapter.ts` 只保留当前群文本事件映射、命令/@触发和旧 `sendText` 组合；未接入 B01 新合同，也未增加私聊、附件或引用回复。
-- 通用递归脱敏与 Logger 异常隔离上移到 Core 的 `redacting-runtime-logger.ts`；OneBot 只在 `runtime-log-secrets.ts` 识别 Access Token 与 URL 敏感值，原有连接、消息、回复、失败和关闭日志语义保持不变。
+- OneBot 复用 Server 注入的 Core JSONL/Pino RuntimeLogger 完成统一日志脱敏与异常隔离；`connection-error-sanitizer.ts` 只负责清理可能返回调用方的连接错误文本，现有 Server 实际日志语义保持不变。
 - OneBot package 5 个测试文件、63 个测试通过；全仓类型检查、Server 现有回归和 OneBot 临时 emit build 通过。
 
 ### 停点
