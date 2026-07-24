@@ -188,3 +188,4 @@ codex那边当前的A2A是默认当成用户的身份,如果主控agent通过A2A
 当前在重构channel模块,定义统一的接口和能力,部分通用的放到这里,其他的特殊能力放到对应各自的adapter
 ## 7.24
 继续重构channel模块,log直接复core的,GPT有时候经常不看又自己写一个新的,又重新整理了一下skill,吧Boris prompts提炼了一个Boris-execution,这样就可以直接通过我的自然语言要求转化成合适的提示词
+完成部分channel的重构决策,还没做完
