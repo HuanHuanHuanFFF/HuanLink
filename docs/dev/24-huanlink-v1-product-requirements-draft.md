@@ -2,7 +2,7 @@
 
 > **状态：草稿。** 本文只记录当前已经形成的产品方向，不是最终架构规范。
 >
-> `23-a2a-first-real-demo-plan.md` 仍是当前 Demo 的主计划。本文不会自动扩大 Phase 3～Phase 5 的实现和验收边界。
+> `23-a2a-first-real-demo-plan.md` 是已经完成的真实 Demo 基线，不再作为当前开发顺序；当前实施以 `26-huanlink-v1-development-plan.md` 定义的文档优先级和最新模块 `Dxx` 计划为准。
 
 ## 1. 产品定位
 
@@ -14,7 +14,7 @@ v1.0 先形成可用的本地单用户产品能力，不提前建设完整权限
 
 - 第一条真实 Channel 使用 QQ，并对接 LLBot/NapCat 共用的 OneBot 11 兼容接口。
 - 先适配 WebSocket；HTTP 作为后续 Transport，不改变上层消息语义。
-- 第一版只响应明确 `@HuanLink` 或明确命令。
+- 白名单群消息由 Channel 转发到对应 session；Channel 不根据 Agent 是否回复来丢弃消息。`@HuanLink` 或明确命令可作为触发事实交给 Agent，最终是否回复由 Agent 决定。
 - 后台任务受理和终态结果都必须回到原会话。
 - 任务完成时读取最新会话上下文，再触发一次新的 MainAgent turn。
 

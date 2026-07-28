@@ -1,6 +1,6 @@
 # HuanLink v1.0 Channel Contract v1 模块卡片
 
-> **状态：设计边界已确认，并已进入 D11 分批实施。** 本文冻结模块职责和验收边界，不授权提交或推送。
+> **状态：历史模块卡片。** 本文保留 Channel 模块最初的职责分析；与 `D11-channel-contract-v1-implementation-plan.md` 冲突的内容以 D11 最新确认方案为准。原 `AttachmentStore`、`attachmentRef/localCache` 和“出站仅远程链接”方案已被 D11 B04 取代。
 
 ## 1. 目标
 
@@ -16,6 +16,8 @@
 - `ForwardWebSocketOneBot11Channel` 同时承担连接、协议解析、动作关联和 Channel 映射，后续扩展运输方式或消息能力时容易继续膨胀。
 
 ## 3. 职责边界
+
+> **局部失效：** 下表的 `AttachmentStore` 职责不再采用。当前 Channel/Adapter 不下载、缓存、持久化或维护入站附件资源。
 
 | 层 | 拥有的职责 | 明确不拥有 |
 |---|---|---|
@@ -42,6 +44,8 @@ HuanLink session 按规范会话键隔离：群聊使用群 ID，同一群内所
 
 ### 4.2 入站消息
 
+> **本节附件结构已失效：** 当前入站合同使用 Adapter 生成的 `content + contentFormat` 平台格式字符串；OneBot 使用 CQ 字符串，Core 不再定义入站 `attachmentRef`。
+
 统一入站消息至少包含：
 
 - `messageId`、规范会话路由、发送者平台身份、`receivedAt`；
@@ -63,6 +67,8 @@ HuanLink session 按规范会话键隔离：群聊使用群 ID，同一群内所
 `AttachmentStore` 是唯一拥有附件缓存文件读写的模块；Channel Contract 和 Server 不隐式下载或解析内容。远程链接的可访问性、有效期和权限由来源负责。v1 不做代理、转码或自动上传。
 
 ### 4.3 出站命令与回执
+
+> **局部失效：** 本节的“附件只允许 `remoteUrl`、本机附件返回 `not_supported`”已经失效。当前出站合同允许 HTTP(S) 附件链接和 HuanLink/Adapter 所在机器可读取的绝对路径；回执和稳定错误语义仍保留。
 
 统一出站命令至少包含目标路由、有序 `parts` 和可选 `replyToMessageId`。发送成功返回 `DeliveryReceipt`，至少记录 `channelId` 和平台消息 ID。
 
@@ -98,6 +104,8 @@ Adapter 负责底层心跳、断线重连和协议响应关联；Server 负责�
 
 ## 5. OneBot 11 原生支持
 
+> **局部失效：** 本节涉及 `AttachmentStore` 导入、`localCache` 和“出站只支持远程链接”的内容已被 D11 B04 取代；OneBot 的具体消息映射以 D11 B05 为准。
+
 OneBot 11 是内置 Adapter，无需动态安装插件。内部职责按以下方向分离：
 
 ```text
@@ -125,6 +133,8 @@ OneBot11ChannelAdapter
 
 ## 7. 验收条件
 
+> **局部失效：** 与 `AttachmentStore`、`attachmentRef/localCache` 和出站仅远程链接有关的验收项不再执行；当前验收条件见 D11 B04/B05。
+
 - 两个相同平台、相同本地 `conversationId` 的不同 `channelId` 不会共享会话或回错实例。
 - Fake Adapter 可仅依赖 Core Channel Contract 完成入站和出站测试，不引用 OneBot 类型。
 - OneBot 原始事件、消息段和 API 类型只存在于 OneBot integration 内。
@@ -137,6 +147,8 @@ OneBot11ChannelAdapter
 - 自动化测试、运行接入和真实 smoke 的状态分别报告，互不替代。
 
 ## 8. 实施前决策门
+
+> **局部失效：** 本节记录的是实施前历史决策；其中附件缓存和出站附件限制已经被后续确认方案取代。
 
 已确认：
 

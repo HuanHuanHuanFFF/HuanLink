@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `test-driven-development` for every behavior change. Execute only one `M1-Bxx` batch at a time, verify it, and update this document before moving to a batch whose decision gate is still open.
 >
-> **当前状态：** M1 已获准开始。本文件是 M1 的设计台账、问题清单和渐进实施计划；它不会授权 M2～M5，也不会授权 merge 到 `main`。
+> **状态：历史 M1 计划，已不再作为当前开发门禁。** 本文保留已完成批次和当时决策的追溯信息；未实施的 M1-B03～M1-B08 不构成后续实施授权。当前工作以 `26-huanlink-v1-development-plan.md` 定义的文档优先级和最新经确认的模块 `Dxx` 实施计划为准。
 
 **Goal:** 在保留真实 QQ → MainAgent → A2A → Codex → Artifact → 原会话回流闭环的前提下，把固定 Demo 转换为可配置、可诊断的本地单用户运行基线。
 
@@ -18,10 +18,10 @@
 
 - `AGENTS.md`：仓库结构、配置所有权、测试与 Git 规则。
 - `docs/dev/24-huanlink-v1-product-requirements-draft.md`：v1.0 产品语义和暂缓项。
-- `docs/dev/26-huanlink-v1-development-plan.md`：阶段级主计划；M1 是唯一允许进入的里程碑。
+- `docs/dev/26-huanlink-v1-development-plan.md`：当前文档优先级、全局边界和推进方式。
 - `docs/dev/23-a2a-first-real-demo-plan.md`：真实闭环基线，不继续追加 Demo Phase。
 
-推进规则：
+以下推进规则是当时的 M1 历史门禁，不再决定当前批次顺序：
 
 1. 所有工作只在 `dev/v1.0` 进行。
 2. 每次只执行一个 `M1-Bxx` 小批次；先写失败测试，再做最小实现。
@@ -138,6 +138,8 @@ M1 的唯一正式配置树如下。`.huanlink/config/config.json` 是代码中�
 该文件属于 Server。`apiKeyEnv` 只保存环境变量名；解析结果可以包含实际 key，但错误和日志不得输出该值。
 
 ### 4.2 Channel 配置
+
+> **本节示例已失效：** `groupId` 和 `commandPrefix` 是原 M1 单群最小配置，不代表当前 Channel 入站策略。后续群白名单/黑名单和转发策略以当前 Channel 模块实施计划为准。
 
 ```json
 {

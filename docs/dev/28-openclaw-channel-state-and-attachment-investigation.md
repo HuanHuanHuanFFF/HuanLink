@@ -6,6 +6,8 @@
 >
 > 范围：只读源码调查。本文不构成实现计划，也不证明 HuanLink 的未接入能力。
 > 证据标记：`[S]` 源码事实；`[D]` 文档/计划声明；`[I]` 基于证据的建议；`[T]` 本次未执行测试，不把测试文件当作运行证明。
+>
+> **后续决策说明：** 本文关于 HuanLink 保留 `publicUrl | channelResource`、`openAttachment` 和资源句柄的建议后来未被采用。当前入站附件边界以 D11 B04 的平台格式字符串原样转发方案为准；OpenClaw 源码调查事实仍作为研究资料保留。
 
 ## 1. 核心结论
 
@@ -157,6 +159,8 @@ Slack、飞书是否在每一种附件分支中都严格于 allowlist/mention ga
 出站附件与入站附件并非同一套统一抽象：Core 提供 capability/action/reply pipeline，具体上传、链接发送、平台媒体格式仍由 Adapter 决定。[S] `references/openclaw/src/channels/plugins/types.core.ts:725-769`
 
 ## 7. 对 HuanLink 当前疑问的建议
+
+> **本节包含已失效建议：** `publicUrl | channelResource`、`resourceId -> openAttachment` 及相关持久化讨论不是当前 HuanLink 实施方案，不得覆盖 D11 B04。
 
 | 问题 | 建议 | 证据与边界 |
 |---|---|---|
