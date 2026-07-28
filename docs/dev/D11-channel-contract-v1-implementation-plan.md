@@ -10,10 +10,10 @@
 
 - Core 不依赖 OneBot 类型或平台名；
 - OneBot 11 是内置的一等 Adapter，使用正向 WebSocket 双向收发；
-- OneBot 11 Adapter 原生覆盖主要标准消息能力，包括群聊、私聊、提及、引用、HTTP(S) 媒体和撤回；
+- OneBot 11 Adapter 原生覆盖主要标准消息能力，包括群聊、私聊、提及、引用、HTTP(S)/本机媒体和撤回；
 - 群聊按群 ID 共享 session，私聊按私聊会话 ID 隔离；
 - 入站由 Adapter 生成平台格式字符串和 `contentFormat`，OneBot 统一使用原始 CQ 字符串；
-- 出站使用有序 `text | mention | attachmentLink` Parts，附件只接受 HTTP(S) 链接；
+- 出站使用有序 `text | mention | attachmentLink | attachmentLocalPath` Parts，附件支持 HTTP(S) 链接和本机绝对路径；
 - Channel 和 Adapter 不下载、缓存、持久化或维护入站附件资源，完整入站内容交给 session；
 - Server 按稳定 `channelId` 注册、路由和回复 Channel；
 - 正式源码、导出、测试和日志命名不再包含 `phase4` / `Phase4`。
@@ -45,7 +45,7 @@
 - OneBot 反向 WebSocket 或 HTTP Transport；
 - OneBot 11 标准没有定义的编辑、消息 reaction、typing 和原生流式更新；若具体实现提供扩展，必须检测后单独声明，不能默认开启；
 - OneBot 隐藏 API、原始 Action 任意透传，以及由 Channel 自动注入 Cookies、CSRF、账号级凭证、远程重启或清理缓存；用户明确授权后由外层权限守卫放行的本机 Agent 操作不属于 Channel 职责；
-- 入站附件下载、附件访问代理、持久化缓存、转码、自动上传或长期归档；
+- 入站附件下载、附件访问代理、持久化缓存、转码或长期归档；
 - 多租户权限平台、跨平台身份合并和远程公网鉴权；
 - Telegram 等其他平台 Adapter 和工业化扩展。
 
@@ -55,7 +55,7 @@
 |---|---|---|
 | 通用入站消息 | 群聊、私聊、发送者、引用关系、原始平台内容字符串、内容格式和触发元数据 | Channel 只转发到 session，不决定是否调用 Agent 或回复 |
 | OneBot 入站内容 | CQ 字符串原样保留；消息段数组由 Codec 编码为 CQ 字符串 | 不下载、缓存或维护附件；资源级 `key` 可随用户消息进入 session |
-| 通用出站消息 | 有序 `text | mention | attachmentLink` Parts、引用回复、主动撤回 | `attachmentLink` 只接受 HTTP(S) URL；不主动上传本地文件 |
+| 通用出站消息 | 有序 `text | mention | attachmentLink | attachmentLocalPath` Parts、引用回复、主动撤回 | 链接只接受 HTTP(S)；本机附件只接受 HuanLink/Adapter 所在机器可读的绝对路径 |
 | OneBot 专属操作 | 消息/合并转发查询、登录和运行状态、好友/群/成员查询、禁言、踢人、群名片、群名称、管理员、好友和加群请求、好友赞 | 使用具名、类型化 `OneBot11Operations`，通过受控 Tool 向 Agent 暴露 |
 | 实现扩展能力 | 编辑、reaction、typing、流式更新等 | 不属于 OneBot 11 基线；只有运行实现明确支持时才能声明 |
 | 敏感维护能力 | Cookies、CSRF、账号级凭证、重启、清缓存、隐藏 API | 不由 Channel 注入消息或提供任意 Action 透传；外层明确授权流程另行负责 |
@@ -182,6 +182,7 @@ apps/server/src/
 - OneBot 11/NapCat 的消息上报支持 CQ 字符串和消息段数组。CQ 字符串更短，适合当前只接受字符串的 MainAgent/AgentRuntime，也能保留 URL、资源级 `key` 和平台扩展字段。
 - 因此不实施此前讨论的 `publicUrl | channelResource`、`resourceId` 注册表或 `openAttachment`；该方案作为已评估但未采用的设计，不进入代码。
 - 入站和出站有意采用不对称合同：入站保留 Adapter 生成的平台字符串，出站继续使用少量平台无关 Parts。
+- v1 默认 HuanLink Server、Channel Adapter 和 OneBot 实现运行在同一台机器并共享可见的本地文件路径；容器部署必须显式挂载目录，否则使用 HTTP(S) 链接。
 
 ### 修改
 
@@ -194,7 +195,9 @@ apps/server/src/
 - 将出站 Parts 收敛为：
   - `text`：普通文本；
   - `mention`：平台内目标 ID；
-  - `attachmentLink`：`image | audio | video | file` 类别和 HTTP(S) URL，可携带少量名称/MIME 元数据。
+  - `attachmentLink`：`image | audio | video | file` 类别和 HTTP(S) URL，可携带少量名称/MIME 元数据；
+  - `attachmentLocalPath`：相同附件类别和 HuanLink/Adapter 所在机器可读取的绝对路径，可携带少量名称/MIME 元数据。
+- Core 只校验本机附件路径是非空绝对路径，不读取、复制或持久化文件；文件存在性、平台上传和不支持错误由具体 Adapter 在发送时处理。
 - 引用回复继续使用发送命令上的 `replyToMessageId`，撤回继续使用独立 `retract` 命令；edit、reaction、typing 和 streaming 不作为消息 Part。
 - Adapter 可以解析入站内容以生成 sender、trigger 和引用等元数据，但不得修改交给 session 的规范内容；OneBot 原消息中的 @Bot、命令前缀和附件 CQ 段全部保留。
 - `channelId`、conversation kind/ID、threadId 和 `contentFormat` 作为固定 session 元数据保存，不在每轮 Agent 文本中重复消耗上下文；每条消息保留 sender `id`、`username`、可选 `displayName` 和完整内容。
@@ -212,8 +215,8 @@ apps/server/src/
 - 发送者 `id`、`username`、`displayName` 和原始内容进入 session 消息；固定 route 和格式信息只保存一次，不在每轮 Agent 输入中重复。
 - OneBot CQ 中的 @、命令、URL、资源级 `key` 和未知 CQ 段不因 trigger 解析而丢失或改写。
 - 8192 字节以内的内容原样转发；超过上限的内容只产生带 `contentOmitted.reason = "too_large"` 和原始字节数的 session 占位记录，不产生 Channel 出站消息。
-- 出站 `text | mention | attachmentLink` 顺序得到保留；`attachmentLink` 拒绝非 HTTP(S) URL、本地路径、Base64 和原始字节。
-- 测试和普通运行日志不出现完整 CQ 内容、附件 URL、资源级 `key`、本地路径或账号级凭证。
+- 出站 `text | mention | attachmentLink | attachmentLocalPath` 顺序得到保留；链接拒绝非 HTTP(S) URL，路径拒绝相对路径、文件 URI 和 Base64，合同不携带原始字节。
+- 普通运行日志不出现完整 CQ 内容、附件 URL、资源级 `key`、本地路径或账号级凭证。
 - Core、Adapter 和 Server 不出现附件缓存、资源注册表、`resourceId` 解析或 `openAttachment`。
 
 ### 停点
@@ -230,7 +233,7 @@ apps/server/src/
 - Adapter 可以解析 CQ 字符串或消息段数组以识别 @Bot、命令和引用，但不得用清理后的 trigger 文本替换原始 `content`。
 - 图片、语音、视频、文件和商城表情等入站字段留在 CQ 字符串中；URL、`emoji_id`、`emoji_package_id` 和资源级 `key` 不拆成 HuanLink 附件对象。
 - 规范化后的 CQ 内容超过 8 KiB 时生成 `too_large` session 占位消息；Adapter 不下载、不缓存、不持久化，也不主动回复原 Channel。
-- 出站将 `text`、`mention`、`attachmentLink` 和引用回复编码为 OneBot 消息段；图片/语音/视频可使用对应 HTTP(S) 链接段，普通文件只发送 HTTP(S) 文本链接，不隐式上传本地文件。
+- 出站将 `text`、`mention`、`attachmentLink`、`attachmentLocalPath` 和引用回复映射为 OneBot 消息或 Action；图片/语音/视频使用对应 URL 或本机绝对路径消息段，普通本机文件在当前 OneBot 实现明确支持时调用 `upload_group_file` / `upload_private_file`，否则返回 `not_supported`。
 - 使用 OneBot `delete_msg` 实现主动撤回，并把群聊与私聊撤回通知映射为统一事件。
 - 发送成功从 OneBot 响应中的 `message_id` 生成 `DeliveryReceipt`；Transport 的 Action 响应不能继续丢弃 `data`。
 - 将远端失败映射为稳定 Channel 错误；不支持的能力返回 `not_supported`。
@@ -245,7 +248,7 @@ apps/server/src/
 - 8 KiB 以内内容进入 session；超限内容进入同一 session 的占位记录，不调用 OneBot 出站接口。
 - 入站映射过程不产生附件副本、资源注册表或持久状态。
 - 主动发送与回复发送都通过同一个 `send(command)` 完成。
-- 出站 `text | mention | attachmentLink` 顺序正确；本地路径、Base64 和非 HTTP(S) 附件链接返回 `not_supported` 或合同校验错误。
+- 出站 `text | mention | attachmentLink | attachmentLocalPath` 顺序正确；HTTP(S) 链接和本机绝对路径按类型映射，相对路径、Base64、原始字节和非 HTTP(S) 附件链接返回合同校验错误。
 - 成功发送返回 `messageId`；随后可通过统一撤回命令调用 `delete_msg`。
 - 群聊和私聊撤回通知包含原消息 ID 和发生路由。
 - 日志只出现脱敏文本预览和消息元数据，不出现完整 CQ、资源级 `key` 或账号级凭证。
@@ -353,6 +356,7 @@ apps/server/src/
 - QQ 群明确命令或 @ -> MainAgent -> A2A -> Codex -> 原群回复；
 - 允许群的普通消息、@Bot 消息和命令消息都进入同一个群 session，Channel 不根据 trigger 丢弃消息；
 - HuanLink 主动向已允许群发送文本；
+- HuanLink 从本机绝对路径向允许会话发送一个媒体或文件附件；
 - 私聊收发、引用回复和发送后撤回；
 - OneBot CQ 字符串和消息段数组都形成规范 CQ 入站内容；至少一条带 URL、资源级 `key` 或扩展字段的附件消息完整进入 session，过程中不下载或缓存附件；
 - 超过 8 KiB 的内容只形成 session 占位记录，Channel 不主动向原会话发送提示；
