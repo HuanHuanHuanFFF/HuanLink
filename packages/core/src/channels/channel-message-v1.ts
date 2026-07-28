@@ -95,6 +95,7 @@ export type InboundChannelMessageV1 = {
   readonly messageId: string;
   readonly route: ChannelConversationRouteV1;
   readonly sender: ChannelSenderIdentityV1;
+  /** Adapter 规范化后的 UTC ISO-8601 时间，例如 `2026-07-22T00:00:00.000Z`。 */
   readonly receivedAt: string;
   readonly content: string;
   readonly contentFormat: string;

@@ -1,7 +1,11 @@
 import { Buffer } from "node:buffer";
 import { posix, win32 } from "node:path";
 
-import type { RetractChannelMessageCommandV1 } from "./channel-adapter-v1.js";
+import type {
+  RetractChannelMessageCommandV1,
+  SendChannelMessageCommandV1
+} from "./channel-adapter-v1.js";
+import type { ChannelConversationRouteV1 } from "./channel-instance-v1.js";
 import {
   CHANNEL_INBOUND_CONTENT_MAX_BYTES_V1,
   CHANNEL_INBOUND_CONTENT_TOO_LARGE_PLACEHOLDER_V1,
@@ -10,6 +14,37 @@ import {
   type ChannelOutboundMessagePartV1,
   type InboundChannelMessageV1
 } from "./channel-message-v1.js";
+
+/** 在生成 session key 或调用 Adapter 前校验规范会话路由。 */
+export function assertValidChannelConversationRoute(
+  value: unknown
+): asserts value is ChannelConversationRouteV1 {
+  if (typeof value !== "object" || value === null) {
+    throw new Error("Channel route must be an object");
+  }
+
+  const route = value as Record<string, unknown>;
+  assertOnlyKeys(
+    route,
+    ["channelId", "conversationKind", "conversationId", "threadId"],
+    "Channel route"
+  );
+  requireNonEmptyString(route.channelId, "Channel route channelId");
+  if (
+    route.conversationKind !== "direct" &&
+    route.conversationKind !== "group" &&
+    route.conversationKind !== "channel"
+  ) {
+    throw new Error(
+      "Channel route conversationKind must be direct, group, or channel"
+    );
+  }
+  requireNonEmptyString(
+    route.conversationId,
+    "Channel route conversationId"
+  );
+  validateOptionalString(route.threadId, "Channel route threadId");
+}
 
 /** 在调用平台前拒绝缺失或非法的撤回消息 ID。 */
 export function assertValidRetractChannelMessageCommand(
@@ -20,9 +55,39 @@ export function assertValidRetractChannelMessageCommand(
   }
 
   const rawCommand = command as unknown as Record<string, unknown>;
+  assertOnlyKeys(
+    rawCommand,
+    ["route", "messageId"],
+    "Channel retract command"
+  );
+  assertValidChannelConversationRoute(rawCommand.route);
   requireNonEmptyString(
-    rawCommand.messageId as string,
+    rawCommand.messageId,
     "Channel retract messageId"
+  );
+}
+
+/** 在调用 Adapter 前校验发送命令、目标路由和消息内容。 */
+export function assertValidSendChannelMessageCommand(
+  command: SendChannelMessageCommandV1
+): void {
+  if (typeof command !== "object" || command === null) {
+    throw new Error("Channel send command must be an object");
+  }
+
+  const rawCommand = command as unknown as Record<string, unknown>;
+  assertOnlyKeys(
+    rawCommand,
+    ["route", "parts", "replyToMessageId"],
+    "Channel send command"
+  );
+  assertValidChannelConversationRoute(rawCommand.route);
+  assertValidOutboundChannelMessageParts(
+    rawCommand.parts as readonly ChannelOutboundMessagePartV1[]
+  );
+  validateOptionalString(
+    rawCommand.replyToMessageId,
+    "Channel send replyToMessageId"
   );
 }
 
@@ -36,7 +101,8 @@ export function assertValidInboundChannelMessage(
 
   const rawMessage = message as unknown as Record<string, unknown>;
   requireNonEmptyString(rawMessage.messageId, "Inbound Channel messageId");
-  requireNonEmptyString(rawMessage.receivedAt, "Inbound Channel receivedAt");
+  assertValidChannelConversationRoute(rawMessage.route);
+  requireUtcIsoTimestamp(rawMessage.receivedAt, "Inbound Channel receivedAt");
   requireNonEmptyString(
     rawMessage.contentFormat,
     "Inbound Channel contentFormat"
@@ -251,6 +317,36 @@ function assertOnlyKeys(
 function validateOptionalString(value: unknown, label: string): void {
   if (value !== undefined) {
     requireNonEmptyString(value, label);
+  }
+}
+
+function requireUtcIsoTimestamp(
+  value: unknown,
+  label: string
+): asserts value is string {
+  if (typeof value !== "string") {
+    throw new Error(`${label} must be a UTC ISO-8601 timestamp`);
+  }
+
+  const match =
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,3})?Z$/.exec(
+      value
+    );
+  if (match === null) {
+    throw new Error(`${label} must be a UTC ISO-8601 timestamp`);
+  }
+
+  const timestamp = new Date(value);
+  if (
+    Number.isNaN(timestamp.getTime()) ||
+    timestamp.getUTCFullYear() !== Number(match[1]) ||
+    timestamp.getUTCMonth() + 1 !== Number(match[2]) ||
+    timestamp.getUTCDate() !== Number(match[3]) ||
+    timestamp.getUTCHours() !== Number(match[4]) ||
+    timestamp.getUTCMinutes() !== Number(match[5]) ||
+    timestamp.getUTCSeconds() !== Number(match[6])
+  ) {
+    throw new Error(`${label} must be a UTC ISO-8601 timestamp`);
   }
 }
 

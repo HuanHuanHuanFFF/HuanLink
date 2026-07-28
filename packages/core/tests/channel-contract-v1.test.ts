@@ -4,9 +4,11 @@ import {
   CHANNEL_INBOUND_CONTENT_MAX_BYTES_V1,
   CHANNEL_INBOUND_CONTENT_TOO_LARGE_PLACEHOLDER_V1,
   ChannelOperationError,
+  assertValidChannelConversationRoute,
   assertValidInboundChannelMessage,
   assertValidOutboundChannelMessageParts,
   assertValidRetractChannelMessageCommand,
+  assertValidSendChannelMessageCommand,
   channelSessionIdFor,
   type ChannelAdapterV1,
   type ChannelCapabilitiesV1,
@@ -154,6 +156,88 @@ describe("Channel Contract v1", () => {
         route: route(),
         messageId: "platform:message/42"
       })
+    ).not.toThrow();
+  });
+
+  test.each([
+    {
+      name: "non-object",
+      value: undefined,
+      error: /route must be an object/
+    },
+    {
+      name: "blank channelId",
+      value: route({ channelId: " " }),
+      error: /channelId must be a non-empty string/
+    },
+    {
+      name: "unsupported conversationKind",
+      value: route({ conversationKind: "room" as never }),
+      error: /conversationKind must be direct, group, or channel/
+    },
+    {
+      name: "blank conversationId",
+      value: route({ conversationId: "" }),
+      error: /conversationId must be a non-empty string/
+    },
+    {
+      name: "non-string threadId",
+      value: route({ threadId: 123 as never }),
+      error: /threadId must be a non-empty string/
+    },
+    {
+      name: "unsupported field",
+      value: { ...route(), senderId: "30000" },
+      error: /contains unsupported field senderId/
+    }
+  ])("rejects a Channel route with $name", ({ value, error }) => {
+    expect(() => assertValidChannelConversationRoute(value)).toThrow(error);
+  });
+
+  test.each([
+    {
+      boundary: "inbound",
+      validate: (invalidRoute: ChannelConversationRouteV1) =>
+        assertValidInboundChannelMessage(inbound({ route: invalidRoute }))
+    },
+    {
+      boundary: "send",
+      validate: (invalidRoute: ChannelConversationRouteV1) =>
+        assertValidSendChannelMessageCommand({
+          route: invalidRoute,
+          parts: [{ type: "text", text: "hello" }]
+        })
+    },
+    {
+      boundary: "retract",
+      validate: (invalidRoute: ChannelConversationRouteV1) =>
+        assertValidRetractChannelMessageCommand({
+          route: invalidRoute,
+          messageId: "message-1"
+        })
+    }
+  ])("rejects an invalid route at the $boundary boundary", ({ validate }) => {
+    expect(() => validate(route({ conversationId: " " }))).toThrow(
+      /conversationId must be a non-empty string/
+    );
+  });
+
+  test.each([
+    "not-a-time",
+    "2026-07-22",
+    "2026-02-30T00:00:00.000Z"
+  ])("rejects an invalid inbound receivedAt %s", (receivedAt) => {
+    expect(() =>
+      assertValidInboundChannelMessage(inbound({ receivedAt }))
+    ).toThrow(/receivedAt must be a UTC ISO-8601 timestamp/);
+  });
+
+  test.each([
+    "2026-07-22T00:00:00Z",
+    "2026-07-22T00:00:00.123Z"
+  ])("accepts a valid UTC ISO-8601 receivedAt %s", (receivedAt) => {
+    expect(() =>
+      assertValidInboundChannelMessage(inbound({ receivedAt }))
     ).not.toThrow();
   });
 
