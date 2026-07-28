@@ -1,6 +1,6 @@
 import type { ChannelConversationRouteV1 } from "./channel-instance-v1.js";
 
-/** 附件内容的公共类别；具体来源由远程链接或受管缓存引用表达。 */
+/** 附件内容的公共类别。 */
 export type ChannelAttachmentKindV1 = "image" | "audio" | "video" | "file";
 
 /**
@@ -19,74 +19,86 @@ export type ChannelSenderIdentityV1 = {
   readonly displayName?: string;
 };
 
-/** 保留原始顺序的文本内容。 */
-export type ChannelTextPartV1 = {
+/** Server 主动发给 Channel 的文本内容。 */
+export type ChannelOutboundTextPartV1 = {
   readonly type: "text";
   readonly text: string;
 };
 
-/** 对平台内用户或 Bot 的提及。 */
-export type ChannelMentionPartV1 = {
+/** Server 主动发给 Channel 的平台用户或 Bot 提及。 */
+export type ChannelOutboundMentionPartV1 = {
   readonly type: "mention";
   readonly targetId: string;
   readonly displayName?: string;
 };
 
-/** 可由本机或远程 Agent 自行获取的 HTTP(S) 附件。 */
-export type ChannelRemoteUrlAttachmentSourceV1 = {
-  readonly type: "remoteUrl";
-  readonly url: string;
-};
-
 /**
- * HuanLink AttachmentStore 已接管的本地附件。
+ * Server 主动发给 Channel 的 HTTP(S) 附件链接。
  *
- * `attachmentId` 是 Store 签发的不透明稳定 ID，不是文件名或路径。Core
- * 合同不会暴露缓存目录；需要读取内容的本机组件必须通过受控 resolver 解析。
+ * `attachmentLink` 不接受本地路径、Base64 或原始字节，也不要求
+ * Adapter 下载附件。
  */
-export type ChannelLocalCacheAttachmentSourceV1 = {
-  readonly type: "localCache";
-  readonly attachmentId: string;
-};
-
-export type ChannelAttachmentSourceV1 =
-  | ChannelRemoteUrlAttachmentSourceV1
-  | ChannelLocalCacheAttachmentSourceV1;
-
-/**
- * 附件引用。Adapter 可以接收平台提供的本地路径，但必须先把文件导入
- * AttachmentStore，再以 HuanLink 受管缓存 ID 进入本合同；合同本身不携带
- * 原始本地路径。远程附件使用 HTTP(S) 链接，`file://`、Base64 和原始字节
- * 也不能作为跨平台消息字段。
- */
-export type ChannelAttachmentRefPartV1 = {
-  readonly type: "attachmentRef";
+export type ChannelOutboundAttachmentLinkPartV1 = {
+  readonly type: "attachmentLink";
   readonly kind: ChannelAttachmentKindV1;
-  readonly source: ChannelAttachmentSourceV1;
+  readonly url: string;
   readonly name?: string;
   readonly mimeType?: string;
-  readonly sizeBytes?: number;
 };
 
-/** 消息由这些 Part 按数组顺序组成，不提供平台原始消息段逃生口。 */
-export type ChannelMessagePartV1 =
-  | ChannelTextPartV1
-  | ChannelMentionPartV1
-  | ChannelAttachmentRefPartV1;
+/**
+ * Server 主动发给 Channel 的本机附件。
+ *
+ * `path` 是 HuanLink/Adapter 所在机器可读取的绝对路径。合同不读取或复制
+ * 文件；Adapter 在实际发送时负责检查文件并映射为平台上传操作。
+ */
+export type ChannelOutboundAttachmentLocalPathPartV1 = {
+  readonly type: "attachmentLocalPath";
+  readonly kind: ChannelAttachmentKindV1;
+  readonly path: string;
+  readonly name?: string;
+  readonly mimeType?: string;
+};
+
+/** 出站消息由这些 Part 按数组顺序组成。 */
+export type ChannelOutboundMessagePartV1 =
+  | ChannelOutboundTextPartV1
+  | ChannelOutboundMentionPartV1
+  | ChannelOutboundAttachmentLinkPartV1
+  | ChannelOutboundAttachmentLocalPathPartV1;
 
 /** Adapter 已规范化的触发事实，而不是权限或授权。 */
 export type ChannelTriggerV1 = {
   readonly kind: "mention" | "command";
-  readonly text: string;
 };
 
-/** Adapter 交给 Server 的平台无关入站消息。 */
+/** 入站内容完整保留时允许的 UTF-8 字节数。 */
+export const CHANNEL_INBOUND_CONTENT_MAX_BYTES_V1 = 8 * 1024;
+
+/** 入站内容超限时转发到 session 的固定占位文本。 */
+export const CHANNEL_INBOUND_CONTENT_TOO_LARGE_PLACEHOLDER_V1 =
+  "[HuanLink: inbound content omitted because it exceeds 8192 bytes]";
+
+/** 原始入站内容因超过合同上限而未进入 session。 */
+export type ChannelContentOmittedV1 = {
+  readonly reason: "too_large";
+  readonly originalSizeBytes: number;
+};
+
+/**
+ * Adapter 交给 Server 的入站消息。
+ *
+ * `content` 是 Adapter 生成的平台格式字符串，Core 不解析或清理其内容。
+ * OneBot Adapter 使用 `onebot11.cq` 并保留完整 CQ 字符串。
+ */
 export type InboundChannelMessageV1 = {
   readonly messageId: string;
   readonly route: ChannelConversationRouteV1;
   readonly sender: ChannelSenderIdentityV1;
   readonly receivedAt: string;
-  readonly parts: readonly ChannelMessagePartV1[];
+  readonly content: string;
+  readonly contentFormat: string;
+  readonly contentOmitted?: ChannelContentOmittedV1;
   readonly replyToMessageId?: string;
   readonly trigger?: ChannelTriggerV1;
 };

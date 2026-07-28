@@ -1,8 +1,11 @@
 import { describe, expect, test, vi } from "vitest";
 
 import {
+  CHANNEL_INBOUND_CONTENT_MAX_BYTES_V1,
+  CHANNEL_INBOUND_CONTENT_TOO_LARGE_PLACEHOLDER_V1,
   ChannelOperationError,
-  assertValidChannelMessageParts,
+  assertValidInboundChannelMessage,
+  assertValidOutboundChannelMessageParts,
   assertValidRetractChannelMessageCommand,
   channelSessionIdFor,
   type ChannelAdapterV1,
@@ -18,8 +21,13 @@ import {
 const capabilities: ChannelCapabilitiesV1 = {
   conversationKinds: ["direct", "group"],
   threads: false,
-  inboundPartTypes: ["text", "mention", "attachmentRef"],
-  outboundPartTypes: ["text", "mention", "attachmentRef"],
+  inboundContentFormats: ["onebot11.cq"],
+  outboundPartTypes: [
+    "text",
+    "mention",
+    "attachmentLink",
+    "attachmentLocalPath"
+  ],
   reply: true,
   edit: false,
   retract: true,
@@ -58,13 +66,14 @@ function inbound(
       displayName: "Alice"
     },
     receivedAt: "2026-07-22T00:00:00.000Z",
-    parts: [{ type: "text", text: "hello" }],
+    content: "hello",
+    contentFormat: "onebot11.cq",
     ...overrides
   };
 }
 
 describe("Channel Contract v1", () => {
-  test("sends a message and retracts it through a platform-independent fake adapter", async () => {
+  test("receives group and direct messages, then sends and retracts through a fake adapter", async () => {
     let listener: ChannelMessageListenerV1 | undefined;
     const receive = vi.fn();
     const stopListening = vi.fn();
@@ -73,12 +82,9 @@ describe("Channel Contract v1", () => {
       parts: [
         { type: "text", text: "result: " },
         {
-          type: "attachmentRef",
+          type: "attachmentLink",
           kind: "file",
-          source: {
-            type: "remoteUrl",
-            url: "https://example.com/result.txt"
-          },
+          url: "https://example.com/result.txt",
           name: "result.txt"
         }
       ]
@@ -100,8 +106,16 @@ describe("Channel Contract v1", () => {
 
     const unsubscribe = adapter.onMessage(receive);
     await adapter.start();
-    const incoming = inbound();
-    listener?.(incoming);
+    const incomingGroup = inbound();
+    const incomingDirect = inbound({
+      messageId: "message-2",
+      route: route({
+        conversationKind: "direct",
+        conversationId: "30000"
+      })
+    });
+    listener?.(incomingGroup);
+    listener?.(incomingDirect);
     const receipt = await adapter.send(sendCommand);
     const retractCommand: RetractChannelMessageCommandV1 = {
       route: sendCommand.route,
@@ -117,7 +131,8 @@ describe("Channel Contract v1", () => {
 
     expect(adapter.send).toHaveBeenCalledWith(sendCommand);
     expect(adapter.retract).toHaveBeenCalledWith(retractCommand);
-    expect(receive).toHaveBeenCalledWith(incoming);
+    expect(receive).toHaveBeenNthCalledWith(1, incomingGroup);
+    expect(receive).toHaveBeenNthCalledWith(2, incomingDirect);
     expect(stopListening).toHaveBeenCalledTimes(1);
   });
 
@@ -233,45 +248,145 @@ describe("Channel Contract v1", () => {
     });
   });
 
-  test("accepts ordered text, mention, and remote attachment reference parts", () => {
+  test("keeps complete inbound content and its platform format", () => {
+    const content =
+      "[CQ:at,qq=10000] /huanlink inspect [CQ:image,url=https://invalid.example/image.png,key=fixture-key][CQ:future,opaque=value]";
+    const message = inbound({
+      content
+    });
+
+    expect(() => assertValidInboundChannelMessage(message)).not.toThrow();
+    expect(message.content).toBe(content);
+    expect(message.contentFormat).toBe("onebot11.cq");
+  });
+
+  test("accepts whitespace-only inbound content without changing it", () => {
+    const content = " ";
+    const message = inbound({ content });
+
+    expect(() => assertValidInboundChannelMessage(message)).not.toThrow();
+    expect(message.content).toBe(content);
+  });
+
+  test("rejects an actually empty inbound content string", () => {
+    expect(() =>
+      assertValidInboundChannelMessage(inbound({ content: "" }))
+    ).toThrow(/content must be a non-empty string/);
+  });
+
+  test("accepts complete inbound content at the 8 KiB UTF-8 limit", () => {
+    const content = "a".repeat(CHANNEL_INBOUND_CONTENT_MAX_BYTES_V1);
+
+    expect(() =>
+      assertValidInboundChannelMessage(inbound({ content }))
+    ).not.toThrow();
+  });
+
+  test("rejects complete inbound content above the 8 KiB UTF-8 limit", () => {
+    const content = "a".repeat(CHANNEL_INBOUND_CONTENT_MAX_BYTES_V1 + 1);
+
+    expect(() =>
+      assertValidInboundChannelMessage(inbound({ content }))
+    ).toThrow(/must not exceed 8192 UTF-8 bytes/);
+  });
+
+  test("measures the inbound limit in UTF-8 bytes instead of characters", () => {
+    const content = "你".repeat(2731);
+
+    expect(content.length).toBeLessThan(
+      CHANNEL_INBOUND_CONTENT_MAX_BYTES_V1
+    );
+    expect(() =>
+      assertValidInboundChannelMessage(inbound({ content }))
+    ).toThrow(/must not exceed 8192 UTF-8 bytes/);
+  });
+
+  test("accepts a bounded placeholder when original inbound content is too large", () => {
+    const message = inbound({
+      content: CHANNEL_INBOUND_CONTENT_TOO_LARGE_PLACEHOLDER_V1,
+      contentOmitted: {
+        reason: "too_large",
+        originalSizeBytes: CHANNEL_INBOUND_CONTENT_MAX_BYTES_V1 + 1
+      }
+    });
+
+    expect(() => assertValidInboundChannelMessage(message)).not.toThrow();
+  });
+
+  test.each([
+    {
+      content: "partial original content",
+      contentOmitted: {
+        reason: "too_large",
+        originalSizeBytes: CHANNEL_INBOUND_CONTENT_MAX_BYTES_V1 + 1
+      }
+    },
+    {
+      content: CHANNEL_INBOUND_CONTENT_TOO_LARGE_PLACEHOLDER_V1,
+      contentOmitted: {
+        reason: "too_large",
+        originalSizeBytes: CHANNEL_INBOUND_CONTENT_MAX_BYTES_V1
+      }
+    }
+  ])("rejects an invalid too-large placeholder %#", (overrides) => {
+    expect(() =>
+      assertValidInboundChannelMessage(inbound(overrides as never))
+    ).toThrow(/omitted content/);
+  });
+
+  test("accepts ordered text, mention, and HTTP attachment link parts", () => {
     const parts = [
       { type: "text", text: "see " },
       { type: "mention", targetId: "30000", displayName: "Alice" },
       {
-        type: "attachmentRef",
+        type: "attachmentLink",
         kind: "image",
-        source: {
-          type: "remoteUrl",
-          url: "https://example.com/image.png"
-        },
+        url: "https://example.com/image.png",
         name: "image.png",
-        mimeType: "image/png",
-        sizeBytes: 128
+        mimeType: "image/png"
       }
     ] as const;
 
-    expect(() => assertValidChannelMessageParts(parts)).not.toThrow();
+    expect(() => assertValidOutboundChannelMessageParts(parts)).not.toThrow();
     expect(parts.map(({ type }) => type)).toEqual([
       "text",
       "mention",
-      "attachmentRef"
+      "attachmentLink"
     ]);
   });
 
-  test("accepts a HuanLink-managed local cache reference", () => {
+  test.each([
+    "D:\\workspace\\result.txt",
+    "/var/lib/huanlink/result.txt"
+  ])("accepts an absolute local attachment path %s", (path) => {
     expect(() =>
-      assertValidChannelMessageParts([
+      assertValidOutboundChannelMessageParts([
         {
-          type: "attachmentRef",
+          type: "attachmentLocalPath",
           kind: "file",
-          source: {
-            type: "localCache",
-            attachmentId: "attachment-01"
-          },
-          name: "result.txt"
+          path,
+          name: "result.txt",
+          mimeType: "text/plain"
         }
       ])
     ).not.toThrow();
+  });
+
+  test.each([
+    "result.txt",
+    "../result.txt",
+    "file:///tmp/result.txt",
+    "base64://aGVsbG8="
+  ])("rejects a non-absolute local attachment path %s", (path) => {
+    expect(() =>
+      assertValidOutboundChannelMessageParts([
+        {
+          type: "attachmentLocalPath",
+          kind: "file",
+          path
+        }
+      ])
+    ).toThrow(/local path must be absolute/);
   });
 
   test.each([
@@ -281,45 +396,26 @@ describe("Channel Contract v1", () => {
     "C:/images/image.png"
   ])("rejects non-HTTP remote attachment reference %s", (url) => {
     expect(() =>
-      assertValidChannelMessageParts([
+      assertValidOutboundChannelMessageParts([
         {
-          type: "attachmentRef",
+          type: "attachmentLink",
           kind: "image",
-          source: { type: "remoteUrl", url }
+          url
         }
       ])
     ).toThrow(/HTTP\(S\)/);
   });
 
-  test.each(["../secret", "C:/images/image.png", "file://image.png"])(
-    "rejects path-like managed attachment ID %s",
-    (attachmentId) => {
-      expect(() =>
-        assertValidChannelMessageParts([
-          {
-            type: "attachmentRef",
-            kind: "image",
-            source: { type: "localCache", attachmentId }
-          }
-        ])
-      ).toThrow(/stable attachment ID/);
-    }
-  );
-
-  test("rejects a raw path hidden inside a managed cache reference", () => {
+  test("rejects credentials embedded in an outbound attachment URL", () => {
     expect(() =>
-      assertValidChannelMessageParts([
+      assertValidOutboundChannelMessageParts([
         {
-          type: "attachmentRef",
+          type: "attachmentLink",
           kind: "image",
-          source: {
-            type: "localCache",
-            attachmentId: "attachment-01",
-            path: "C:/images/image.png"
-          }
-        } as never
+          url: "https://user:password@example.com/image.png"
+        }
       ])
-    ).toThrow(/must not include a raw path/);
+    ).toThrow(/must not include credentials/);
   });
 
   test("exposes a stable channel failure code", () => {

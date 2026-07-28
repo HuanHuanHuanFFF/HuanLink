@@ -3,14 +3,14 @@ import type {
   ChannelDescriptorV1
 } from "./channel-instance-v1.js";
 import type {
-  ChannelMessagePartV1,
+  ChannelOutboundMessagePartV1,
   InboundChannelMessageV1
 } from "./channel-message-v1.js";
 
 /** Server 要求指定 Channel 实例发送消息的命令。 */
 export type SendChannelMessageCommandV1 = {
   readonly route: ChannelConversationRouteV1;
-  readonly parts: readonly ChannelMessagePartV1[];
+  readonly parts: readonly ChannelOutboundMessagePartV1[];
   readonly replyToMessageId?: string;
 };
 

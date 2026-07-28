@@ -1,11 +1,12 @@
 /** 平台无关的会话形态；具体 Adapter 只声明自己实际支持的子集。 */
 export type ChannelConversationKindV1 = "direct" | "group" | "channel";
 
-/** v1 首批允许进入 Core 的三种有序消息 Part。 */
-export type ChannelMessagePartTypeV1 =
+/** v1 允许 Server 主动发给 Channel 的四种有序消息 Part。 */
+export type ChannelOutboundPartTypeV1 =
   | "text"
   | "mention"
-  | "attachmentRef";
+  | "attachmentLink"
+  | "attachmentLocalPath";
 
 /**
  * Adapter 的能力声明，不代表所有 Channel 都支持这些能力。
@@ -19,10 +20,10 @@ export type ChannelCapabilitiesV1 = {
   readonly conversationKinds: readonly ChannelConversationKindV1[];
   /** 是否支持在会话内继续按 thread 隔离。 */
   readonly threads: boolean;
-  /** 能够从平台可靠映射进入 Core 的 Part 类型。 */
-  readonly inboundPartTypes: readonly ChannelMessagePartTypeV1[];
+  /** 能够从平台可靠映射进入 Core 的内容格式。 */
+  readonly inboundContentFormats: readonly string[];
   /** 能够从 Core 可靠发送到平台的 Part 类型。 */
-  readonly outboundPartTypes: readonly ChannelMessagePartTypeV1[];
+  readonly outboundPartTypes: readonly ChannelOutboundPartTypeV1[];
   /** 是否支持引用某条已有消息进行回复。 */
   readonly reply: boolean;
   readonly edit: boolean;
