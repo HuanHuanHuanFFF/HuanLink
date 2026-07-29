@@ -1,6 +1,6 @@
 # HuanLink v1.0 Channel Contract v1 实施计划
 
-> **状态：执行中，B01～B03 与 B04 Core 合同、校验和测试已提交并推送；B04 OneBot 11 与 Server 运行装配尚未开始。** 2026-07-24 起本文不再受原 M1 最小范围约束，改为把 Channel 作为独立模块逐步开发到成熟职责边界。任何后续代码、提交和推送仍须逐批确认。
+> **状态：执行中，B01～B04 已提交并推送；B05 合同与 OneBot 11 Adapter 代码已在本地完成并通过回归，等待验收，尚未接入 Server 或真实 QQ。** 2026-07-24 起本文不再受原 M1 最小范围约束，改为把 Channel 作为独立模块逐步开发到成熟职责边界。任何后续代码、提交和推送仍须逐批确认。
 
 ## 1. 目标结果
 
@@ -233,10 +233,12 @@ apps/server/src/
 - Adapter 可以解析 CQ 字符串或消息段数组以识别 @Bot、命令和引用，但不得用清理后的 trigger 文本替换原始 `content`。
 - 图片、语音、视频、文件和商城表情等入站字段留在 CQ 字符串中；URL、`emoji_id`、`emoji_package_id` 和资源级 `key` 不拆成 HuanLink 附件对象。
 - 规范化后的 CQ 内容超过 8 KiB 时生成 `too_large` session 占位消息；Adapter 不下载、不缓存、不持久化，也不主动回复原 Channel。
-- 出站将 `text`、`mention`、`attachmentLink`、`attachmentLocalPath` 和引用回复映射为 OneBot 消息或 Action；图片/语音/视频使用对应 URL 或本机绝对路径消息段，普通本机文件在当前 OneBot 实现明确支持时调用 `upload_group_file` / `upload_private_file`，否则返回 `not_supported`。
-- 使用 OneBot `delete_msg` 实现主动撤回，并把群聊与私聊撤回通知映射为统一事件。
+- 出站将 `text`、`mention`、`attachmentLink`、`attachmentLocalPath` 和引用回复映射为 OneBot 消息或 Action；图片/语音/视频使用对应 URL 或本机绝对路径消息段。普通文件不是 OneBot 11 公共消息段能力，B05 对 `kind: "file"` 返回 `not_supported`，扩展实现的文件上传移到 B06。
+- 一个 `send(command)` 只映射为一个 OneBot 发送 Action 和一个平台消息；不能可靠合并的 Part 组合返回 `not_supported`，不得静默拆成多条消息。
+- 使用 OneBot `delete_msg` 实现 HuanLink 主动撤回。平台上报的群聊与私聊撤回通知属于后续入站事件合同，不在 B05 混入普通消息流。
 - 发送成功从 OneBot 响应中的 `message_id` 生成 `DeliveryReceipt`；Transport 的 Action 响应不能继续丢弃 `data`。
-- 将远端失败映射为稳定 Channel 错误；不支持的能力返回 `not_supported`。
+- OneBot 自身消息仍作为普通入站事件转发，发送者增加必填 `isSelf`；是否写入 session、是否触发 Agent 不由 Adapter 决定。
+- 将远端失败映射为稳定 Channel 错误；不支持的能力返回 `not_supported`。发送请求可能已经到达平台、但因超时或断连无法取得响应时返回 `delivery_uncertain`，不自动重试，也不声称幂等或 exactly-once。
 - Adapter 准确声明已实现能力，未实现能力不得声明为支持。
 - Adapter 根据已实现能力和当前协议/账号条件生成最终能力；配置若提供能力限制，只能从中关闭或收窄，不能将不支持项改为支持。
 
@@ -247,11 +249,22 @@ apps/server/src/
 - Bot 提及、命令和引用关系得到识别，同时 @Bot、命令前缀、附件 URL、资源级 `key` 和未知消息段仍保留在原始内容中。
 - 8 KiB 以内内容进入 session；超限内容进入同一 session 的占位记录，不调用 OneBot 出站接口。
 - 入站映射过程不产生附件副本、资源注册表或持久状态。
+- Bot 自身消息带 `sender.isSelf = true` 进入统一事件流；其他发送者带 `sender.isSelf = false`，Adapter 不因发送者是 Bot 而丢弃消息。
 - 主动发送与回复发送都通过同一个 `send(command)` 完成。
 - 出站 `text | mention | attachmentLink | attachmentLocalPath` 顺序正确；HTTP(S) 链接和本机绝对路径按类型映射，相对路径、Base64、原始字节和非 HTTP(S) 附件链接返回合同校验错误。
 - 成功发送返回 `messageId`；随后可通过统一撤回命令调用 `delete_msg`。
-- 群聊和私聊撤回通知包含原消息 ID 和发生路由。
+- `kind: "file"` 和无法合并成单条 OneBot 消息的组合稳定返回 `not_supported`，不会发送一部分内容或拆成多条消息。
+- 请求已发出但响应结果未知时返回 `delivery_uncertain`，Transport 和 Adapter 都不自动重发。
 - 日志只出现脱敏文本预览和消息元数据，不出现完整 CQ、资源级 `key` 或账号级凭证。
+
+### 实际结果
+
+- Core 发送者身份增加必填 `isSelf`，稳定错误码增加 `delivery_uncertain`；合同校验和回归测试已同步。
+- 新 OneBot 11 V1 Adapter 已覆盖群聊/私聊入站、CQ 字符串与消息段数组、发送者/引用/触发映射、8 KiB 超限占位、自身消息转发和准确能力声明。
+- 出站已实现群聊/私聊单 Action 发送、引用、提及、图片/语音/视频链接或本机绝对路径、平台 `message_id` 回执和 `delete_msg` 主动撤回；普通文件稳定返回 `not_supported`。
+- Transport 现在向 Adapter 返回完整 Action 响应；已发出但超时、断连或收到 `async/1` 的请求返回 `delivery_uncertain`，不自动重发。远端失败只保留 `status/retcode`，标准通信错误映射为稳定 Channel 错误，普通日志不再提供任意消息 payload 或远端原文入口。
+- OneBot 11 分包 7 个测试文件、92 个测试通过；全仓 597 个测试通过、2 个按既有条件跳过，全仓类型检查和构建通过。
+- 本批没有修改 Server 装配、session 写入或 Agent 触发逻辑，也未连接真实 OneBot/QQ；这些结果只证明 B05 合同与 Adapter 代码闭环。
 
 ### 停点
 
@@ -262,6 +275,8 @@ apps/server/src/
 ### 修改
 
 - 建立具名、类型化的 `OneBot11Operations`，不向上层暴露任意 `action + params`。
+- 通用 Channel 发送只服务当前 session 的固定路由；跨群、跨私聊发送属于 OneBot Adapter 专属操作，不新增平台无关的任意目标发送 Tool。
+- 对明确支持扩展文件 API 的实现提供普通本机文件上传操作；返回结果使用文件资源 ID，不把 `file_id` 冒充 Channel 消息 ID。
 - 第一组覆盖消息和合并转发查询、登录/版本/运行状态、好友/群/群成员查询。
 - 第二组覆盖禁言、全员禁言、踢人、群名片、群名称、管理员、专属头衔和退群。
 - 第三组覆盖好友请求、加群请求/邀请和好友赞。
@@ -297,7 +312,10 @@ apps/server/src/
 - Adapter 仍解析并保留 mention/command trigger 元数据。是否调用 Agent、是否要求 @Bot、是否回复由上层 MainAgent/响应策略负责，不属于 Channel 配置或转发策略。
 - 群访问策略先于 Conversation Store 执行；被名单拒绝的消息不创建 session，也不产生 Channel 出站回复。
 - Server 在首次创建 session 时保存 `channelId`、conversation kind/ID、threadId 和 `contentFormat`；每条消息只追加 sender、完整规范内容或超限占位记录，不重复把固定路由元数据注入 Agent 文本。
-- 普通日志只记录脱敏摘要；完整内容只进入 session。当前 Conversation Store 仍为进程内状态，B07 不新增重启恢复。
+- OneBot 事件流是消息进入 session 的唯一来源：Bot 自身消息写入对应 session，但不触发 Agent；发送回执不提前补写消息。
+- session 按 `channelId + messageId` 判断消息是否已经进入上下文，处理平台重复上报；B07 不建立发送回执与事件流之间的持久对账。
+- 普通日志只记录脱敏摘要；完整内容只进入 session。当前 Conversation Store 仍为进程内状态，B07 不新增数据库或重启恢复。
+- v1 暂不补偿网络波动造成的 Bot 自身事件遗漏；数据库、重启持久化和事件对账留到后续基础设施阶段。
 - 注册受控 OneBot Operations Tool；Agent 只能看到允许的具名操作，不获得原始 OneBot Action 或凭证。
 - 将当前单个 `groupId` 迁移到上述群策略；私聊继续使用独立、显式的允许会话配置，不与群号列表混用。
 - 用 `process-lifecycle.ts` 取代 `phase4-process-lifecycle.ts`。
