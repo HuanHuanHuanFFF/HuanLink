@@ -1,6 +1,6 @@
 # HuanLink v1.0 Channel Contract v1 实施计划
 
-> **状态：执行中，B01～B04 已提交并推送；B05 合同与 OneBot 11 Adapter 代码已在本地完成并通过回归，等待验收，尚未接入 Server 或真实 QQ。** 2026-07-24 起本文不再受原 M1 最小范围约束，改为把 Channel 作为独立模块逐步开发到成熟职责边界。任何后续代码、提交和推送仍须逐批确认。
+> **状态：执行中，B01～B05 已提交并推送；B05 通用命令触发补充改动已在本地完成，尚未提交，也未接入 Server 或真实 QQ。** 2026-07-24 起本文不再受原 M1 最小范围约束，改为把 Channel 作为独立模块逐步开发到成熟职责边界。任何后续代码、提交和推送仍须逐批确认。
 
 ## 1. 目标结果
 
@@ -230,7 +230,10 @@ apps/server/src/
 - 入站映射群聊和私聊路由、发送者、引用关系、原始 CQ 内容和触发元数据。
 - OneBot `user_id`、`sender.nickname`、非空 `sender.card` 分别映射为发送者 `id`、`username`、`displayName`；nickname 缺失时 `username` 回退为 `id`。
 - OneBot `message` 为 CQ 字符串时原样保留；为消息段数组时由 Codec 按 OneBot 转义规则编码成 CQ 字符串。两种输入进入 Channel 后都使用 `contentFormat: "onebot11.cq"`。
-- Adapter 可以解析 CQ 字符串或消息段数组以识别 @Bot、命令和引用，但不得用清理后的 trigger 文本替换原始 `content`。
+- OneBot Adapter 从 CQ 字符串或消息段数组中识别 @当前 Bot、引用和开头连续文本；Core Channel 根据这些临时平台事实统一判断 `mention | command`，不得用清理后的 trigger 文本替换原始 `content`。
+- 通用命令以去除开头空白后的 `/名称` 开始；名称至少包含一个 Unicode 字母、数字、`_` 或 `-`，后面只能是空白或字符串结尾。未知命令仍标记为 `command`，具体命令是否合法、如何执行由后续层判断。
+- 有效命令优先于 mention，群聊 `/命令` 不强制同时 @Bot。开头允许 reply、空白和一个或多个 @当前 Bot；命令前出现 @其他人时不得识别为命令，但消息中存在 @当前 Bot 时仍可回退为 `mention`。
+- 上述平台事实只在 Adapter 调用 Core 判断函数时短暂存在；入站消息和 session 只保存最终 `trigger`，不保存 `mentionedSelf` 或清理后的开头文本。OneBot V1 不再配置固定 `commandPrefix`，旧入口在 B07 迁移前继续保留原配置。
 - 图片、语音、视频、文件和商城表情等入站字段留在 CQ 字符串中；URL、`emoji_id`、`emoji_package_id` 和资源级 `key` 不拆成 HuanLink 附件对象。
 - 规范化后的 CQ 内容超过 8 KiB 时生成 `too_large` session 占位消息；Adapter 不下载、不缓存、不持久化，也不主动回复原 Channel。
 - 出站将 `text`、`mention`、`attachmentLink`、`attachmentLocalPath` 和引用回复映射为 OneBot 消息或 Action；图片/语音/视频使用对应 URL 或本机绝对路径消息段。普通文件不是 OneBot 11 公共消息段能力，B05 对 `kind: "file"` 返回 `not_supported`，扩展实现的文件上传移到 B06。
@@ -246,7 +249,7 @@ apps/server/src/
 
 - 群聊和私聊事件映射测试通过。
 - CQ 字符串输入原样保留；等价消息段数组编码后得到规范 CQ 字符串，特殊字符按 OneBot 规则转义。
-- Bot 提及、命令和引用关系得到识别，同时 @Bot、命令前缀、附件 URL、资源级 `key` 和未知消息段仍保留在原始内容中。
+- Bot 提及、通用 `/命令` 和引用关系得到识别；`command` 优先于 `mention`，@其他人在命令前会阻止命令误判，同时 @Bot、命令文本、附件 URL、资源级 `key` 和未知消息段仍保留在原始内容中。
 - 8 KiB 以内内容进入 session；超限内容进入同一 session 的占位记录，不调用 OneBot 出站接口。
 - 入站映射过程不产生附件副本、资源注册表或持久状态。
 - Bot 自身消息带 `sender.isSelf = true` 进入统一事件流；其他发送者带 `sender.isSelf = false`，Adapter 不因发送者是 Bot 而丢弃消息。
@@ -260,10 +263,12 @@ apps/server/src/
 ### 实际结果
 
 - Core 发送者身份增加必填 `isSelf`，稳定错误码增加 `delivery_uncertain`；合同校验和回归测试已同步。
+- Core 新增平台无关的触发判断函数，统一识别通用 `/命令` 并实现 `command` 高于 `mention` 的优先级；临时触发信号不进入消息合同或 session。
 - 新 OneBot 11 V1 Adapter 已覆盖群聊/私聊入站、CQ 字符串与消息段数组、发送者/引用/触发映射、8 KiB 超限占位、自身消息转发和准确能力声明。
+- OneBot 11 V1 现在只提取 @当前 Bot 和开头连续文本等平台事实，再复用 Core 触发判断；V1 已移除固定 `commandPrefix`，旧入口暂留到 B07。
 - 出站已实现群聊/私聊单 Action 发送、引用、提及、图片/语音/视频链接或本机绝对路径、平台 `message_id` 回执和 `delete_msg` 主动撤回；普通文件稳定返回 `not_supported`。
 - Transport 现在向 Adapter 返回完整 Action 响应；已发出但超时、断连或收到 `async/1` 的请求返回 `delivery_uncertain`，不自动重发。远端失败只保留 `status/retcode`，标准通信错误映射为稳定 Channel 错误，普通日志不再提供任意消息 payload 或远端原文入口。
-- OneBot 11 分包 7 个测试文件、92 个测试通过；全仓 597 个测试通过、2 个按既有条件跳过，全仓类型检查和构建通过。
+- OneBot 11 分包 7 个测试文件、96 个测试通过；Core 16 个测试文件、187 个测试通过；全仓 618 个测试通过、2 个按既有条件跳过，全仓类型检查和构建通过。
 - 本批没有修改 Server 装配、session 写入或 Agent 触发逻辑，也未连接真实 OneBot/QQ；这些结果只证明 B05 合同与 Adapter 代码闭环。
 
 ### 停点
@@ -309,7 +314,7 @@ apps/server/src/
   - `ids` 保存唯一的群号字符串列表。
 - `allowlist` 只把 `ids` 中的群转发到 session；`denylist` 把除 `ids` 外的群转发到 session。`denylist` 是用户显式选择的开放策略，空 `ids` 表示允许所有群，不提供隐式模式或默认回退。
 - 通过群访问策略的所有消息都进入整群共享 session；Channel 不用 mention 或命令决定是否转发。
-- Adapter 仍解析并保留 mention/command trigger 元数据。是否调用 Agent、是否要求 @Bot、是否回复由上层 MainAgent/响应策略负责，不属于 Channel 配置或转发策略。
+- Adapter 提取平台提及和开头文本事实，Core Channel 生成并保留最终 mention/command trigger 元数据。是否调用 Agent、是否要求 @Bot、是否回复由上层 MainAgent/响应策略负责，不属于 Channel 配置或转发策略。
 - 群访问策略先于 Conversation Store 执行；被名单拒绝的消息不创建 session，也不产生 Channel 出站回复。
 - Server 在首次创建 session 时保存 `channelId`、conversation kind/ID、threadId 和 `contentFormat`；每条消息只追加 sender、完整规范内容或超限占位记录，不重复把固定路由元数据注入 Agent 文本。
 - OneBot 事件流是消息进入 session 的唯一来源：Bot 自身消息写入对应 session，但不触发 Agent；发送回执不提前补写消息。
