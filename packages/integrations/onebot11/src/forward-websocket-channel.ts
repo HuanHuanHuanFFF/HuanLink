@@ -67,7 +67,6 @@ export function createForwardWebSocketOneBot11ChannelAdapterV1(
   return new OneBot11ChannelAdapterV1({
     channelId: options.channelId,
     ...(options.accountId === undefined ? {} : { accountId: options.accountId }),
-    commandPrefix: options.commandPrefix,
     transport,
     ...(options.onError === undefined ? {} : { onError: options.onError }),
     logger,

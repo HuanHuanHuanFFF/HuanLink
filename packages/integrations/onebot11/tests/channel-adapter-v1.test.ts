@@ -52,7 +52,6 @@ function createAdapter(transport = new FakeOneBot11Transport()) {
     adapter: new OneBot11ChannelAdapterV1({
       channelId: "qq-main",
       accountId: "10001",
-      commandPrefix: "/huanlink",
       transport
     }),
     transport
@@ -408,8 +407,7 @@ describe("OneBot11ChannelAdapterV1", () => {
     const adapter = createForwardWebSocketOneBot11ChannelAdapterV1({
       channelId: "qq-main",
       accountId: "10001",
-      url: "ws://127.0.0.1:65535/",
-      commandPrefix: "/huanlink"
+      url: "ws://127.0.0.1:65535/"
     });
 
     expect(adapter.descriptor).toMatchObject({

@@ -7,8 +7,7 @@ import {
 import { parseOneBot11MessageV1 } from "../src/index.js";
 
 const options = {
-  channelId: "qq-main",
-  commandPrefix: "/huanlink"
+  channelId: "qq-main"
 };
 
 describe("parseOneBot11MessageV1", () => {
@@ -157,7 +156,7 @@ describe("parseOneBot11MessageV1", () => {
     });
   });
 
-  test("does not assemble a command prefix across a non-text message segment", () => {
+  test("does not assemble a slash command across a non-text message segment", () => {
     const message = parseOneBot11MessageV1(
       {
         time: 1_704_067_200,
@@ -168,9 +167,9 @@ describe("parseOneBot11MessageV1", () => {
         group_id: "20002",
         user_id: "30003",
         message: [
-          { type: "text", data: { text: "/huan" } },
+          { type: "text", data: { text: "/" } },
           { type: "image", data: { file: "separator.jpg" } },
-          { type: "text", data: { text: "link run" } }
+          { type: "text", data: { text: "model run" } }
         ],
         sender: { nickname: "Alice" }
       },
@@ -178,9 +177,28 @@ describe("parseOneBot11MessageV1", () => {
     );
 
     expect(message?.content).toBe(
-      "/huan[CQ:image,file=separator.jpg]link run"
+      "/[CQ:image,file=separator.jpg]model run"
     );
     expect(message?.trigger).toBeUndefined();
+  });
+
+  test("recognizes a platform-independent slash command without a mention", () => {
+    const message = parseOneBot11MessageV1(
+      {
+        time: 1_704_067_200,
+        self_id: "10001",
+        post_type: "message",
+        message_type: "group",
+        message_id: "12351",
+        group_id: "20002",
+        user_id: "30003",
+        message: [{ type: "text", data: { text: "/model gpt-5" } }],
+        sender: { nickname: "Alice" }
+      },
+      options
+    );
+
+    expect(message?.trigger).toEqual({ kind: "command" });
   });
 
   test("recognizes a command after mentioning the current bot", () => {
@@ -195,7 +213,7 @@ describe("parseOneBot11MessageV1", () => {
         user_id: "30003",
         message: [
           { type: "at", data: { qq: "10001" } },
-          { type: "text", data: { text: " /huanlink inspect" } }
+          { type: "text", data: { text: "  /model gpt-5" } }
         ],
         sender: { nickname: "Alice" }
       },
@@ -216,7 +234,7 @@ describe("parseOneBot11MessageV1", () => {
         group_id: "20002",
         user_id: "30003",
         message: [
-          { type: "text", data: { text: "/huanlink inspect " } },
+          { type: "text", data: { text: "/模型 qwen " } },
           { type: "at", data: { qq: "10001" } }
         ],
         sender: { nickname: "Alice" }
@@ -239,7 +257,7 @@ describe("parseOneBot11MessageV1", () => {
         user_id: "30003",
         message: [
           { type: "at", data: { qq: "40004" } },
-          { type: "text", data: { text: " /huanlink inspect" } }
+          { type: "text", data: { text: " /model gpt-5" } }
         ],
         sender: { nickname: "Alice" }
       },
@@ -248,6 +266,71 @@ describe("parseOneBot11MessageV1", () => {
 
     expect(message?.trigger).toBeUndefined();
   });
+
+  test("allows repeated self mentions and whitespace before a command", () => {
+    const message = parseOneBot11MessageV1(
+      {
+        time: 1_704_067_200,
+        self_id: "10001",
+        post_type: "message",
+        message_type: "group",
+        message_id: "12354",
+        group_id: "20002",
+        user_id: "30003",
+        message: [
+          { type: "at", data: { qq: "10001" } },
+          { type: "text", data: { text: " " } },
+          { type: "at", data: { qq: "10001" } },
+          { type: "text", data: { text: "   /agent-status" } }
+        ],
+        sender: { nickname: "Alice" }
+      },
+      options
+    );
+
+    expect(message?.trigger).toEqual({ kind: "command" });
+  });
+
+  test.each([
+    [
+      "self then other",
+      [
+        { type: "at", data: { qq: "10001" } },
+        { type: "text", data: { text: " " } },
+        { type: "at", data: { qq: "40004" } },
+        { type: "text", data: { text: " /model gpt-5" } }
+      ]
+    ],
+    [
+      "other then self",
+      [
+        { type: "at", data: { qq: "40004" } },
+        { type: "text", data: { text: " " } },
+        { type: "at", data: { qq: "10001" } },
+        { type: "text", data: { text: " /model gpt-5" } }
+      ]
+    ]
+  ])(
+    "blocks a command when mentioning another user first: %s",
+    (_name, segments) => {
+      const message = parseOneBot11MessageV1(
+        {
+          time: 1_704_067_200,
+          self_id: "10001",
+          post_type: "message",
+          message_type: "group",
+          message_id: "12355",
+          group_id: "20002",
+          user_id: "30003",
+          message: segments,
+          sender: { nickname: "Alice" }
+        },
+        options
+      );
+
+      expect(message?.trigger).toEqual({ kind: "mention" });
+    }
+  );
 
   test("keeps a parameterless message segment whose OneBot data is null", () => {
     const message = parseOneBot11MessageV1(

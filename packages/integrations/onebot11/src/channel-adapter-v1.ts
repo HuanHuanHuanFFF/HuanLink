@@ -59,7 +59,6 @@ const ONEBOT11_CAPABILITIES = {
 export class OneBot11ChannelAdapterV1 implements ChannelAdapterV1 {
   readonly descriptor: ChannelDescriptorV1;
 
-  private readonly commandPrefix: string;
   private readonly transport: OneBot11Transport;
   private readonly onError: OneBot11ChannelErrorListener;
   private readonly logger: RuntimeLogger;
@@ -70,10 +69,6 @@ export class OneBot11ChannelAdapterV1 implements ChannelAdapterV1 {
   /** 校验实例配置、建立描述信息，并订阅 Transport 事件流。 */
   constructor(options: OneBot11ChannelAdapterV1Options) {
     const channelId = requireNonEmpty(options.channelId, "channelId");
-    this.commandPrefix = requireNonEmpty(
-      options.commandPrefix,
-      "commandPrefix",
-    );
     this.descriptor = {
       channelId,
       platform: "onebot11",
@@ -161,7 +156,6 @@ export class OneBot11ChannelAdapterV1 implements ChannelAdapterV1 {
     try {
       const message = parseOneBot11MessageV1(event, {
         channelId: this.descriptor.channelId,
-        commandPrefix: this.commandPrefix,
       });
       if (message === undefined) {
         return;

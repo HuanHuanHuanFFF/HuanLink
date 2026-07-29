@@ -62,14 +62,13 @@ export type OneBot11ChannelAdapterOptions =
   };
 
 /** Channel Contract V1 OneBot Adapter 的实例标识和运行依赖。 */
-export type OneBot11ChannelAdapterV1Options =
-  ParseOneBot11GroupMessageOptions & {
-    channelId: string;
-    accountId?: string;
-    transport: OneBot11Transport;
-    onError?: OneBot11ChannelErrorListener;
-    logger?: RuntimeLogger;
-  };
+export type OneBot11ChannelAdapterV1Options = {
+  channelId: string;
+  accountId?: string;
+  transport: OneBot11Transport;
+  onError?: OneBot11ChannelErrorListener;
+  logger?: RuntimeLogger;
+};
 
 /** 旧版正向 WebSocket 兼容外观的组合配置。 */
 export type ForwardWebSocketOneBot11ChannelOptions =
@@ -78,8 +77,7 @@ export type ForwardWebSocketOneBot11ChannelOptions =
 
 /** 正向 WebSocket Transport 与 V1 Adapter 的组合配置。 */
 export type ForwardWebSocketOneBot11ChannelV1Options =
-  ParseOneBot11GroupMessageOptions &
-    ForwardWebSocketOneBot11TransportOptions & {
-      channelId: string;
-      accountId?: string;
-    };
+  ForwardWebSocketOneBot11TransportOptions & {
+    channelId: string;
+    accountId?: string;
+  };

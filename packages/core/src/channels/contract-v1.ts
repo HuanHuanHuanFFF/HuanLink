@@ -13,3 +13,4 @@ export * from "./channel-instance-v1.js";
 export * from "./channel-message-v1.js";
 export * from "./channel-adapter-v1.js";
 export * from "./channel-validation-v1.js";
+export * from "./channel-trigger-v1.js";

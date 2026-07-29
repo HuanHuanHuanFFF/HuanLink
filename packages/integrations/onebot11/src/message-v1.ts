@@ -3,7 +3,7 @@ import { Buffer } from "node:buffer";
 import {
   CHANNEL_INBOUND_CONTENT_MAX_BYTES_V1,
   CHANNEL_INBOUND_CONTENT_TOO_LARGE_PLACEHOLDER_V1,
-  type ChannelTriggerV1,
+  resolveChannelTriggerV1,
   type InboundChannelMessageV1,
 } from "@huanlink/core";
 
@@ -15,8 +15,6 @@ import {
 export type ParseOneBot11MessageV1Options = {
   /** 当前 OneBot Channel 实例的稳定标识。 */
   readonly channelId: string;
-  /** 用于识别命令触发的完整前缀。 */
-  readonly commandPrefix: string;
 };
 
 /**
@@ -29,12 +27,8 @@ export function parseOneBot11MessageV1(
   options: ParseOneBot11MessageV1Options,
 ): InboundChannelMessageV1 | undefined {
   const channelId = nonEmptyString(options.channelId);
-  const commandPrefix = nonEmptyString(options.commandPrefix);
   if (channelId === undefined) {
     throw new Error("channelId must be non-empty");
-  }
-  if (commandPrefix === undefined) {
-    throw new Error("commandPrefix must be non-empty");
   }
 
   const frame = asObject(input);
@@ -99,29 +93,24 @@ export function parseOneBot11MessageV1(
           },
         }),
     contentFormat: "onebot11.cq",
-    ...optionalMessageMetadata(
-      normalized.segments,
-      selfId,
-      commandPrefix,
-    ),
+    ...optionalMessageMetadata(normalized.segments, selfId),
   };
   return message;
 }
 
 /**
  * 从规范化消息段中提取可选的引用消息 ID 和触发原因。
- * 没有有效引用、@Bot 或命令前缀时不写入对应字段。
+ * 没有有效引用、@Bot 或通用斜杠命令时不写入对应字段。
  */
 function optionalMessageMetadata(
   segments: readonly OneBot11MessageSegment[],
   selfId: string,
-  commandPrefix: string,
 ): Pick<InboundChannelMessageV1, "replyToMessageId" | "trigger"> {
   const replyToMessageId = segments
     .filter((segment) => segment.type === "reply")
     .map((segment) => normalizeMessageId(segment.data.id))
     .find((value) => value !== undefined);
-  const trigger = parseTrigger(segments, selfId, commandPrefix);
+  const trigger = parseTrigger(segments, selfId);
   return {
     ...(replyToMessageId === undefined ? {} : { replyToMessageId }),
     ...(trigger === undefined ? {} : { trigger }),
@@ -129,69 +118,57 @@ function optionalMessageMetadata(
 }
 
 /**
- * 判断消息是否 @ 当前 Bot 或以配置的命令前缀开头。
- * 同时满足两种条件时优先记录为 command。
+ * 提取 OneBot 平台事实，并交给 Core Channel 统一判断触发原因。
  */
 function parseTrigger(
   segments: readonly OneBot11MessageSegment[],
   selfId: string,
-  commandPrefix: string,
-): ChannelTriggerV1 | undefined {
-  const mentionsSelf = segments.some(
+): InboundChannelMessageV1["trigger"] {
+  const mentionedSelf = segments.some(
     (segment) =>
       segment.type === "at" &&
       normalizePositiveId(segment.data.qq) === selfId,
   );
-  const text = leadingCommandText(segments, selfId);
-  const command = hasCommandPrefix(text, commandPrefix);
-
-  if (command) {
-    return { kind: "command" };
-  }
-  return mentionsSelf ? { kind: "mention" } : undefined;
+  const leadingText = leadingTriggerText(segments, selfId);
+  return resolveChannelTriggerV1({
+    mentionedSelf,
+    ...(leadingText === undefined ? {} : { leadingText }),
+  });
 }
 
 /**
- * 提取可用于判断命令前缀的开头连续文本。
- * 忽略最前面的 reply 和 @当前Bot 段，遇到其他非文本消息段后停止。
+ * 提取供 Channel 判断触发原因的开头连续文本。
+ * 开头允许 reply、空白和 @当前Bot；在有效文本前遇到 @其他人时不提供候选。
  */
-function leadingCommandText(
+function leadingTriggerText(
   segments: readonly OneBot11MessageSegment[],
   selfId: string,
-): string {
+): string | undefined {
   const text: string[] = [];
-  let started = false;
+  let contentStarted = false;
   for (const segment of segments) {
-    if (!started && segment.type === "reply") {
+    if (!contentStarted && segment.type === "reply") {
       continue;
     }
     if (
-      !started &&
-      segment.type === "at" &&
-      normalizePositiveId(segment.data.qq) === selfId
+      !contentStarted &&
+      segment.type === "at"
     ) {
-      continue;
+      if (normalizePositiveId(segment.data.qq) === selfId) {
+        continue;
+      }
+      return undefined;
     }
     if (segment.type !== "text") {
       break;
     }
-    started = true;
-    text.push(segment.data.text ?? "");
+    const value = segment.data.text ?? "";
+    text.push(value);
+    if (/\S/u.test(value)) {
+      contentStarted = true;
+    }
   }
-  return text.join("");
-}
-
-/**
- * 判断文本去除开头空白后是否为一个完整命令前缀。
- * 前缀后只能是字符串结尾或空白，避免把相似单词误判为命令。
- */
-function hasCommandPrefix(input: string, commandPrefix: string): boolean {
-  const candidate = input.trimStart();
-  if (!candidate.startsWith(commandPrefix)) {
-    return false;
-  }
-  const boundary = candidate.at(commandPrefix.length);
-  return boundary === undefined || /\s/u.test(boundary);
+  return text.length === 0 ? undefined : text.join("");
 }
 
 /**
