@@ -216,9 +216,7 @@ describe("ForwardWebSocketOneBot11Channel", () => {
         "onebot11.connection.connecting",
         "onebot11.connection.opened",
         "onebot11.message.received",
-        "onebot11.message.payload",
         "onebot11.reply.sending",
-        "onebot11.reply.payload",
         "onebot11.reply.sent",
         "onebot11.closing",
         "onebot11.connection.closed",
@@ -231,14 +229,8 @@ describe("ForwardWebSocketOneBot11Channel", () => {
         messageId: "7",
         conversationId: "20002",
         senderId: "30003",
+        contentBytes: 22,
         trigger: "command",
-      },
-    });
-    expect(logEntry(logger, "onebot11.message.payload")).toMatchObject({
-      level: "debug",
-      fields: {
-        messageId: "7",
-        payload: expect.objectContaining({ text: "/huanlink inspect this" }),
       },
     });
     const sending = logEntry(logger, "onebot11.reply.sending");
@@ -248,10 +240,6 @@ describe("ForwardWebSocketOneBot11Channel", () => {
         conversationId: "20002",
         echo: expect.stringMatching(/^send-group:/),
       },
-    });
-    expect(logEntry(logger, "onebot11.reply.payload")).toMatchObject({
-      level: "debug",
-      fields: { payload: { text: "reply payload" } },
     });
     expect(logEntry(logger, "onebot11.reply.sent")).toMatchObject({
       level: "info",
@@ -270,6 +258,8 @@ describe("ForwardWebSocketOneBot11Channel", () => {
       "onebot-password-secret",
       "onebot-query-secret",
       "raw-frame-secret",
+      "/huanlink inspect this",
+      "reply payload",
     ]) {
       expect(serialized).not.toContain(secret);
     }
@@ -307,8 +297,10 @@ describe("ForwardWebSocketOneBot11Channel", () => {
     ).toEqual([0, 1]);
   });
 
-  test("logs a failed reply without a false sent event", async () => {
+  test("logs only status and retcode for a failed reply", async () => {
     const { server, url } = await startServer();
+    const sensitiveRemoteMessage =
+      "[CQ:image,url=https://example.invalid/a.png,key=remote-secret]";
     server.on("connection", (socket) => {
       socket.on("message", (data) => {
         const request = readFrame(data);
@@ -316,7 +308,7 @@ describe("ForwardWebSocketOneBot11Channel", () => {
           JSON.stringify({
             status: "failed",
             retcode: 1404,
-            message: "reply rejected",
+            message: sensitiveRemoteMessage,
             echo: request.echo,
           }),
         );
@@ -326,11 +318,14 @@ describe("ForwardWebSocketOneBot11Channel", () => {
     const channel = createChannel(url, { logger });
     await channel.start();
 
-    await expect(channel.sendText("20002", "failed reply")).rejects.toThrow(
-      "reply rejected",
-    );
+    const error = await channel
+      .sendText("20002", "failed reply")
+      .catch((failure: unknown) => failure);
 
     const failed = logEntry(logger, "onebot11.reply.failed");
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("retcode=1404");
+    expect((error as Error).message).not.toContain(sensitiveRemoteMessage);
     expect(failed).toMatchObject({
       level: "error",
       fields: {
@@ -345,7 +340,7 @@ describe("ForwardWebSocketOneBot11Channel", () => {
           entry.fields.echo === failed.fields.echo,
       ),
     ).toBe(false);
-    expect(loggedError(failed).message).toContain("reply rejected");
+    expect(loggedError(failed).message).not.toContain(sensitiveRemoteMessage);
   });
 
   test("reports a remote close reason in the pending reply failure", async () => {

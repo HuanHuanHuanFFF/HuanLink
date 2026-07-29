@@ -8,6 +8,7 @@ import { WebSocket, WebSocketServer } from "ws";
 import {
   createOneBot11SendGroupTextAction,
   ForwardWebSocketOneBot11Transport,
+  OneBot11DeliveryUncertainError,
   type OneBot11JsonObject,
 } from "../src/index.js";
 
@@ -143,7 +144,12 @@ describe("ForwardWebSocketOneBot11Transport", () => {
     );
     await expect(
       transport.sendAction(action, { conversationId: "20002" }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({
+      status: "ok",
+      retcode: 0,
+      data: { message_id: 5678 },
+      echo: "send-group:1",
+    });
 
     expect(events).toEqual([{ post_type: "message", message_id: 1 }]);
     expect(request).toEqual(action);
@@ -233,6 +239,68 @@ describe("ForwardWebSocketOneBot11Transport", () => {
       }),
     );
 
-    await expect(pending).resolves.toBeUndefined();
+    await expect(pending).resolves.toEqual({
+      status: "ok",
+      retcode: 0,
+      data: { message_id: 3 },
+      echo: action.echo,
+    });
+  });
+
+  test("marks an unanswered action as delivery-uncertain after WebSocket dispatch", async () => {
+    const { server, url } = await startServer();
+    server.on("connection", (socket) => {
+      socket.on("message", () => undefined);
+    });
+    const transport = new ForwardWebSocketOneBot11Transport({
+      url,
+      requestTimeoutMs: 30,
+      reconnectDelaysMs: [10],
+    });
+    transports.push(transport);
+    await transport.start();
+
+    const action = createOneBot11SendGroupTextAction(
+      "20002",
+      "possibly sent",
+      "send-group:uncertain",
+    );
+    await expect(
+      transport.sendAction(action, { conversationId: "20002" }),
+    ).rejects.toBeInstanceOf(OneBot11DeliveryUncertainError);
+  });
+
+  test("marks an accepted asynchronous action as delivery-uncertain", async () => {
+    const { server, url } = await startServer();
+    server.on("connection", (socket) => {
+      socket.on("message", (data) => {
+        const request = JSON.parse(
+          data.toString("utf8"),
+        ) as OneBot11JsonObject;
+        socket.send(
+          JSON.stringify({
+            status: "async",
+            retcode: 1,
+            data: null,
+            echo: request.echo,
+          }),
+        );
+      });
+    });
+    const transport = new ForwardWebSocketOneBot11Transport({
+      url,
+      reconnectDelaysMs: [10],
+    });
+    transports.push(transport);
+    await transport.start();
+
+    const action = createOneBot11SendGroupTextAction(
+      "20002",
+      "accepted asynchronously",
+      "send-group:async",
+    );
+    await expect(
+      transport.sendAction(action, { conversationId: "20002" }),
+    ).rejects.toBeInstanceOf(OneBot11DeliveryUncertainError);
   });
 });

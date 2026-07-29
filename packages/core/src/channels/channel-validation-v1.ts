@@ -192,7 +192,7 @@ function validateSender(value: unknown): void {
   const sender = value as Record<string, unknown>;
   assertOnlyKeys(
     sender,
-    ["id", "username", "displayName"],
+    ["id", "username", "displayName", "isSelf"],
     "Inbound Channel sender"
   );
   requireNonEmptyString(sender.id, "Inbound Channel sender id");
@@ -201,6 +201,9 @@ function validateSender(value: unknown): void {
     sender.displayName,
     "Inbound Channel sender displayName"
   );
+  if (typeof sender.isSelf !== "boolean") {
+    throw new Error("Inbound Channel sender isSelf must be a boolean");
+  }
 }
 
 function validateTrigger(value: unknown): void {

@@ -33,6 +33,7 @@ export type DeliveryReceiptV1 = {
 /** 跨平台稳定错误码；平台原始错误只作为受控 cause 或日志保留。 */
 export type ChannelErrorCodeV1 =
   | "not_supported"
+  | "delivery_uncertain"
   | "rate_limited"
   | "temporarily_unavailable"
   | "authentication_failed"

@@ -17,6 +17,8 @@ export type ChannelSenderIdentityV1 = {
   readonly username: string;
   /** 当前会话特有的备注、群名片或群昵称；没有时省略。 */
   readonly displayName?: string;
+  /** 发送者是否为当前 Channel 实例使用的 Bot 或应用账号。 */
+  readonly isSelf: boolean;
 };
 
 /** Server 主动发给 Channel 的文本内容。 */

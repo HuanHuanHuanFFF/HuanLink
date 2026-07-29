@@ -20,18 +20,29 @@ import type {
 import {
   sanitizeOneBot11ConnectionErrorMessage,
 } from "./connection-error-sanitizer.js";
+import {
+  OneBot11DeliveryUncertainError,
+  OneBot11RemoteActionError,
+  OneBot11TransportUnavailableError,
+} from "./action-errors.js";
 
+/** 一个等待 OneBot 按 echo 返回结果的 Action 及其超时、Socket 和会话上下文。 */
 type PendingAction = {
   socket: WebSocket;
   conversationId: string;
-  resolve: () => void;
+  resolve: (response: OneBot11JsonObject) => void;
   reject: (error: Error) => void;
   timeout: NodeJS.Timeout;
+  dispatched: boolean;
 };
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 const DEFAULT_RECONNECT_DELAYS_MS = [250, 1_000, 5_000] as const;
 
+/**
+ * OneBot 11 正向 WebSocket Transport。
+ * 负责连接与重连、事件分发、Action/echo 响应关联、关闭和安全日志。
+ */
 export class ForwardWebSocketOneBot11Transport implements OneBot11Transport {
   private readonly url: string;
   private readonly accessToken: string | undefined;
@@ -50,6 +61,7 @@ export class ForwardWebSocketOneBot11Transport implements OneBot11Transport {
   private startOperation: Promise<void> | undefined;
   private closeOperation: Promise<void> | undefined;
 
+  /** 规范化连接配置并拒绝无效的超时或重连延迟。 */
   constructor(options: ForwardWebSocketOneBot11TransportOptions) {
     this.url = options.url;
     this.accessToken = nonEmptyString(options.accessToken);
@@ -75,6 +87,7 @@ export class ForwardWebSocketOneBot11Transport implements OneBot11Transport {
     this.logger = options.logger ?? new NoopRuntimeLogger();
   }
 
+  /** 建立初始连接；并发调用共享同一个启动 Promise。 */
   start(): Promise<void> {
     if (this.closing) {
       return Promise.reject(new Error("OneBot 11 transport is closed"));
@@ -118,15 +131,20 @@ export class ForwardWebSocketOneBot11Transport implements OneBot11Transport {
     return operation;
   }
 
+  /** 订阅 OneBot 主动上报事件，并返回对应的取消订阅函数。 */
   onEvent(listener: OneBot11EventListener): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
 
+  /**
+   * 发送 Action 并通过唯一 echo 等待完整 OneBot 响应。
+   * 发出后的超时或断连标记为结果不确定，未连接时标记为 Transport 不可用。
+   */
   sendAction(
     action: OneBot11Action,
     context: OneBot11ActionContext,
-  ): Promise<void> {
+  ): Promise<OneBot11JsonObject> {
     const socket = this.socket;
     if (
       !this.running ||
@@ -136,7 +154,9 @@ export class ForwardWebSocketOneBot11Transport implements OneBot11Transport {
     ) {
       return this.rejectRequest(
         context.conversationId,
-        new Error("OneBot 11 WebSocket is not connected"),
+        new OneBot11TransportUnavailableError(
+          "OneBot 11 WebSocket is not connected",
+        ),
       );
     }
     if (this.pendingActions.has(action.echo)) {
@@ -151,19 +171,15 @@ export class ForwardWebSocketOneBot11Transport implements OneBot11Transport {
       conversationId: context.conversationId,
       echo: action.echo,
     });
-    if (context.logPayload !== undefined) {
-      this.writeLog("debug", "onebot11.reply.payload", {
-        conversationId: context.conversationId,
-        echo: action.echo,
-        payload: context.logPayload,
-      });
-    }
 
-    return new Promise<void>((resolve, reject) => {
+    return new Promise<OneBot11JsonObject>((resolve, reject) => {
       const timeout = setTimeout(() => {
         this.rejectAction(
           action.echo,
-          new Error("OneBot 11 action " + action.echo + " timed out"),
+          this.pendingFailure(
+            action.echo,
+            "OneBot 11 action " + action.echo + " timed out",
+          ),
         );
       }, this.requestTimeoutMs);
       this.pendingActions.set(action.echo, {
@@ -172,6 +188,7 @@ export class ForwardWebSocketOneBot11Transport implements OneBot11Transport {
         resolve,
         reject,
         timeout,
+        dispatched: false,
       });
 
       try {
@@ -179,21 +196,33 @@ export class ForwardWebSocketOneBot11Transport implements OneBot11Transport {
           if (error) {
             this.rejectAction(
               action.echo,
-              new Error(
+              new OneBot11DeliveryUncertainError(
                 "Failed to send OneBot 11 action " +
                   action.echo +
                   ": " +
                   error.message,
+                { cause: error },
               ),
             );
           }
         });
+        const pending = this.pendingActions.get(action.echo);
+        if (pending !== undefined) {
+          pending.dispatched = true;
+        }
       } catch (error) {
-        this.rejectAction(action.echo, normalizeError(error));
+        this.rejectAction(
+          action.echo,
+          new OneBot11TransportUnavailableError(
+            "Failed to dispatch OneBot 11 action " + action.echo,
+            { cause: error },
+          ),
+        );
       }
     });
   }
 
+  /** 幂等关闭 Transport；待处理 Action 会被终止。 */
   close(): Promise<void> {
     if (this.closeOperation !== undefined) {
       return this.closeOperation;
@@ -202,12 +231,14 @@ export class ForwardWebSocketOneBot11Transport implements OneBot11Transport {
     return this.closeOperation;
   }
 
+  /** 仅清理由指定启动操作占用的共享 Promise。 */
   private clearStartOperation(operation: Promise<void>): void {
     if (this.startOperation === operation) {
       this.startOperation = undefined;
     }
   }
 
+  /** 停止重连、结束待处理 Action，并优先正常关闭当前 Socket。 */
   private async performClose(): Promise<void> {
     this.writeLog("info", "onebot11.closing");
     this.closing = true;
@@ -216,7 +247,7 @@ export class ForwardWebSocketOneBot11Transport implements OneBot11Transport {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = undefined;
     }
-    this.rejectAllPending(new Error("OneBot 11 channel closed"), "aborted");
+    this.rejectAllPending("OneBot 11 channel closed", "aborted");
 
     try {
       const socket = this.socket;
@@ -256,6 +287,10 @@ export class ForwardWebSocketOneBot11Transport implements OneBot11Transport {
     }
   }
 
+  /**
+   * 创建一次 WebSocket 连接并安装消息、错误和关闭处理器。
+   * Promise 在连接打开时完成，在打开前失败或关闭时拒绝。
+   */
   private connect(): Promise<void> {
     const attempt = this.reconnectAttempt;
     this.writeLog("info", "onebot11.connection.connecting", { attempt });
@@ -336,6 +371,7 @@ export class ForwardWebSocketOneBot11Transport implements OneBot11Transport {
     });
   }
 
+  /** 按配置的退避序列安排一次重连，超过序列后复用最后一个延迟。 */
   private scheduleReconnect(code?: number): void {
     if (!this.running || this.closing || this.reconnectTimer !== undefined) {
       return;
@@ -373,6 +409,10 @@ export class ForwardWebSocketOneBot11Transport implements OneBot11Transport {
     }, delay);
   }
 
+  /**
+   * 解析收到的 WebSocket 帧。
+   * 带 echo 的帧进入 Action 响应处理，主动上报事件分发给订阅者。
+   */
   private handleFrame(data: RawData): void {
     let frame: OneBot11JsonObject;
     try {
@@ -401,6 +441,7 @@ export class ForwardWebSocketOneBot11Transport implements OneBot11Transport {
     }
   }
 
+  /** 按 OneBot status/retcode 完成、拒绝或标记待处理 Action 的结果不确定。 */
   private handleActionResponse(frame: OneBot11JsonObject): void {
     if (typeof frame.echo !== "string") {
       return;
@@ -417,27 +458,30 @@ export class ForwardWebSocketOneBot11Transport implements OneBot11Transport {
         conversationId: pending.conversationId,
         echo: frame.echo,
       });
-      pending.resolve();
+      pending.resolve(frame);
       return;
     }
 
-    const remoteMessage =
-      nonEmptyString(frame.message) ??
-      nonEmptyString(frame.wording) ??
-      "unknown remote error";
+    if (frame.status === "async" && frame.retcode === 1) {
+      this.rejectAction(
+        frame.echo,
+        new OneBot11DeliveryUncertainError(
+          "OneBot 11 accepted the action asynchronously; final result is unknown",
+        ),
+      );
+      return;
+    }
+
     this.rejectAction(
       frame.echo,
-      new Error(
-        "OneBot 11 action failed: status=" +
-          String(frame.status) +
-          " retcode=" +
-          String(frame.retcode) +
-          " message=" +
-          remoteMessage,
-      ),
+      new OneBot11RemoteActionError({
+        status: frame.status,
+        retcode: frame.retcode,
+      }),
     );
   }
 
+  /** 清理指定待处理 Action、记录结果并拒绝其 Promise。 */
   private rejectAction(
     echo: string,
     error: Error,
@@ -463,6 +507,7 @@ export class ForwardWebSocketOneBot11Transport implements OneBot11Transport {
     pending.reject(error);
   }
 
+  /** 记录在创建待处理 Action 前即可确定的请求失败。 */
   private rejectRequest(
     conversationId: string,
     error: Error,
@@ -476,23 +521,43 @@ export class ForwardWebSocketOneBot11Transport implements OneBot11Transport {
     return Promise.reject(error);
   }
 
+  /** 使用同一原因结束当前所有待处理 Action。 */
   private rejectAllPending(
-    error: Error,
+    message: string,
     outcome: "failed" | "aborted" = "failed",
   ): void {
     for (const echo of [...this.pendingActions.keys()]) {
-      this.rejectAction(echo, error, outcome);
+      this.rejectAction(echo, this.pendingFailure(echo, message), outcome);
     }
   }
 
+  /** 结束绑定到指定已关闭 Socket 的待处理 Action。 */
   private rejectPendingForSocket(socket: WebSocket, error: Error): void {
     for (const [echo, pending] of [...this.pendingActions.entries()]) {
       if (pending.socket === socket) {
-        this.rejectAction(echo, error);
+        this.rejectAction(
+          echo,
+          this.pendingFailure(echo, error.message, error),
+        );
       }
     }
   }
 
+  /**
+   * 根据 Action 是否已经交给 Socket，区分结果不确定和尚未可靠发出。
+   */
+  private pendingFailure(
+    echo: string,
+    message: string,
+    cause?: unknown,
+  ): Error {
+    const pending = this.pendingActions.get(echo);
+    return pending?.dispatched === true
+      ? new OneBot11DeliveryUncertainError(message, { cause })
+      : new OneBot11TransportUnavailableError(message, { cause });
+  }
+
+  /** 清理连接错误中的 URL 凭证和 Access Token 后生成可返回错误。 */
   private sanitizeConnectionError(error: unknown, action = "connect"): Error {
     const message = sanitizeOneBot11ConnectionErrorMessage(
       normalizeError(error).message,
@@ -504,6 +569,7 @@ export class ForwardWebSocketOneBot11Transport implements OneBot11Transport {
     );
   }
 
+  /** 记录错误并通知外部观察者，观察者异常不会中断 WebSocket 读取循环。 */
   private reportError(error: Error): void {
     this.writeLog("error", "onebot11.error", { error });
     try {
@@ -513,6 +579,7 @@ export class ForwardWebSocketOneBot11Transport implements OneBot11Transport {
     }
   }
 
+  /** 写入运行日志；日志实现自身失败时保持 Transport 生命周期继续运行。 */
   private writeLog(
     level: "debug" | "info" | "warn" | "error",
     message: string,
@@ -526,6 +593,7 @@ export class ForwardWebSocketOneBot11Transport implements OneBot11Transport {
   }
 }
 
+/** 将 ws 支持的所有 RawData 形态统一解码为 UTF-8 文本。 */
 function rawDataToText(data: RawData): string {
   if (Array.isArray(data)) {
     return Buffer.concat(data).toString("utf8");
@@ -536,6 +604,7 @@ function rawDataToText(data: RawData): string {
   return data.toString("utf8");
 }
 
+/** 将未知输入规范为去除首尾空白后的非空字符串。 */
 function nonEmptyString(input: unknown): string | undefined {
   if (typeof input !== "string") {
     return undefined;
@@ -544,6 +613,7 @@ function nonEmptyString(input: unknown): string | undefined {
   return normalized.length === 0 ? undefined : normalized;
 }
 
+/** 将捕获到的任意异常值统一转换为标准 Error。 */
 function normalizeError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
 }

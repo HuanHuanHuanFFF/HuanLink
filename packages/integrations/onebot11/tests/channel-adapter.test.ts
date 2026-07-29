@@ -26,8 +26,14 @@ class FakeOneBot11Transport implements OneBot11Transport {
   async sendAction(
     action: OneBot11Action,
     context: OneBot11ActionContext,
-  ): Promise<void> {
+  ): Promise<OneBot11JsonObject> {
     this.actions.push({ action, context });
+    return {
+      status: "ok",
+      retcode: 0,
+      data: { message_id: 1 },
+      echo: action.echo,
+    };
   }
 
   emit(event: OneBot11JsonObject): void {

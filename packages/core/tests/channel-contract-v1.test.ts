@@ -65,7 +65,8 @@ function inbound(
     sender: {
       id: "30000",
       username: "Alice",
-      displayName: "Alice"
+      displayName: "Alice",
+      isSelf: false
     },
     receivedAt: "2026-07-22T00:00:00.000Z",
     content: "hello",
@@ -300,14 +301,16 @@ describe("Channel Contract v1", () => {
       sender: {
         id: "30000",
         username: "alice",
-        displayName: "Alice Card"
+        displayName: "Alice Card",
+        isSelf: false
       }
     });
     const second = inbound({
       sender: {
         id: "40000",
         username: "bob",
-        displayName: "Bob Card"
+        displayName: "Bob Card",
+        isSelf: false
       }
     });
 
@@ -321,15 +324,42 @@ describe("Channel Contract v1", () => {
       sender: {
         id: "30000",
         username: "Alice",
-        displayName: "Backend-Alice"
+        displayName: "Backend-Alice",
+        isSelf: true
       }
     });
 
     expect(message.sender).toEqual({
       id: "30000",
       username: "Alice",
-      displayName: "Backend-Alice"
+      displayName: "Backend-Alice",
+      isSelf: true
     });
+  });
+
+  test("requires adapters to identify whether the sender is the channel account", () => {
+    expect(() => assertValidInboundChannelMessage(inbound())).not.toThrow();
+    expect(() =>
+      assertValidInboundChannelMessage(
+        inbound({
+          sender: {
+            id: "10000",
+            username: "HuanLink",
+            isSelf: true
+          }
+        })
+      )
+    ).not.toThrow();
+
+    const withoutIsSelf = inbound() as unknown as {
+      sender: Record<string, unknown>;
+    };
+    delete withoutIsSelf.sender.isSelf;
+    expect(() =>
+      assertValidInboundChannelMessage(
+        withoutIsSelf as unknown as InboundChannelMessageV1
+      )
+    ).toThrow(/sender isSelf/i);
   });
 
   test("keeps complete inbound content and its platform format", () => {
@@ -512,5 +542,14 @@ describe("Channel Contract v1", () => {
     expect(error.name).toBe("ChannelOperationError");
     expect(error.code).toBe("not_supported");
     expect(error.message).toBe("attachments are not supported");
+  });
+
+  test("exposes delivery_uncertain when a dispatched send has no known result", () => {
+    const error = new ChannelOperationError(
+      "delivery_uncertain",
+      "the platform may have accepted the message"
+    );
+
+    expect(error.code).toBe("delivery_uncertain");
   });
 });
