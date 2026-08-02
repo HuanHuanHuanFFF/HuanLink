@@ -448,10 +448,11 @@ describe("Channel Contract v1", () => {
     ).toThrow(/omitted content/);
   });
 
-  test("accepts ordered text, mention, and HTTP attachment link parts", () => {
+  test("accepts ordered text, user mention, all mention, and HTTP attachment link parts", () => {
     const parts = [
       { type: "text", text: "see " },
       { type: "mention", targetId: "30000", displayName: "Alice" },
+      { type: "mention", targetId: "all", displayName: "全体成员" },
       {
         type: "attachmentLink",
         kind: "image",
@@ -464,6 +465,7 @@ describe("Channel Contract v1", () => {
     expect(() => assertValidOutboundChannelMessageParts(parts)).not.toThrow();
     expect(parts.map(({ type }) => type)).toEqual([
       "text",
+      "mention",
       "mention",
       "attachmentLink"
     ]);

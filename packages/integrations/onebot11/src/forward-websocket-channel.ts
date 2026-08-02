@@ -68,6 +68,12 @@ export function createForwardWebSocketOneBot11ChannelAdapterV1(
     channelId: options.channelId,
     ...(options.accountId === undefined ? {} : { accountId: options.accountId }),
     transport,
+    ...(options.fileUpload === undefined
+      ? {}
+      : { fileUpload: options.fileUpload }),
+    ...(options.forwardMessages === undefined
+      ? {}
+      : { forwardMessages: options.forwardMessages }),
     ...(options.onError === undefined ? {} : { onError: options.onError }),
     logger,
   });

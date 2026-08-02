@@ -27,7 +27,10 @@ export type ChannelOutboundTextPartV1 = {
   readonly text: string;
 };
 
-/** Server 主动发给 Channel 的平台用户或 Bot 提及。 */
+/**
+ * Server 主动发给 Channel 的平台用户、Bot 或全体成员提及。
+ * `targetId` 使用平台用户 ID；保留值 `all` 表示全体成员。
+ */
 export type ChannelOutboundMentionPartV1 = {
   readonly type: "mention";
   readonly targetId: string;

@@ -1,6 +1,10 @@
 import type { RuntimeLogger } from "@huanlink/core";
 
 import type { OneBot11Action, OneBot11JsonObject } from "./codec.js";
+import type {
+  OneBot11FileUploadExtension,
+  OneBot11ForwardMessageExtension,
+} from "./operation-contracts.js";
 
 /** 旧版群消息解析在 B07 前继续使用的命令前缀配置。 */
 export type ParseOneBot11GroupMessageOptions = {
@@ -66,6 +70,8 @@ export type OneBot11ChannelAdapterV1Options = {
   channelId: string;
   accountId?: string;
   transport: OneBot11Transport;
+  fileUpload?: OneBot11FileUploadExtension;
+  forwardMessages?: OneBot11ForwardMessageExtension;
   onError?: OneBot11ChannelErrorListener;
   logger?: RuntimeLogger;
 };
@@ -80,4 +86,6 @@ export type ForwardWebSocketOneBot11ChannelV1Options =
   ForwardWebSocketOneBot11TransportOptions & {
     channelId: string;
     accountId?: string;
+    fileUpload?: OneBot11FileUploadExtension;
+    forwardMessages?: OneBot11ForwardMessageExtension;
   };

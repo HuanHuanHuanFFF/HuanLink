@@ -40,3 +40,15 @@ export class OneBot11RemoteActionError extends Error {
     this.retcode = options.retcode;
   }
 }
+
+/** 当前 OneBot 实现实例没有注入对应的可选扩展能力。 */
+export class OneBot11OperationNotSupportedError extends Error {
+  readonly code = "not_supported" as const;
+  readonly operation: string;
+
+  constructor(operation: string) {
+    super(`OneBot 11 operation ${operation} is not supported`);
+    this.name = "OneBot11OperationNotSupportedError";
+    this.operation = operation;
+  }
+}

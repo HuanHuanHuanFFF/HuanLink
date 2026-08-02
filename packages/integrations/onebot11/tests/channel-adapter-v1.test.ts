@@ -174,6 +174,28 @@ describe("OneBot11ChannelAdapterV1", () => {
     });
   });
 
+  test("encodes an all-target mention for a group message", async () => {
+    const { adapter, transport } = createAdapter();
+
+    await adapter.send({
+      route: {
+        channelId: "qq-main",
+        conversationKind: "group",
+        conversationId: "20002"
+      },
+      parts: [{ type: "mention", targetId: "all" }]
+    });
+
+    expect(transport.actions).toHaveLength(1);
+    expect(transport.actions[0]).toMatchObject({
+      action: "send_group_msg",
+      params: {
+        group_id: 20002,
+        message: [{ type: "at", data: { qq: "all" } }]
+      }
+    });
+  });
+
   test("maps a readable local media path to one direct-message action", async () => {
     const { adapter, transport } = createAdapter();
     const localPath = fileURLToPath(import.meta.url);

@@ -130,12 +130,7 @@ async function mapOutboundPart(
       return {
         type: "at",
         data: {
-          qq: String(
-            parsePositiveIdParameter(
-              part.targetId,
-              "OneBot 11 mention target ID",
-            ),
-          ),
+          qq: String(parseMentionTargetParameter(part.targetId)),
         },
       };
     case "attachmentLink":
@@ -253,12 +248,20 @@ function oneBotSegmentParameter(
   value: string,
 ): string | number {
   if (type === "at" && key === "qq") {
-    return parsePositiveIdParameter(value, "OneBot 11 mention target ID");
+    return parseMentionTargetParameter(value);
   }
   if (type === "reply" && key === "id") {
     return parseMessageIdParameter(value, "OneBot 11 reply message ID");
   }
   return value;
+}
+
+/** OneBot 的 `at.qq` 接受正整数用户 ID，或保留值 `all`。 */
+function parseMentionTargetParameter(input: string): string | number {
+  if (input === "all") {
+    return input;
+  }
+  return parsePositiveIdParameter(input, "OneBot 11 mention target ID");
 }
 
 /** 复用 Core 合同校验，并将失败统一映射为 Channel 操作错误。 */

@@ -17,6 +17,7 @@ import {
 } from "@huanlink/core";
 
 import { parseOneBot11MessageV1 } from "./message-v1.js";
+import { OneBot11Operations } from "./operations.js";
 import {
   createOneBot11DeleteMessageActionV1,
   createOneBot11SendMessageActionV1,
@@ -58,6 +59,8 @@ const ONEBOT11_CAPABILITIES = {
  */
 export class OneBot11ChannelAdapterV1 implements ChannelAdapterV1 {
   readonly descriptor: ChannelDescriptorV1;
+  /** OneBot 专属具名操作；后续 Tool Handler 只从这里选择允许的方法。 */
+  readonly operations: OneBot11Operations;
 
   private readonly transport: OneBot11Transport;
   private readonly onError: OneBot11ChannelErrorListener;
@@ -78,6 +81,16 @@ export class OneBot11ChannelAdapterV1 implements ChannelAdapterV1 {
       capabilities: ONEBOT11_CAPABILITIES,
     };
     this.transport = options.transport;
+    this.operations = new OneBot11Operations({
+      channelId,
+      transport: this.transport,
+      ...(options.fileUpload === undefined
+        ? {}
+        : { fileUpload: options.fileUpload }),
+      ...(options.forwardMessages === undefined
+        ? {}
+        : { forwardMessages: options.forwardMessages }),
+    });
     this.onError = options.onError ?? (() => undefined);
     this.logger = options.logger ?? new NoopRuntimeLogger();
     this.unsubscribeTransport = this.transport.onEvent((event) => {

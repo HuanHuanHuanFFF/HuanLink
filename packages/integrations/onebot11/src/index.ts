@@ -6,5 +6,7 @@ export * from "./forward-websocket-channel.js";
 export * from "./forward-websocket-transport.js";
 export * from "./group-message.js";
 export * from "./message-v1.js";
+export * from "./operation-contracts.js";
+export * from "./operations.js";
 export * from "./outbound-message-v1.js";
 export * from "./types.js";
