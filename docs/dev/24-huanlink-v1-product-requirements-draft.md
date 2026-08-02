@@ -15,8 +15,11 @@ v1.0 先形成可用的本地单用户产品能力，不提前建设完整权限
 - 第一条真实 Channel 使用 QQ，并对接 LLBot/NapCat 共用的 OneBot 11 兼容接口。
 - 先适配 WebSocket；HTTP 作为后续 Transport，不改变上层消息语义。
 - 白名单群消息由 Channel 转发到对应 session；Channel 不根据 Agent 是否回复来丢弃消息。`@HuanLink` 或明确命令可作为触发事实交给 Agent，最终是否回复由 Agent 决定。
+- 群聊中的可见 Agent 发言必须由 Agent 显式调用当前会话 `reply` Tool；普通最终文本、推理过程和其他 Tool 执行过程不自动发送到 Channel。Agent 不调用 `reply` 时，当前 turn 不产生可见群消息。
+- session 在有效上下文窗口内保留 Agent Tool Call 和对应 Tool Result。`reply` 成功取得平台 `messageId` 后先记录发送事实，Bot 自身消息事件回流后按 `channelId + messageId` 合并确认；同一会话构造模型上下文时保留 `reply` 调用和回执，但不重复展开已经关联的相同消息正文。
+- Agent 跨会话发送到某个群聊的消息必须进入目标群 session；目标群上下文以简短的“由其他会话发起”标记说明来源，来源会话只保留对应 Tool Call、目标和发送结果，不把目标群消息伪装成来源会话中的公开发言。
 - 后台任务受理和终态结果都必须回到原会话。
-- 任务完成时读取最新会话上下文，再触发一次新的 MainAgent turn。
+- 任务完成时读取最新会话上下文，再触发一次新的 MainAgent turn；是否向原会话发送最终结果仍由该 turn 调用 `reply` 决定，不直接自动投递后台任务输出。
 
 ## 3. Tool 与后台任务
 

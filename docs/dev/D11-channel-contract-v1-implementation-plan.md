@@ -1,6 +1,6 @@
 # HuanLink v1.0 Channel Contract v1 实施计划
 
-> **状态：执行中，B01～B05 已提交并推送；B05 通用命令触发补充改动已在本地完成，尚未提交，也未接入 Server 或真实 QQ。** 2026-07-24 起本文不再受原 M1 最小范围约束，改为把 Channel 作为独立模块逐步开发到成熟职责边界。任何后续代码、提交和推送仍须逐批确认。
+> **状态：执行中，B01～B05 已提交并推送；B06 OneBot 专属操作代码已在本地完成并处于文件级审核阶段，尚未提交，也未接入 Server 或真实 QQ。** 2026-07-24 起本文不再受原 M1 最小范围约束，改为把 Channel 作为独立模块逐步开发到成熟职责边界。任何后续代码、提交和推送仍须逐批确认。
 
 ## 1. 目标结果
 
@@ -15,7 +15,8 @@
 - 入站由 Adapter 生成平台格式字符串和 `contentFormat`，OneBot 统一使用原始 CQ 字符串；
 - 出站使用有序 `text | mention | attachmentLink | attachmentLocalPath` Parts，附件支持 HTTP(S) 链接和本机绝对路径；
 - Channel 和 Adapter 不下载、缓存、持久化或维护入站附件资源，完整入站内容交给 session；
-- Server 按稳定 `channelId` 注册、路由和回复 Channel；
+- Server 按稳定 `channelId` 注册和路由 Channel；Agent 只有显式调用当前会话 `reply` Tool 才产生 Channel 可见回复，普通最终文本、推理和执行过程不自动发送；
+- session 保留 Channel 消息以及 Agent Tool Call/Tool Result；发送回执和 Bot 自身消息事件按 `channelId + messageId` 关联，同一消息在模型上下文中不重复展开；
 - 正式源码、导出、测试和日志命名不再包含 `phase4` / `Phase4`。
 
 ## 2. 当前事实基线
@@ -35,6 +36,7 @@
 - OneBot 11 Codec、正向 WebSocket Transport 和 Channel Adapter；
 - OneBot 11 主要标准消息能力，以及通过受控 Tool 暴露的平台专属查询和群管理操作；
 - Server Channel Runtime、会话路由、实例注册和进程生命周期；
+- 当前会话 `reply` Tool、Agent Tool 历史保留、发送回执与自身消息事件关联，以及面向模型的去重上下文投影；
 - Channel 配置接入及群聊白名单/黑名单转发策略；
 - 轻量入站字符串合同、8 KiB 内容上限、session 转发和日志脱敏；
 - 当前 QQ 真实闭环的回归与复验。
@@ -56,7 +58,8 @@
 | 通用入站消息 | 群聊、私聊、发送者、引用关系、原始平台内容字符串、内容格式和触发元数据 | Channel 只转发到 session，不决定是否调用 Agent 或回复 |
 | OneBot 入站内容 | CQ 字符串原样保留；消息段数组由 Codec 编码为 CQ 字符串 | 不下载、缓存或维护附件；资源级 `key` 可随用户消息进入 session |
 | 通用出站消息 | 有序 `text | mention | attachmentLink | attachmentLocalPath` Parts、引用回复、主动撤回 | 链接只接受 HTTP(S)；本机附件只接受 HuanLink/Adapter 所在机器可读的绝对路径 |
-| OneBot 专属操作 | 消息/合并转发查询、登录和运行状态、好友/群/成员查询、禁言、踢人、群名片、群名称、管理员、好友和加群请求、好友赞 | 使用具名、类型化 `OneBot11Operations`，通过受控 Tool 向 Agent 暴露 |
+| 当前会话回复 | Agent 显式调用平台无关的 `reply` Tool；Handler 从可信 run context 取得固定 route，再调用 Channel `send()` | Agent 不提供任意群号、私聊 ID 或 `channelId`；普通最终文本不自动投递 |
+| OneBot 专属操作 | 消息查询、合并转发查询与发送、登录和运行状态、好友/群/成员查询、禁言、踢人、群名片、群名称、管理员、好友和加群请求、好友赞 | 使用具名、类型化 `OneBot11Operations`，通过受控 Tool 向 Agent 暴露 |
 | 实现扩展能力 | 编辑、reaction、typing、流式更新等 | 不属于 OneBot 11 基线；只有运行实现明确支持时才能声明 |
 | 敏感维护能力 | Cookies、CSRF、账号级凭证、重启、清缓存、隐藏 API | 不由 Channel 注入消息或提供任意 Action 透传；外层明确授权流程另行负责 |
 
@@ -70,7 +73,9 @@
 | OneBot11 Channel Adapter | OneBot 与统一合同双向映射、入站 CQ 规范化、发送者/触发识别、主要标准消息能力、能力声明 | HuanLink session、AgentCall、附件下载或资源仓库 |
 | OneBot11 Operations | 具名的平台查询、请求处理和群管理操作 | 通用 Channel 语义、任意原始 Action 透传 |
 | OneBot11 Operations Tool | Agent 可见参数、策略检查、确认和审计 | WebSocket、OneBot JSON 编码 |
-| Server Channel Runtime | Adapter 注册、启动/关闭、入站访问策略、session 元数据与转发、出站顺序、结果回流 | 平台协议解析、CQ 解析、Agent 调用和回复决策 |
+| Agent Session Context | Channel 消息、Tool Call/Tool Result、发送关联元数据和面向模型的上下文投影 | 平台协议解析、隐藏推理内容、跨重启持久化 |
+| Current-session Reply Tool | 取得可信当前 route、执行 Channel `send()`、返回精简回执并登记发送关联 | 任意目标发送、OneBot 专属 Action、自动发送 Agent 最终文本 |
+| Server Channel Runtime | Adapter 注册、启动/关闭、入站访问策略、session 元数据与转发、出站顺序和自身消息回流 | 平台协议解析、CQ 解析、替 Agent 决定是否回复 |
 
 建议的正式文件名使用职责，不使用阶段号：
 
@@ -93,6 +98,7 @@ packages/integrations/onebot11/src/
 
 apps/server/src/
   channel-runtime.ts
+  channel-reply-tool.ts
   process-lifecycle.ts
   main.ts
 ```
@@ -275,30 +281,41 @@ apps/server/src/
 
 只证明合同与 OneBot Adapter 代码完成，不声称已经接入 Server 或真实 QQ。
 
-## 10. B06：OneBot 专属操作与受控 Agent Tool 闭环
+## 10. B06：OneBot 专属操作合同闭环
 
 ### 修改
 
 - 建立具名、类型化的 `OneBot11Operations`，不向上层暴露任意 `action + params`。
 - 通用 Channel 发送只服务当前 session 的固定路由；跨群、跨私聊发送属于 OneBot Adapter 专属操作，不新增平台无关的任意目标发送 Tool。
-- 对明确支持扩展文件 API 的实现提供普通本机文件上传操作；返回结果使用文件资源 ID，不把 `file_id` 冒充 Channel 消息 ID。
-- 第一组覆盖消息和合并转发查询、登录/版本/运行状态、好友/群/群成员查询。
-- 第二组覆盖禁言、全员禁言、踢人、群名片、群名称、管理员、专属头衔和退群。
-- 第三组覆盖好友请求、加群请求/邀请和好友赞。
-- 建立受控 Agent Tool：按操作类型校验参数、会话上下文、允许范围和必要确认，并记录审计日志。
-- Cookies、CSRF、账号级凭证、远程重启、清缓存和隐藏 API 不通过 OneBot Operations Tool 暴露；用户明确授权后由其他本机 Agent 工具读取配置的行为由外层权限守卫负责。
-- 具体 OneBot 实现未支持的操作返回稳定 `not_supported`；实现扩展能力单独检测和声明。
+- `standard` 覆盖消息发送、消息和合并转发查询、登录/版本/运行状态、好友/群/群成员查询及好友赞；当前不考虑多账号选择，一个 Operations 实例只绑定一个 Transport。
+- 对明确支持 NapCat/go-cqhttp 兼容扩展的实现提供群聊和私聊合并转发发送；同时支持引用已有 `messageId` 的节点，以及由 `userId + displayName + content` 构造的自定义节点。自定义 `content` 保持 OneBot CQ 字符串，不开放任意 Action。
+- `privileged` 覆盖撤回、禁言、全员禁言、踢人、群名片、群名称、管理员、专属头衔、退群、好友请求和加群请求/邀请；撤回不检测消息归属，统一交由后续特权审批。
+- 对明确支持扩展文件 API 的实现提供可选普通本机文件上传扩展；不根据实现名称猜测能力，也不主动探测未知 Action。未注入扩展时抛出稳定的 `not_supported` 错误。
+- 所有成功操作直接返回远端原始 `response.data`，不返回完整 OneBot 响应信封，也不做实现相关字段归一化；Transport 继续负责远端失败、断连、超时和结果不确定错误。
+- 运行时只接受每个具名操作允许的字段，并校验 ID、布尔值、时长、枚举和本机文件路径；ID 是否真实存在、目标是否在 Agent 允许范围及特权操作是否获批留给后续运行时策略。
+- Cookies、CSRF、账号级凭证、远程重启、清缓存和隐藏 API 不通过 `OneBot11Operations` 暴露；用户明确授权后由其他本机 Agent 工具读取配置的行为由外层权限守卫负责。
+- B06 只修改 `packages/integrations/onebot11`；`onebot_standard`、`onebot_privileged` Tool Handler、统一审批策略和 Server 注册留到 B07。
 
 ### 验收
 
-- 每个暴露操作有类型校验、Action 编码、响应解析和失败映射测试。
-- Agent Tool 无法构造未登记的 Action，不能通过附加字段绕过参数白名单。
-- 群管理操作不能脱离明确群路由执行；需要确认的操作未经确认不得发送。
-- 日志不包含 Access Token、Cookies、CSRF 或未经筛选的原始响应。
+- 每个暴露操作有类型校验、Action 编码、原始 `response.data` 返回和失败透传测试。
+- `OneBot11Operations` 无法构造未登记的 Action，不能通过附加字段绕过参数白名单。
+- 群管理操作必须包含合法群号；文件上传或合并转发扩展缺失时稳定返回 `not_supported`。
+- Operations 和 Transport 日志不包含 Access Token、Cookies、CSRF 或未经筛选的原始响应。
+
+### 实际结果
+
+- OneBot Adapter 现在直接暴露同一 Transport 上的 `operations.standard` 和 `operations.privileged`；前者包含 21 个普通查询、发送和可选扩展方法，后者包含 11 个撤回、群管理和请求处理方法。
+- `standard` 新增群聊和私聊合并转发发送。显式启用 `go-cqhttp-compatible` 扩展后，可按原顺序混合发送引用节点和自定义节点；未启用时稳定返回 `not_supported`。
+- 所有标准 OneBot Action 都由内部具名构造器编码；运行时拒绝额外字段、非法 ID、非法时长、非法枚举和错误类型，不向 Agent 或 Server 暴露任意 Action 构造入口。
+- 成功响应直接返回同一个原始 `response.data`；Transport 的远端拒绝、未连接和结果不确定错误保持原类型。未注入文件上传扩展时返回带稳定 `not_supported` 代码的专属错误。
+- 文件上传只接受当前机器可读的 Windows/POSIX 绝对普通文件路径；具体实现必须显式注入群文件或私聊文件 Action 工厂，当前不按实现名称猜测或探测能力。
+- OneBot 分包 9 个测试文件、153 个测试通过，分包及全仓类型检查通过；空输出目录中的 TypeScript 构建发射通过。现有 `dist` 目录因 Windows `EPERM` 无法覆盖，未删除或改写该目录。
+- 本批没有实现 Tool Handler、允许范围检查、审批、Server 注册或真实 OneBot/QQ smoke；这些仍属于 B07/B08。
 
 ### 停点
 
-只证明 OneBot 专属操作和受控 Tool 完成；未注册进 Server 前不声明 Agent 已经可以调用。
+只证明 OneBot 专属操作合同和集成代码完成；未在 B07 建立 Handler、统一审批并注册进 Server 前，不声明 Agent 已经可以调用。
 
 ## 11. B07：Server Channel Runtime 与正式命名闭环
 
@@ -306,7 +323,10 @@ apps/server/src/
 
 - 用 `channel-runtime.ts` 取代 `phase4-qq-runtime.ts`，支持按 `channelId` 注册和查找 Adapter。
 - 用规范路由生成 session，并按 session 保留现有出站顺序控制。
-- 后台任务终态仍从 Conversation Store 读取原路由并返回原 Channel。
+- Conversation Session 使用结构化时间线，至少区分 Channel 消息、Agent Tool Call 和 Tool Result；当前有效上下文窗口内保留完整 Tool 调用及其结果，不把 Tool 执行历史降成一段无结构文本。
+- 注册平台无关的当前会话 `reply` Tool。Agent 不传目标 route；Handler 从可信 run context 取得当前 session 的固定 route，调用 Channel `send()`，并只返回发送状态、目标摘要和 `messageId`，不在 Tool Result 中重复正文。
+- Channel 触发的 Agent turn 使用 Tool 驱动的可见输出：普通 `finalOutput`、推理过程和其他 Tool 执行过程不自动发送；没有调用 `reply` 的 turn 不产生 Channel 可见消息。
+- 后台任务终态从 Conversation Store 读取最新上下文并重新触发 MainAgent turn；是否把最终结果发回原 Channel 仍由该 turn 调用 `reply` 决定，不直接自动投递后台任务输出。
 - 把 Channel 配置接入唯一 `.huanlink/config/config.json` 配置树。
 - 配置只表达用户策略和能力限制，不重复维护完整能力表；Server 使用 Adapter 最终公布的 `capabilities`。
 - OneBot Channel 配置增加显式 `inboundPolicy.groups`：
@@ -317,11 +337,14 @@ apps/server/src/
 - Adapter 提取平台提及和开头文本事实，Core Channel 生成并保留最终 mention/command trigger 元数据。是否调用 Agent、是否要求 @Bot、是否回复由上层 MainAgent/响应策略负责，不属于 Channel 配置或转发策略。
 - 群访问策略先于 Conversation Store 执行；被名单拒绝的消息不创建 session，也不产生 Channel 出站回复。
 - Server 在首次创建 session 时保存 `channelId`、conversation kind/ID、threadId 和 `contentFormat`；每条消息只追加 sender、完整规范内容或超限占位记录，不重复把固定路由元数据注入 Agent 文本。
-- OneBot 事件流是消息进入 session 的唯一来源：Bot 自身消息写入对应 session，但不触发 Agent；发送回执不提前补写消息。
-- session 按 `channelId + messageId` 判断消息是否已经进入上下文，处理平台重复上报；B07 不建立发送回执与事件流之间的持久对账。
+- Channel 发送在收到含有效 `messageId` 的成功回执后，按 `channelId + messageId` 把已确认的出站消息写入或更新目标 session；`delivery_uncertain`、明确失败或缺少有效 ID 时不猜测成功，也不提前创建公开消息。
+- Bot 自身消息继续通过 OneBot 事件流进入对应 session，但不触发 Agent。事件与已记录发送使用相同 `channelId + messageId` 幂等合并；事件先到或回执先到都只形成一条 Channel 消息。平台事件中的实际 route、sender 和规范内容作为观测事实保留，但不覆盖 HuanLink 已记录的逻辑出站 Parts，避免合并转发回流只有引用 ID 时丢失 Agent 实际发送内容。
+- Server 为 HuanLink 发起的发送关联 `toolCallId`、`runId`、来源 session 和目标 session。当前会话 `reply` 的回流消息与本地 Tool Call 关联；跨会话发送只在目标 session 记录公开消息，并保留内部 `cross_session` 来源元数据。
+- 面向模型构造上下文时保留 `reply` Tool Call 和 Tool Result；若同一 session 的回流正文与 Tool 参数一致，只追加简短的已回流确认，不再次展开相同正文。若平台事件内容不同，则完整保留平台事实。
+- 跨会话发送的来源 session 保留发送 Tool Call、目标摘要和结果；目标 session 显示完整消息，并以简短的 `HuanLink（由其他会话发起）` 标记来源，不暴露具体来源 session ID。没有本地发送关联的 Bot 自身消息按普通自身消息完整进入目标 session。
 - 普通日志只记录脱敏摘要；完整内容只进入 session。当前 Conversation Store 仍为进程内状态，B07 不新增数据库或重启恢复。
-- v1 暂不补偿网络波动造成的 Bot 自身事件遗漏；数据库、重启持久化和事件对账留到后续基础设施阶段。
-- 注册受控 OneBot Operations Tool；Agent 只能看到允许的具名操作，不获得原始 OneBot Action 或凭证。
+- 成功回执可以在当前进程内补足未回流的自身消息，但 v1 不提供数据库、跨重启恢复或持久对账；进程在回执或事件写入前退出时仍可能丢失记录。
+- 注册 `onebot_standard` 和 `onebot_privileged` 两个受控 Tool；前者仍检查目标允许范围，后者把审批需求交给统一策略，由其决定人工审批、Review Agent 或 Full Access。Agent 只能看到允许的具名操作，不获得原始 OneBot Action 或凭证。跨群/私聊发送仍向 Agent 返回原始 `response.data`，Handler 只对已知发送操作额外读取有效 `message_id` 用于 session 关联。
 - 将当前单个 `groupId` 迁移到上述群策略；私聊继续使用独立、显式的允许会话配置，不与群号列表混用。
 - 用 `process-lifecycle.ts` 取代 `phase4-process-lifecycle.ts`。
 - 清理正式源码、导出、函数、类型、测试、fixture 和日志中的 `phase4` / `Phase4`。
@@ -353,8 +376,12 @@ apps/server/src/
 - 被群访问策略拒绝的消息不进入 Conversation Store，且不产生 Channel 出站回复。
 - 群聊 session 整群共享，私聊 session 按私聊 ID 隔离。
 - 固定 route 和 `contentFormat` 只保存在 session 元数据；每条消息保留发送者和完整 CQ 内容，超过 8 KiB 时保存占位记录。
-- Channel Runtime 不根据 trigger 调用 Agent 或主动回复；对应行为由上层策略测试。
-- 主动消息、即时回复和后台终态都能回到指定路由。
+- Channel Runtime 不根据 trigger 替 Agent 决定是否回复；对应 Agent 调用策略由上层测试。Agent普通最终文本不会自动发到 Channel，只有成功执行 `reply` Tool 才产生当前会话可见回复。
+- Agent session 在后续 turn 中仍能看到成对的 Tool Call/Tool Result；`reply` 的 Tool Result 不复制正文，同一会话已关联的自身消息回流也不重复展开相同正文。
+- 当前会话 `reply` 的 route 不能由 Agent 覆盖；成功回执返回 `messageId`，回执和自身事件无论先后都按 `channelId + messageId` 合并为一条公开消息，重复事件不会产生第二条上下文记录。
+- `delivery_uncertain` 不产生猜测性成功记录；若后续真实自身事件到达，仍可按事件创建消息。
+- 跨会话发送在来源 Agent 历史中保留 Tool Call、目标和结果，在目标 session 中保留完整公开消息及简短“由其他会话发起”标记；两个 session 不互相复制不属于本会话的公开时间线。
+- 即时回复和后台终态都能在 Agent 显式调用 `reply` 后回到当前 session 的固定路由；跨群/私聊操作只能到达已允许目标。
 - `apps/server/src` 和相应测试中不存在活动的 `phase4` / `Phase4` 命名。
 - 旧 `phase4-qq` 文件和导出不保留兼容别名，避免形成两套入口。
 
@@ -369,16 +396,18 @@ apps/server/src/
 1. Core Channel Contract 单元测试。
 2. OneBot CQ 字符串/消息段数组 Codec、Transport、Adapter 单元测试。
 3. OneBot 撤回、主要消息能力、专属操作和受控 Tool 测试。
-4. 入站 8 KiB 上限、超限 session 占位、群访问转发和日志脱敏测试。
-5. Server Channel Runtime、会话路由、出站顺序和进程关闭测试。
-6. package 级测试、全仓 typecheck 和 build。
-7. 在用户确认并具备 OneBot 环境时执行真实 QQ smoke。
+4. 当前会话 `reply` Tool、Tool 历史保留、发送回执/自身事件关联和跨会话来源投影测试。
+5. 入站 8 KiB 上限、超限 session 占位、群访问转发和日志脱敏测试。
+6. Server Channel Runtime、会话路由、出站顺序和进程关闭测试。
+7. package 级测试、全仓 typecheck 和 build。
+8. 在用户确认并具备 OneBot 环境时执行真实 QQ smoke。
 
 真实 smoke 至少覆盖：
 
-- QQ 群明确命令或 @ -> MainAgent -> A2A -> Codex -> 原群回复；
+- QQ 群明确命令或 @ -> MainAgent -> A2A -> Codex -> MainAgent 调用 `reply` -> 原群回复；普通最终文本和执行过程不会自动发群；
 - 允许群的普通消息、@Bot 消息和命令消息都进入同一个群 session，Channel 不根据 trigger 丢弃消息；
 - HuanLink 主动向已允许群发送文本；
+- 同一会话 `reply` 的 Tool Call/Tool Result 在下一 turn 仍可见，自身消息回流不会重复展开同一正文；跨会话发送在目标群显示一次完整消息和简短来源标记；
 - HuanLink 从本机绝对路径向允许会话发送一个媒体或文件附件；
 - 私聊收发、引用回复和发送后撤回；
 - OneBot CQ 字符串和消息段数组都形成规范 CQ 入站内容；至少一条带 URL、资源级 `key` 或扩展字段的附件消息完整进入 session，过程中不下载或缓存附件；
