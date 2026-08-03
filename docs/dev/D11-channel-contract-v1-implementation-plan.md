@@ -1,6 +1,6 @@
 # HuanLink v1.0 Channel Contract v1 实施计划
 
-> **状态：执行中，B01～B05 已提交并推送；B06 OneBot 专属操作代码已在本地完成并处于文件级审核阶段，尚未提交，也未接入 Server 或真实 QQ。** 2026-07-24 起本文不再受原 M1 最小范围约束，改为把 Channel 作为独立模块逐步开发到成熟职责边界。任何后续代码、提交和推送仍须逐批确认。
+> **状态：执行中，B01～B06 已提交并推送；B07 Core Conversation Session 基础已推送，当前会话 `reply` 闭环已在本地实现并待文件级审核，尚未接入正式 Server Channel Runtime 或真实 QQ。** 2026-07-24 起本文不再受原 M1 最小范围约束，改为把 Channel 作为独立模块逐步开发到成熟职责边界。任何后续代码、提交和推送仍须逐批确认。
 
 ## 1. 目标结果
 
@@ -16,7 +16,7 @@
 - 出站使用有序 `text | mention | attachmentLink | attachmentLocalPath` Parts，附件支持 HTTP(S) 链接和本机绝对路径；
 - Channel 和 Adapter 不下载、缓存、持久化或维护入站附件资源，完整入站内容交给 session；
 - Server 按稳定 `channelId` 注册和路由 Channel；Agent 只有显式调用当前会话 `reply` Tool 才产生 Channel 可见回复，普通最终文本、推理和执行过程不自动发送；
-- session 保留 Channel 消息以及 Agent Tool Call/Tool Result；发送回执和 Bot 自身消息事件按 `channelId + messageId` 关联，同一消息在模型上下文中不重复展开；
+- session 结构化保留 Channel 消息以及 Agent Tool Call/Tool Result；发送回执只登记待回流关联，Bot 自身消息事件按 `channelId + messageId` 写入并去重；
 - 正式源码、导出、测试和日志命名不再包含 `phase4` / `Phase4`。
 
 ## 2. 当前事实基线
@@ -36,7 +36,7 @@
 - OneBot 11 Codec、正向 WebSocket Transport 和 Channel Adapter；
 - OneBot 11 主要标准消息能力，以及通过受控 Tool 暴露的平台专属查询和群管理操作；
 - Server Channel Runtime、会话路由、实例注册和进程生命周期；
-- 当前会话 `reply` Tool、Agent Tool 历史保留、发送回执与自身消息事件关联，以及面向模型的去重上下文投影；
+- 当前会话 `reply` Tool、Agent Tool Call/Tool Result 结构化记录，以及发送回执与自身消息事件关联；
 - Channel 配置接入及群聊白名单/黑名单转发策略；
 - 轻量入站字符串合同、8 KiB 内容上限、session 转发和日志脱敏；
 - 当前 QQ 真实闭环的回归与复验。
@@ -50,6 +50,8 @@
 - 入站附件下载、附件访问代理、持久化缓存、转码或长期归档；
 - 多租户权限平台、跨平台身份合并和远程公网鉴权；
 - Telegram 等其他平台 Adapter 和工业化扩展。
+- 把 Conversation Session 投影为具体模型输入、在后续 turn 重放 Tool 历史、Token 窗口与上下文压缩；这些属于后续 Agent Runtime 模块。
+- 后台任务终态读取历史并重新组装 Agent 上下文；Channel 只保证所有可见出站仍须通过显式 Tool 调用。
 
 ### OneBot 11 主要能力边界
 
@@ -73,8 +75,8 @@
 | OneBot11 Channel Adapter | OneBot 与统一合同双向映射、入站 CQ 规范化、发送者/触发识别、主要标准消息能力、能力声明 | HuanLink session、AgentCall、附件下载或资源仓库 |
 | OneBot11 Operations | 具名的平台查询、请求处理和群管理操作 | 通用 Channel 语义、任意原始 Action 透传 |
 | OneBot11 Operations Tool | Agent 可见参数、策略检查、确认和审计 | WebSocket、OneBot JSON 编码 |
-| Agent Session Context | Channel 消息、Tool Call/Tool Result、发送关联元数据和面向模型的上下文投影 | 平台协议解析、隐藏推理内容、跨重启持久化 |
-| Current-session Reply Tool | 取得可信当前 route、执行 Channel `send()`、返回精简回执并登记发送关联 | 任意目标发送、OneBot 专属 Action、自动发送 Agent 最终文本 |
+| Conversation Session Store | Channel 消息、Tool Call/Tool Result 结构化记录、发送关联元数据和进程内去重 | 模型输入投影、Token 窗口与压缩、跨重启持久化 |
+| Current-session Reply Tool | 只向显式 `external_channel` session 提供，取得可信当前 route、执行 Channel `send()`、返回精简回执并登记发送关联 | 任意目标发送、OneBot 专属 Action、自动发送 Agent 最终文本 |
 | Server Channel Runtime | Adapter 注册、启动/关闭、入站访问策略、session 元数据与转发、出站顺序和自身消息回流 | 平台协议解析、CQ 解析、替 Agent 决定是否回复 |
 
 建议的正式文件名使用职责，不使用阶段号：
@@ -319,36 +321,45 @@ apps/server/src/
 
 ## 11. B07：Server Channel Runtime 与正式命名闭环
 
-### 修改
+### 已完成基础
 
-- 用 `channel-runtime.ts` 取代 `phase4-qq-runtime.ts`，支持按 `channelId` 注册和查找 Adapter。
-- 用规范路由生成 session，并按 session 保留现有出站顺序控制。
-- Conversation Session 使用结构化时间线，至少区分 Channel 消息、Agent Tool Call 和 Tool Result；当前有效上下文窗口内保留完整 Tool 调用及其结果，不把 Tool 执行历史降成一段无结构文本。
-- 注册平台无关的当前会话 `reply` Tool。Agent 不传目标 route；Handler 从可信 run context 取得当前 session 的固定 route，调用 Channel `send()`，并只返回发送状态、目标摘要和 `messageId`，不在 Tool Result 中重复正文。
-- Channel 触发的 Agent turn 使用 Tool 驱动的可见输出：普通 `finalOutput`、推理过程和其他 Tool 执行过程不自动发送；没有调用 `reply` 的 turn 不产生 Channel 可见消息。
-- 后台任务终态从 Conversation Store 读取最新上下文并重新触发 MainAgent turn；是否把最终结果发回原 Channel 仍由该 turn 调用 `reply` 决定，不直接自动投递后台任务输出。
-- 把 Channel 配置接入唯一 `.huanlink/config/config.json` 配置树。
-- 配置只表达用户策略和能力限制，不重复维护完整能力表；Server 使用 Adapter 最终公布的 `capabilities`。
-- OneBot Channel 配置增加显式 `inboundPolicy.groups`：
-  - `mode` 只接受 `allowlist | denylist`；
-  - `ids` 保存唯一的群号字符串列表。
-- `allowlist` 只把 `ids` 中的群转发到 session；`denylist` 把除 `ids` 外的群转发到 session。`denylist` 是用户显式选择的开放策略，空 `ids` 表示允许所有群，不提供隐式模式或默认回退。
-- 通过群访问策略的所有消息都进入整群共享 session；Channel 不用 mention 或命令决定是否转发。
-- Adapter 提取平台提及和开头文本事实，Core Channel 生成并保留最终 mention/command trigger 元数据。是否调用 Agent、是否要求 @Bot、是否回复由上层 MainAgent/响应策略负责，不属于 Channel 配置或转发策略。
-- 群访问策略先于 Conversation Store 执行；被名单拒绝的消息不创建 session，也不产生 Channel 出站回复。
-- Server 在首次创建 session 时保存 `channelId`、conversation kind/ID、threadId 和 `contentFormat`；每条消息只追加 sender、完整规范内容或超限占位记录，不重复把固定路由元数据注入 Agent 文本。
-- Channel 发送在收到含有效 `messageId` 的成功回执后，只按 `channelId + messageId` 登记进程内待回流关联，不用 Tool 参数或发送回执构造公开 Channel 消息；`delivery_uncertain`、明确失败或缺少有效 ID 时不登记关联，也不猜测成功。
-- Bot 自身消息继续通过 OneBot 事件流进入对应 session，但不触发 Agent。平台事件是公开 Channel 消息的唯一写入来源；事件回流时按 `channelId + messageId` 幂等去重并关联已有 Tool Call。事件先到时先保存平台事实、回执到达后补充关联；回执先到时只暂存关联、事件到达后再创建消息。
-- Server 为 HuanLink 发起的发送关联 `toolCallId`、`runId`、来源 session 和目标 session。当前会话 `reply` 的回流消息与本地 Tool Call 关联；跨会话发送只在目标 session 记录公开消息，并保留内部 `cross_session` 来源元数据。
-- 面向模型构造上下文时保留 `reply` Tool Call 和 Tool Result；若同一 session 的回流正文与 Tool 参数一致，只追加简短的已回流确认，不再次展开相同正文。若平台事件内容不同，则完整保留平台事实。
-- 跨会话发送的来源 session 保留发送 Tool Call、目标摘要和结果；目标 session 显示完整消息，并以简短的 `HuanLink（由其他会话发起）` 标记来源，不暴露具体来源 session ID。没有本地发送关联的 Bot 自身消息按普通自身消息完整进入目标 session。
-- 普通日志只记录脱敏摘要；完整内容只进入 session。当前 Conversation Store 仍为进程内状态，B07 不新增数据库或重启恢复。
-- 成功回执不能补建未回流的公开消息；若平台自身消息事件始终未到达，session 只保留来源 Tool Call/Tool Result。待回流关联只存在于当前进程，v1 不提供数据库、跨重启恢复或持久对账。
-- 注册 `onebot_standard` 和 `onebot_privileged` 两个受控 Tool；前者仍检查目标允许范围，后者把审批需求交给统一策略，由其决定人工审批、Review Agent 或 Full Access。Agent 只能看到允许的具名操作，不获得原始 OneBot Action 或凭证。跨群/私聊发送仍向 Agent 返回原始 `response.data`，Handler 只对已知发送操作额外读取有效 `message_id` 用于 session 关联。
-- 将当前单个 `groupId` 迁移到上述群策略；私聊继续使用独立、显式的允许会话配置，不与群号列表混用。
-- 用 `process-lifecycle.ts` 取代 `phase4-process-lifecycle.ts`。
-- 清理正式源码、导出、函数、类型、测试、fixture 和日志中的 `phase4` / `Phase4`。
-- 逐步迁移已有测试，不先做一次无行为价值的全局改名。
+- Core 已提供结构化 Conversation Session 和进程内 Store，区分 Channel 消息、Agent Tool Call 与 Tool Result。
+- Store 已实现固定 route/contentFormat、`runId + toolCallId` 配对、发送回执待回流关联、Bot 自身消息事件写入和 `channelId + messageId` 去重。
+- 成功回执不构造公开消息；来源 Tool Call 缺失或同一消息 ID 出现冲突关联时明确报错。
+
+### 剩余修改
+
+#### 闭环一：当前会话 `reply`
+
+- 注册平台无关的当前会话 `reply` Tool。它只向元数据显式标记为 `external_channel` 的 session 提供；Adapter 暂时断线时仍保持可见并在调用后返回错误。Agent 不传目标 route，Handler 从可信 session 元数据取得固定 route；跨会话发送继续使用受控平台 Tool。
+- `reply` 接受完整有序 Parts 和可选 `replyToMessageId`。引用 ID 不在 Core/Server 检查 session 归属，原样交给 Adapter 和平台判断。一次 Agent run 可调用零次、一次或多次；每次调用最多执行一次 `Channel.send()`，不在 Handler 内自动重试，是否再次调用由 Agent 判断。
+- `reply` 使用精简 JSON 结果：成功为 `{ status: "success", tool: "reply", messageId }`；明确失败为 `{ status: "error", tool: "reply", error }`；已发出但结果未知为 `{ status: "uncertain", tool: "reply", error }`；消息已发送但 session 关联失败时返回 `success`、`messageId` 和 `warning`。`error` 尽量保留 Adapter 原始错误，只移除凭证、调用栈和不安全对象展开。
+- Agent Runtime 只增加 `reply` 注册、可信 run context 和结构化调用结果所需的最小接口，不读取完整 Session 历史。普通 `finalOutput`、推理过程和其他 Tool 执行过程不自动发送；没有调用 `reply` 的 turn 不产生 Channel 可见消息。
+- 每次 `reply` 的 Tool Call/Tool Result 都写入来源 session。成功回执只登记待回流关联；平台自身消息事件才创建公开消息并按 `channelId + messageId` 去重。明确失败不登记；`delivery_uncertain` 或成功响应缺少有效 `messageId` 返回 `uncertain`，不猜测成功。
+
+#### 闭环二：Server Channel Runtime
+
+- 用 `channel-runtime.ts` 取代 `phase4-qq-runtime.ts`，按稳定 `channelId` 注册和查找 Adapter，接入已完成的 Conversation Session Store，并保留每个 session 的出站顺序。
+- 把 Channel 配置接入唯一 `.huanlink/config/config.json`。群聊使用显式 `allowlist | denylist` 与唯一群号列表；私聊使用独立允许范围；Server 采用 Adapter 最终公布的能力。
+- 群访问策略先于 Store；通过策略的普通消息、@Bot 消息和命令消息都进入整群共享 session。Channel 只保留 trigger，不用 trigger 决定是否转发或回复。
+- Bot 自身消息进入目标 session 但不触发 Agent；当前会话 `reply` 与本地 Tool Call 关联，受控平台 Tool 的跨会话发送在来源/目标 session 保存关联元数据。
+- 注册 `onebot_standard` 和 `onebot_privileged` 两个受控 Tool。前者检查目标允许范围，后者把审批交给统一策略；不向 Agent 暴露原始 OneBot Action 或凭证。
+- 普通日志只记录脱敏摘要，不记录完整消息、Tool 参数、附件 URL 或资源级凭证。
+
+#### 闭环三：正式切换与清理
+
+- 将当前单个 `groupId` 迁移到正式群聊/私聊策略，使用规范 route 保存固定 session 元数据，不重复注入固定路由文本。
+- 用 `process-lifecycle.ts` 取代 `phase4-process-lifecycle.ts`，迁移现有测试并保持进程关闭行为。
+- 删除旧 `phase4-qq` 入口、旧 Conversation Store 及迁移期 Channel 合同；正式源码、导出、测试、fixture 和日志不再保留 `phase4` / `Phase4`。
+- 完成 B07 自动化验证和文件级 review 后停下报告，不在本批增加数据库、重启恢复或可靠投递补偿。
+
+### 明确后移到 Agent Runtime 模块
+
+- 建立统一的 Conversation Session 抽象：普通内部 session 显式标记为 `internal`，外部群聊/私聊 session 标记为 `external_channel` 并保存固定 Channel route；当前 B07 Store 仍只代表外部 Channel session，不宣称已经保存普通 session 历史。
+- 把完整 Conversation Session 转换成具体模型或 SDK 输入。
+- 在后续 turn 向模型重放历史 Tool Call/Tool Result，并消除 Tool 参数与回流正文的重复展示。
+- Token 计算、上下文窗口、裁剪与压缩。
+- 后台任务终态读取最新历史并重新触发 MainAgent turn。
 
 ### 正式命名
 
@@ -377,11 +388,11 @@ apps/server/src/
 - 群聊 session 整群共享，私聊 session 按私聊 ID 隔离。
 - 固定 route 和 `contentFormat` 只保存在 session 元数据；每条消息保留发送者和完整 CQ 内容，超过 8 KiB 时保存占位记录。
 - Channel Runtime 不根据 trigger 替 Agent 决定是否回复；对应 Agent 调用策略由上层测试。Agent普通最终文本不会自动发到 Channel，只有成功执行 `reply` Tool 才产生当前会话可见回复。
-- Agent session 在后续 turn 中仍能看到成对的 Tool Call/Tool Result；`reply` 的 Tool Result 不复制正文，同一会话已关联的自身消息回流也不重复展开相同正文。
-- 当前会话 `reply` 的 route 不能由 Agent 覆盖；成功回执返回 `messageId` 但不创建公开消息，自身事件回流后才按 `channelId + messageId` 写入并关联 Tool Call，重复事件不会产生第二条上下文记录。
+- Conversation Session Store 能保存成对的 Tool Call/Tool Result；`reply` 的 Tool Result 不复制正文。本批不验收这些历史是否已经在后续 turn 投影给模型。
+- 当前会话 `reply` 只向显式 `external_channel` session 提供，route 不能由 Agent 覆盖；成功回执返回 `messageId` 但不创建公开消息，自身事件回流后才按 `channelId + messageId` 写入并关联 Tool Call，重复事件不会产生第二条上下文记录。
 - `delivery_uncertain` 不产生猜测性成功记录；若后续真实自身事件到达，仍可按事件创建消息。
-- 跨会话发送在来源 Agent 历史中保留 Tool Call、目标和结果，在目标 session 中保留完整公开消息及简短“由其他会话发起”标记；两个 session 不互相复制不属于本会话的公开时间线。
-- 即时回复和后台终态都能在 Agent 显式调用 `reply` 后回到当前 session 的固定路由；跨群/私聊操作只能到达已允许目标。
+- 跨会话发送在来源 session 中保留 Tool Call/Tool Result，在目标 session 中保留完整公开消息及内部 `cross_session` 元数据；两个 session 不互相复制不属于本会话的公开时间线。
+- 当前 Agent turn 显式调用 `reply` 后能回到当前 session 的固定路由；跨群/私聊操作只能通过受控平台 Tool 到达已允许目标。后台任务重新组装上下文不在本批验收。
 - `apps/server/src` 和相应测试中不存在活动的 `phase4` / `Phase4` 命名。
 - 旧 `phase4-qq` 文件和导出不保留兼容别名，避免形成两套入口。
 
@@ -396,7 +407,7 @@ apps/server/src/
 1. Core Channel Contract 单元测试。
 2. OneBot CQ 字符串/消息段数组 Codec、Transport、Adapter 单元测试。
 3. OneBot 撤回、主要消息能力、专属操作和受控 Tool 测试。
-4. 当前会话 `reply` Tool、Tool 历史保留、发送回执/自身事件关联和跨会话来源投影测试。
+4. 当前会话 `reply` Tool、Tool Call/Tool Result 记录、发送回执/自身事件关联和跨会话来源元数据测试。
 5. 入站 8 KiB 上限、超限 session 占位、群访问转发和日志脱敏测试。
 6. Server Channel Runtime、会话路由、出站顺序和进程关闭测试。
 7. package 级测试、全仓 typecheck 和 build。
@@ -407,7 +418,7 @@ apps/server/src/
 - QQ 群明确命令或 @ -> MainAgent -> A2A -> Codex -> MainAgent 调用 `reply` -> 原群回复；普通最终文本和执行过程不会自动发群；
 - 允许群的普通消息、@Bot 消息和命令消息都进入同一个群 session，Channel 不根据 trigger 丢弃消息；
 - HuanLink 主动向已允许群发送文本；
-- 同一会话 `reply` 的 Tool Call/Tool Result 在下一 turn 仍可见，自身消息回流不会重复展开同一正文；跨会话发送在目标群显示一次完整消息和简短来源标记；
+- 同一会话 `reply` 的 Tool Call/Tool Result 被结构化记录，自身消息回流只形成一条公开消息；跨会话发送在目标 session 中形成一条完整公开消息和内部来源元数据；
 - HuanLink 从本机绝对路径向允许会话发送一个媒体或文件附件；
 - 私聊收发、引用回复和发送后撤回；
 - OneBot CQ 字符串和消息段数组都形成规范 CQ 入站内容；至少一条带 URL、资源级 `key` 或扩展字段的附件消息完整进入 session，过程中不下载或缓存附件；
