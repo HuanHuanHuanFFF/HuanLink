@@ -21,10 +21,22 @@ export function cloneConversationSession(
 ): ConversationSession {
   return {
     metadata: {
+      kind: session.metadata.kind,
       route: cloneChannelConversationRoute(session.metadata.route),
       contentFormat: session.metadata.contentFormat
     },
     timeline: session.timeline.map(cloneConversationTimelineEntry)
+  };
+}
+
+/** 返回固定 Session 元数据的防御性副本。 */
+export function cloneConversationSessionMetadata(
+  metadata: ConversationSessionMetadata
+): ConversationSessionMetadata {
+  return {
+    kind: metadata.kind,
+    route: cloneChannelConversationRoute(metadata.route),
+    contentFormat: metadata.contentFormat
   };
 }
 

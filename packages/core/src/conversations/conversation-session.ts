@@ -16,6 +16,8 @@ export type ConversationJsonValue =
 
 /** 一个 Channel session 只保存一次的固定路由与内容格式。 */
 export type ConversationSessionMetadata = {
+  /** 显式区分可向外部聊天回复的 Session，不根据 ID 或连接状态推断。 */
+  readonly kind: "external_channel";
   readonly route: ChannelConversationRouteV1;
   readonly contentFormat: string;
 };

@@ -29,6 +29,7 @@ import type {
   OneBot11Transport,
 } from "./types.js";
 import {
+  formatOneBot11RemoteActionError,
   OneBot11DeliveryUncertainError,
   OneBot11RemoteActionError,
   OneBot11TransportUnavailableError,
@@ -129,7 +130,7 @@ export class OneBot11ChannelAdapterV1 implements ChannelAdapterV1 {
       const messageId = readOneBot11MessageId(response);
       if (messageId === undefined) {
         throw new ChannelOperationError(
-          "permanent_failure",
+          "delivery_uncertain",
           "OneBot 11 send response did not contain message_id",
         );
       }
@@ -257,14 +258,14 @@ function normalizeOperationError(
   if (error instanceof OneBot11DeliveryUncertainError) {
     return new ChannelOperationError(
       "delivery_uncertain",
-      `OneBot 11 ${operation} result is unknown`,
+      error.message,
       { cause: error },
     );
   }
   if (error instanceof OneBot11TransportUnavailableError) {
     return new ChannelOperationError(
       "temporarily_unavailable",
-      `OneBot 11 ${operation} transport is unavailable`,
+      error.message,
       { cause: error },
     );
   }
@@ -272,7 +273,7 @@ function normalizeOperationError(
     const code = mapRemoteActionErrorCode(error.retcode);
     return new ChannelOperationError(
       code,
-      `OneBot 11 ${operation} was rejected by the platform`,
+      formatOneBot11RemoteActionError(error),
       { cause: error },
     );
   }

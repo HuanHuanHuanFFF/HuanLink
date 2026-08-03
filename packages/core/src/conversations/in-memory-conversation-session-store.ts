@@ -22,6 +22,7 @@ import {
   cloneConversationJsonRecord,
   cloneConversationJsonValue,
   cloneConversationSession,
+  cloneConversationSessionMetadata,
   cloneInboundChannelMessage
 } from "./conversation-session-copy.js";
 import {
@@ -330,6 +331,16 @@ export class InMemoryConversationSessionStore {
       : cloneConversationSession(session);
   }
 
+  /** 返回固定 Session 元数据，不复制可能持续增长的时间线。 */
+  getSessionMetadata(
+    sessionId: SessionId
+  ): ConversationSessionMetadata | undefined {
+    const metadata = this.sessions.get(sessionId)?.metadata;
+    return metadata === undefined
+      ? undefined
+      : cloneConversationSessionMetadata(metadata);
+  }
+
   private ensureSession(
     sessionId: SessionId,
     route: ChannelConversationRouteV1,
@@ -340,6 +351,7 @@ export class InMemoryConversationSessionStore {
     if (existing === undefined) {
       const created = {
         metadata: {
+          kind: "external_channel" as const,
           route: cloneChannelConversationRoute(route),
           contentFormat
         },

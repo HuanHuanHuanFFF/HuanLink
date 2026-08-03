@@ -37,6 +37,7 @@ describe("InMemoryConversationSessionStore", () => {
 
     expect(store.getSession("session-a")).toEqual({
       metadata: {
+        kind: "external_channel",
         route: {
           channelId: "qq-main",
           conversationKind: "group",
@@ -53,6 +54,24 @@ describe("InMemoryConversationSessionStore", () => {
         }
       ]
     });
+  });
+
+  test("returns explicit external-channel metadata without copying the timeline", () => {
+    const store = new InMemoryConversationSessionStore();
+    store.appendChannelMessage("session-a", inboundMessage("message-1"));
+
+    const metadata = store.getSessionMetadata("session-a");
+
+    expect(metadata).toEqual({
+      kind: "external_channel",
+      route: {
+        channelId: "qq-main",
+        conversationKind: "group",
+        conversationId: "10001"
+      },
+      contentFormat: "onebot11.cq"
+    });
+    expect(metadata).not.toBe(store.getSession("session-a")?.metadata);
   });
 
   test("keeps Agent Tool Call and Tool Result as separate structured entries", () => {

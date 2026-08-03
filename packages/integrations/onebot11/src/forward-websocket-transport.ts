@@ -477,6 +477,8 @@ export class ForwardWebSocketOneBot11Transport implements OneBot11Transport {
       new OneBot11RemoteActionError({
         status: frame.status,
         retcode: frame.retcode,
+        message: frame.message,
+        wording: frame.wording,
       }),
     );
   }
@@ -501,7 +503,7 @@ export class ForwardWebSocketOneBot11Transport implements OneBot11Transport {
       {
         conversationId: pending.conversationId,
         echo,
-        error,
+        error: actionErrorForLog(error),
       },
     );
     pending.reject(error);
@@ -516,7 +518,7 @@ export class ForwardWebSocketOneBot11Transport implements OneBot11Transport {
     this.writeLog(
       aborted ? "debug" : "error",
       aborted ? "onebot11.reply.aborted" : "onebot11.reply.failed",
-      { conversationId, error },
+      { conversationId, error: actionErrorForLog(error) },
     );
     return Promise.reject(error);
   }
@@ -591,6 +593,19 @@ export class ForwardWebSocketOneBot11Transport implements OneBot11Transport {
       // Logging observers must not break transport lifecycle.
     }
   }
+}
+
+/** 远端拒绝原文保留在受控详情字段；普通运行日志仅保留协议状态码。 */
+function actionErrorForLog(error: Error): Error {
+  if (!(error instanceof OneBot11RemoteActionError)) {
+    return error;
+  }
+  return new Error(
+    "OneBot 11 action failed: status=" +
+      String(error.status) +
+      " retcode=" +
+      String(error.retcode),
+  );
 }
 
 /** 将 ws 支持的所有 RawData 形态统一解码为 UTF-8 文本。 */

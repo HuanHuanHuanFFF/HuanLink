@@ -29,6 +29,7 @@ import {
   type MainAgentModelBinding
 } from "./main-agent-runtime.js";
 import { createBestEffortRuntimeLogger } from "./best-effort-runtime-logger.js";
+import type { CreateChannelReplyToolOptions } from "./channel-reply-tool.js";
 
 export type Phase3ReentryResult = {
   runId: RunId;
@@ -63,6 +64,7 @@ export type CreatePhase3HuanLinkRuntimeOptions = {
   onReentry?: (result: Phase3ReentryResult) => Promise<void> | void;
   onBackgroundError?: AgentCallBackgroundErrorListener;
   logger?: RuntimeLogger;
+  channelReply?: CreateChannelReplyToolOptions;
 };
 
 export type Phase3MainAgentInput = Pick<
@@ -99,6 +101,9 @@ export function createPhase3HuanLinkRuntime(
     codexSkillId: options.codexSkillId,
     runner: options.runner,
     modelBinding: options.modelBinding,
+    ...(options.channelReply === undefined
+      ? {}
+      : { channelReply: options.channelReply }),
     logger: logger.child({ source: "main_agent" })
   });
   const turns = new AgentTurnScheduler({ runtime: mainAgent });

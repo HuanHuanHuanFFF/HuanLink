@@ -297,10 +297,11 @@ describe("ForwardWebSocketOneBot11Channel", () => {
     ).toEqual([0, 1]);
   });
 
-  test("logs only status and retcode for a failed reply", async () => {
+  test("keeps remote details out of legacy Channel errors and runtime logs", async () => {
     const { server, url } = await startServer();
     const sensitiveRemoteMessage =
       "[CQ:image,url=https://example.invalid/a.png,key=remote-secret]";
+    const remoteWording = "platform rejected this action";
     server.on("connection", (socket) => {
       socket.on("message", (data) => {
         const request = readFrame(data);
@@ -309,6 +310,7 @@ describe("ForwardWebSocketOneBot11Channel", () => {
             status: "failed",
             retcode: 1404,
             message: sensitiveRemoteMessage,
+            wording: remoteWording,
             echo: request.echo,
           }),
         );
@@ -326,6 +328,7 @@ describe("ForwardWebSocketOneBot11Channel", () => {
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toContain("retcode=1404");
     expect((error as Error).message).not.toContain(sensitiveRemoteMessage);
+    expect((error as Error).message).not.toContain(remoteWording);
     expect(failed).toMatchObject({
       level: "error",
       fields: {
@@ -341,6 +344,7 @@ describe("ForwardWebSocketOneBot11Channel", () => {
       ),
     ).toBe(false);
     expect(loggedError(failed).message).not.toContain(sensitiveRemoteMessage);
+    expect(loggedError(failed).message).not.toContain(remoteWording);
   });
 
   test("reports a remote close reason in the pending reply failure", async () => {

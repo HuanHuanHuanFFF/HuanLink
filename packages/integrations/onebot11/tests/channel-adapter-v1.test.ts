@@ -330,7 +330,9 @@ describe("OneBot11ChannelAdapterV1", () => {
       vi.spyOn(transport, "sendAction").mockRejectedValueOnce(
         new OneBot11RemoteActionError({
           status: "failed",
-          retcode
+          retcode,
+          message: "platform message",
+          wording: "platform wording"
         })
       );
       const { adapter } = createAdapter(transport);
@@ -344,11 +346,14 @@ describe("OneBot11ChannelAdapterV1", () => {
           },
           parts: [{ type: "text", text: "error mapping" }]
         })
-      ).rejects.toMatchObject({ code: expectedCode });
+      ).rejects.toMatchObject({
+        code: expectedCode,
+        message: expect.stringMatching(/platform message.*platform wording/)
+      });
     }
   );
 
-  test("rejects a successful response without message_id as a permanent failure", async () => {
+  test("treats a successful response without message_id as delivery uncertain", async () => {
     const transport = new FakeOneBot11Transport();
     vi.spyOn(transport, "sendAction").mockResolvedValueOnce({
       status: "ok",
@@ -367,7 +372,7 @@ describe("OneBot11ChannelAdapterV1", () => {
         },
         parts: [{ type: "text", text: "missing receipt" }]
       })
-    ).rejects.toMatchObject({ code: "permanent_failure" });
+    ).rejects.toMatchObject({ code: "delivery_uncertain" });
   });
 
   test("keeps a string message id exact so the same id can be retracted", async () => {
