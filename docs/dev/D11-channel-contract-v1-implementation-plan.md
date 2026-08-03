@@ -337,13 +337,13 @@ apps/server/src/
 - Adapter 提取平台提及和开头文本事实，Core Channel 生成并保留最终 mention/command trigger 元数据。是否调用 Agent、是否要求 @Bot、是否回复由上层 MainAgent/响应策略负责，不属于 Channel 配置或转发策略。
 - 群访问策略先于 Conversation Store 执行；被名单拒绝的消息不创建 session，也不产生 Channel 出站回复。
 - Server 在首次创建 session 时保存 `channelId`、conversation kind/ID、threadId 和 `contentFormat`；每条消息只追加 sender、完整规范内容或超限占位记录，不重复把固定路由元数据注入 Agent 文本。
-- Channel 发送在收到含有效 `messageId` 的成功回执后，按 `channelId + messageId` 把已确认的出站消息写入或更新目标 session；`delivery_uncertain`、明确失败或缺少有效 ID 时不猜测成功，也不提前创建公开消息。
-- Bot 自身消息继续通过 OneBot 事件流进入对应 session，但不触发 Agent。事件与已记录发送使用相同 `channelId + messageId` 幂等合并；事件先到或回执先到都只形成一条 Channel 消息。平台事件中的实际 route、sender 和规范内容作为观测事实保留，但不覆盖 HuanLink 已记录的逻辑出站 Parts，避免合并转发回流只有引用 ID 时丢失 Agent 实际发送内容。
+- Channel 发送在收到含有效 `messageId` 的成功回执后，只按 `channelId + messageId` 登记进程内待回流关联，不用 Tool 参数或发送回执构造公开 Channel 消息；`delivery_uncertain`、明确失败或缺少有效 ID 时不登记关联，也不猜测成功。
+- Bot 自身消息继续通过 OneBot 事件流进入对应 session，但不触发 Agent。平台事件是公开 Channel 消息的唯一写入来源；事件回流时按 `channelId + messageId` 幂等去重并关联已有 Tool Call。事件先到时先保存平台事实、回执到达后补充关联；回执先到时只暂存关联、事件到达后再创建消息。
 - Server 为 HuanLink 发起的发送关联 `toolCallId`、`runId`、来源 session 和目标 session。当前会话 `reply` 的回流消息与本地 Tool Call 关联；跨会话发送只在目标 session 记录公开消息，并保留内部 `cross_session` 来源元数据。
 - 面向模型构造上下文时保留 `reply` Tool Call 和 Tool Result；若同一 session 的回流正文与 Tool 参数一致，只追加简短的已回流确认，不再次展开相同正文。若平台事件内容不同，则完整保留平台事实。
 - 跨会话发送的来源 session 保留发送 Tool Call、目标摘要和结果；目标 session 显示完整消息，并以简短的 `HuanLink（由其他会话发起）` 标记来源，不暴露具体来源 session ID。没有本地发送关联的 Bot 自身消息按普通自身消息完整进入目标 session。
 - 普通日志只记录脱敏摘要；完整内容只进入 session。当前 Conversation Store 仍为进程内状态，B07 不新增数据库或重启恢复。
-- 成功回执可以在当前进程内补足未回流的自身消息，但 v1 不提供数据库、跨重启恢复或持久对账；进程在回执或事件写入前退出时仍可能丢失记录。
+- 成功回执不能补建未回流的公开消息；若平台自身消息事件始终未到达，session 只保留来源 Tool Call/Tool Result。待回流关联只存在于当前进程，v1 不提供数据库、跨重启恢复或持久对账。
 - 注册 `onebot_standard` 和 `onebot_privileged` 两个受控 Tool；前者仍检查目标允许范围，后者把审批需求交给统一策略，由其决定人工审批、Review Agent 或 Full Access。Agent 只能看到允许的具名操作，不获得原始 OneBot Action 或凭证。跨群/私聊发送仍向 Agent 返回原始 `response.data`，Handler 只对已知发送操作额外读取有效 `message_id` 用于 session 关联。
 - 将当前单个 `groupId` 迁移到上述群策略；私聊继续使用独立、显式的允许会话配置，不与群号列表混用。
 - 用 `process-lifecycle.ts` 取代 `phase4-process-lifecycle.ts`。
@@ -378,7 +378,7 @@ apps/server/src/
 - 固定 route 和 `contentFormat` 只保存在 session 元数据；每条消息保留发送者和完整 CQ 内容，超过 8 KiB 时保存占位记录。
 - Channel Runtime 不根据 trigger 替 Agent 决定是否回复；对应 Agent 调用策略由上层测试。Agent普通最终文本不会自动发到 Channel，只有成功执行 `reply` Tool 才产生当前会话可见回复。
 - Agent session 在后续 turn 中仍能看到成对的 Tool Call/Tool Result；`reply` 的 Tool Result 不复制正文，同一会话已关联的自身消息回流也不重复展开相同正文。
-- 当前会话 `reply` 的 route 不能由 Agent 覆盖；成功回执返回 `messageId`，回执和自身事件无论先后都按 `channelId + messageId` 合并为一条公开消息，重复事件不会产生第二条上下文记录。
+- 当前会话 `reply` 的 route 不能由 Agent 覆盖；成功回执返回 `messageId` 但不创建公开消息，自身事件回流后才按 `channelId + messageId` 写入并关联 Tool Call，重复事件不会产生第二条上下文记录。
 - `delivery_uncertain` 不产生猜测性成功记录；若后续真实自身事件到达，仍可按事件创建消息。
 - 跨会话发送在来源 Agent 历史中保留 Tool Call、目标和结果，在目标 session 中保留完整公开消息及简短“由其他会话发起”标记；两个 session 不互相复制不属于本会话的公开时间线。
 - 即时回复和后台终态都能在 Agent 显式调用 `reply` 后回到当前 session 的固定路由；跨群/私聊操作只能到达已允许目标。
