@@ -10,7 +10,6 @@ import type {
   AppendConversationAgentToolCall,
   AppendConversationAgentToolResult,
   ConversationAgentToolCallEntry,
-  ConversationChannelMessageLocation,
   ConversationChannelMessageEntry,
   ConversationOutboundDelivery,
   ConversationSession,
@@ -367,29 +366,6 @@ export class InMemoryConversationSessionStore {
     return metadata === undefined
       ? undefined
       : cloneConversationSessionMetadata(metadata);
-  }
-
-  /** 按稳定 Channel 与消息 ID 返回其 Session 位置，不复制完整时间线。 */
-  getChannelMessageLocation(
-    channelId: string,
-    messageId: string
-  ): ConversationChannelMessageLocation | undefined {
-    requireConversationIdentifier(channelId, "Channel message channelId");
-    requireConversationIdentifier(messageId, "Channel message messageId");
-    const location = this.messageLocations.get(
-      channelMessageKey(channelId, messageId)
-    );
-    if (location === undefined) {
-      return undefined;
-    }
-    const session = this.sessions.get(location.sessionId);
-    if (session === undefined) {
-      throw new Error("Conversation message index is inconsistent");
-    }
-    return {
-      sessionId: location.sessionId,
-      metadata: cloneConversationSessionMetadata(session.metadata)
-    };
   }
 
   private ensureSession(

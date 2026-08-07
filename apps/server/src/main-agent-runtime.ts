@@ -13,7 +13,12 @@ import {
   type OpenAiAgentsRunContext,
   type OpenAiAgentsRunner
 } from "@huanlink/integration-openai-agents";
-import { Agent, type Model, type ModelSettings } from "@openai/agents";
+import {
+  Agent,
+  type Model,
+  type ModelSettings,
+  type Tool
+} from "@openai/agents";
 
 import { createBestEffortRuntimeLogger } from "./best-effort-runtime-logger.js";
 import {
@@ -36,6 +41,8 @@ export type CreatePhase3MainAgentRuntimeOptions = {
   logger?: RuntimeLogger;
   /** B07 当前会话回复；未注入时 MainAgent 不注册 reply。 */
   channelReply?: CreateChannelReplyToolOptions;
+  /** 由 Server 组合根注入的平台受控 Tool；MainAgent 不理解平台协议。 */
+  additionalTools?: readonly Tool<OpenAiAgentsRunContext>[];
 };
 
 export function createPhase3MainAgentRuntime(
@@ -92,7 +99,8 @@ export function createPhase3MainAgentRuntime(
       submitTool,
       taskStatusTool,
       taskContinuationTool,
-      ...(channelReplyTool === undefined ? [] : [channelReplyTool])
+      ...(channelReplyTool === undefined ? [] : [channelReplyTool]),
+      ...(options.additionalTools ?? [])
     ]
   });
 

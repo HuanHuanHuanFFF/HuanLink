@@ -463,6 +463,7 @@ describe("ChannelRuntime", () => {
         })
     );
     const send = vi.spyOn(adapter, "send");
+    const operation = vi.fn(async () => "operation-result");
     const onMessage = vi.fn();
     const runtime = createChannelRuntime({
       channels: [
@@ -489,6 +490,9 @@ describe("ChannelRuntime", () => {
     await expect(ordered.send(command)).rejects.toThrow(
       "ChannelRuntime is not started"
     );
+    await expect(
+      runtime.runOperation("qq-main", operation)
+    ).rejects.toThrow("ChannelRuntime is not started");
     const starting = runtime.start();
     await vi.waitFor(() => expect(adapter.start).toHaveBeenCalledOnce());
     adapter.emit(
@@ -505,8 +509,15 @@ describe("ChannelRuntime", () => {
     await expect(ordered.send(command)).resolves.toMatchObject({
       messageId: "sent-1"
     });
+    await expect(runtime.runOperation("qq-main", operation)).resolves.toBe(
+      "operation-result"
+    );
     expect(send).toHaveBeenCalledOnce();
+    expect(operation).toHaveBeenCalledOnce();
     await runtime.close();
+    await expect(runtime.runOperation("qq-main", operation)).rejects.toThrow(
+      "ChannelRuntime is closed"
+    );
   });
 
   test("does not continue starting adapters after close begins", async () => {

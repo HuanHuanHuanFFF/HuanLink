@@ -7,7 +7,8 @@ import {
   type InboundChannelMessageV1
 } from "@huanlink/core";
 import type { OpenAiAgentsRunContext } from "@huanlink/integration-openai-agents";
-import { Agent, RunContext } from "@openai/agents";
+import { Agent, RunContext, tool } from "@openai/agents";
+import { z } from "zod";
 
 import { createChannelReplyTool } from "../src/channel-reply-tool.js";
 import { createPhase3MainAgentRuntime } from "../src/main-agent-runtime.js";
@@ -432,6 +433,12 @@ describe("current-session reply Tool", () => {
     const sessions = new InMemoryConversationSessionStore();
     sessions.appendChannelMessage("session-channel", inboundMessage("message-1"));
     const adapter = fakeAdapter();
+    const platformTool = tool<typeof platformToolParameters, OpenAiAgentsRunContext>({
+      name: "onebot_standard",
+      description: "test platform tool",
+      parameters: platformToolParameters,
+      execute: () => "ok"
+    });
     const observedTools: string[][] = [];
     const runtime = createPhase3MainAgentRuntime({
       invoker: {
@@ -456,6 +463,7 @@ describe("current-session reply Tool", () => {
         sessions,
         resolveAdapter: () => adapter
       },
+      additionalTools: [platformTool],
       runner: {
         run: async (agent, _input, options) => {
           const context = options?.context;
@@ -484,7 +492,11 @@ describe("current-session reply Tool", () => {
     });
 
     expect(observedTools[0]).toContain("reply");
+    expect(observedTools[0]).toContain("onebot_standard");
     expect(observedTools[1]).not.toContain("reply");
+    expect(observedTools[1]).toContain("onebot_standard");
     expect(adapter.send).not.toHaveBeenCalled();
   });
 });
+
+const platformToolParameters = z.object({});

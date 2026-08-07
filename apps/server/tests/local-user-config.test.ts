@@ -122,16 +122,22 @@ describe("loadServerLocalUserConfig", () => {
           channelId: "qq-second",
           type: "onebot11-forward-websocket",
           url: "ws://127.0.0.1:3001/",
-          groupId: "20002000",
-          commandPrefix: "/huanlink",
+          inboundPolicy: {
+            groups: { mode: "allowlist", ids: ["20002000"] },
+            directs: { mode: "denylist", ids: [] }
+          },
+          enableUnsafePrivilegedOperations: false,
           accessToken: ACCESS_TOKEN
         },
         {
           channelId: "qq-first",
           type: "onebot11-forward-websocket",
           url: "ws://127.0.0.1:3001/",
-          groupId: "20002000",
-          commandPrefix: "/huanlink",
+          inboundPolicy: {
+            groups: { mode: "allowlist", ids: ["20002000"] },
+            directs: { mode: "denylist", ids: [] }
+          },
+          enableUnsafePrivilegedOperations: false,
           accessToken: ACCESS_TOKEN
         }
       ],
@@ -154,6 +160,125 @@ describe("loadServerLocalUserConfig", () => {
         }
       ]
     });
+  });
+
+  test("loads explicit group and direct inbound access policies without legacy routing fields", async () => {
+    await writeValidServerConfig(tempRoot, {
+      channels: [
+        [
+          "onebot11.json",
+          {
+            version: 1,
+            channelId: "qq-main",
+            type: "onebot11-forward-websocket",
+            url: "ws://127.0.0.1:3001/",
+            inboundPolicy: {
+              groups: { mode: "allowlist", ids: ["20002000"] },
+              directs: { mode: "denylist", ids: ["30003000"] }
+            },
+            enableUnsafePrivilegedOperations: true,
+            accessTokenEnv: "HUANLINK_ONEBOT_ACCESS_TOKEN"
+          }
+        ]
+      ]
+    });
+
+    await expect(loadServerLocalUserConfig({ configRoot: tempRoot })).resolves.toMatchObject({
+      channels: [
+        {
+          channelId: "qq-main",
+          inboundPolicy: {
+            groups: { mode: "allowlist", ids: ["20002000"] },
+            directs: { mode: "denylist", ids: ["30003000"] }
+          },
+          enableUnsafePrivilegedOperations: true
+        }
+      ]
+    });
+  });
+
+  test.each([
+    [
+      "a missing inbound policy",
+      {
+        version: 1,
+        channelId: "qq-main",
+        type: "onebot11-forward-websocket",
+        url: "ws://127.0.0.1:3001/",
+        enableUnsafePrivilegedOperations: false,
+        accessTokenEnv: "HUANLINK_ONEBOT_ACCESS_TOKEN"
+      }
+    ],
+    [
+      "a missing privileged-operation switch",
+      {
+        version: 1,
+        channelId: "qq-main",
+        type: "onebot11-forward-websocket",
+        url: "ws://127.0.0.1:3001/",
+        inboundPolicy: {
+          groups: { mode: "allowlist", ids: ["20002000"] },
+          directs: { mode: "denylist", ids: [] }
+        },
+        accessTokenEnv: "HUANLINK_ONEBOT_ACCESS_TOKEN"
+      }
+    ],
+    [
+      "an unsupported access mode",
+      {
+        ...oneBotChannel,
+        inboundPolicy: {
+          groups: { mode: "observe", ids: ["20002000"] },
+          directs: { mode: "allowlist", ids: [] }
+        }
+      }
+    ],
+    [
+      "a non-positive group id",
+      {
+        ...oneBotChannel,
+        inboundPolicy: {
+          groups: { mode: "allowlist", ids: ["0"] },
+          directs: { mode: "allowlist", ids: [] }
+        }
+      }
+    ],
+    [
+      "an unsafe direct id",
+      {
+        ...oneBotChannel,
+        inboundPolicy: {
+          groups: { mode: "allowlist", ids: [] },
+          directs: { mode: "allowlist", ids: ["9007199254740992"] }
+        }
+      }
+    ],
+    [
+      "duplicate ids within one access policy",
+      {
+        ...oneBotChannel,
+        inboundPolicy: {
+          groups: { mode: "allowlist", ids: ["20002000", "20002000"] },
+          directs: { mode: "allowlist", ids: [] }
+        }
+      }
+    ],
+    [
+      "legacy groupId and commandPrefix fields",
+      {
+        ...oneBotChannel,
+        groupId: "20002000",
+        commandPrefix: "/huanlink"
+      }
+    ]
+  ])("rejects %s in a Channel inbound policy", async (_name, channel) => {
+    await writeValidServerConfig(tempRoot, {
+      channels: [["onebot11.json", channel]]
+    });
+
+    await expect(loadServerLocalUserConfig({ configRoot: tempRoot })).rejects.toThrow(
+      /server\/channels\/onebot11\.json/
+    );
   });
 
   test("ignores an invalid Server JSON file that config.json does not reference", async () => {
@@ -580,8 +705,11 @@ const oneBotChannel = {
   channelId: "qq-main",
   type: "onebot11-forward-websocket",
   url: "ws://127.0.0.1:3001/",
-  groupId: "20002000",
-  commandPrefix: "/huanlink",
+  inboundPolicy: {
+    groups: { mode: "allowlist", ids: ["20002000"] },
+    directs: { mode: "denylist", ids: [] }
+  },
+  enableUnsafePrivilegedOperations: false,
   accessTokenEnv: "HUANLINK_ONEBOT_ACCESS_TOKEN"
 };
 

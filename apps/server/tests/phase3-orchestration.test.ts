@@ -37,6 +37,7 @@ import {
   type Phase3HuanLinkRuntime,
   type Phase3ReentryResult
 } from "../src/index.js";
+import { RecordingRuntimeLogger } from "./support/recording-runtime-logger.js";
 
 const servers: RunningAdapterServer[] = [];
 const runtimes: Phase3HuanLinkRuntime[] = [];
@@ -658,6 +659,38 @@ afterEach(async () => {
 });
 
 describe("Phase 3 HuanLink orchestration", () => {
+  test("logs MainAgent payload sizes without recording full Channel content", async () => {
+    const logger = new RecordingRuntimeLogger();
+    const secretInput = "private Channel message with attachment key";
+    const secretOutput = "private Agent result";
+    const runtime = createPhase3HuanLinkRuntime({
+      codexA2aOrigin: "http://127.0.0.1:1",
+      transport: terminalTransport("completed"),
+      runner: {
+        run: async () => ({ finalOutput: secretOutput })
+      },
+      logger
+    });
+    runtimes.push(runtime);
+
+    await expect(
+      runtime.runMainAgent({
+        runId: "run-safe-log",
+        sessionId: "session-safe-log",
+        input: secretInput
+      })
+    ).resolves.toEqual({ output: secretOutput });
+
+    expect(JSON.stringify(logger.entries)).not.toContain(secretInput);
+    expect(JSON.stringify(logger.entries)).not.toContain(secretOutput);
+    expect(logger.find("main_agent.run.input")?.fields).toMatchObject({
+      inputChars: secretInput.length
+    });
+    expect(logger.find("main_agent.run.output")?.fields).toMatchObject({
+      outputChars: secretOutput.length
+    });
+  });
+
   test("starts one structured fresh MainAgent turn when an async AgentCall requires input", async () => {
     const model = new DelegateThenSummarizeModel();
     const { transport, submitTask } = pausedTransport();

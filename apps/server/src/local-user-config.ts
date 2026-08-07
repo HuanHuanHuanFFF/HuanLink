@@ -4,6 +4,8 @@ import { TextDecoder } from "node:util";
 
 import { z } from "zod";
 
+import type { ChannelInboundAccessPolicy } from "./channel-access-policy.js";
+
 const stableIdSchema = z
   .string()
   .trim()
@@ -13,6 +15,31 @@ const environmentVariableNameSchema = z
   .string()
   .trim()
   .regex(/^[A-Za-z_][A-Za-z0-9_]*$/, "must be an environment variable name");
+
+const positiveSafeIntegerStringSchema = z
+  .string()
+  .trim()
+  .regex(/^[1-9]\d*$/, "must be a positive integer string")
+  .refine(
+    (value) => Number.isSafeInteger(Number(value)),
+    "must be a safe positive integer string"
+  );
+
+const channelAccessRuleSchema = z
+  .object({
+    mode: z.enum(["allowlist", "denylist"]),
+    ids: z
+      .array(positiveSafeIntegerStringSchema)
+      .refine((ids) => new Set(ids).size === ids.length, "must not contain duplicate IDs")
+  })
+  .strict();
+
+const channelInboundAccessPolicySchema: z.ZodType<ChannelInboundAccessPolicy> = z
+  .object({
+    groups: channelAccessRuleSchema,
+    directs: channelAccessRuleSchema
+  })
+  .strict();
 
 const mainAgentFileSchema = z
   .object({
@@ -30,15 +57,8 @@ const channelFileSchema = z
     channelId: stableIdSchema,
     type: z.literal("onebot11-forward-websocket"),
     url: websocketUrlSchema(),
-    groupId: z
-      .string()
-      .trim()
-      .regex(/^[1-9]\d*$/, "must be a positive integer string")
-      .refine(
-        (value) => Number.isSafeInteger(Number(value)),
-        "must be a safe positive integer string"
-      ),
-    commandPrefix: z.string().trim().min(1),
+    inboundPolicy: channelInboundAccessPolicySchema,
+    enableUnsafePrivilegedOperations: z.boolean(),
     accessTokenEnv: environmentVariableNameSchema.optional()
   })
   .strict();
@@ -82,8 +102,8 @@ export type ServerLocalUserConfig = {
     channelId: string;
     type: "onebot11-forward-websocket";
     url: string;
-    groupId: string;
-    commandPrefix: string;
+    inboundPolicy: ChannelInboundAccessPolicy;
+    enableUnsafePrivilegedOperations: boolean;
     accessToken?: string;
   }>;
   agents: Array<{
@@ -152,8 +172,8 @@ export async function loadServerLocalUserConfig(input: {
         channelId: parsed.channelId,
         type: parsed.type,
         url: parsed.url,
-        groupId: parsed.groupId,
-        commandPrefix: parsed.commandPrefix,
+        inboundPolicy: parsed.inboundPolicy,
+        enableUnsafePrivilegedOperations: parsed.enableUnsafePrivilegedOperations,
         ...(parsed.accessTokenEnv === undefined
           ? {}
           : {

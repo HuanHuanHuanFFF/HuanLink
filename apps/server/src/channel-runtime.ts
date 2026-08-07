@@ -64,6 +64,14 @@ export interface ChannelRuntime {
     route: ChannelConversationRouteV1,
     operation: () => Promise<T>
   ): Promise<T>;
+  /**
+   * 在 Runtime 生命周期内执行不绑定可信 route 的 Channel 操作。
+   * 此入口不做接收名单检查，也不提供审批或消息归属保护。
+   */
+  runOperation<T>(
+    channelId: string,
+    operation: () => Promise<T>
+  ): Promise<T>;
 }
 
 type RegisteredChannel = {
@@ -115,7 +123,8 @@ export function createChannelRuntime(
     },
     replaceAccessPolicy,
     sessionIdForRoute: channelSessionIdFor,
-    runOutbound
+    runOutbound,
+    runOperation
   };
 
   for (const registration of options.channels) {
@@ -393,17 +402,47 @@ export function createChannelRuntime(
       () => undefined
     );
     egressTails.set(sessionId, tail);
-    activeEgress.add(current);
-    void current.then(
-      () => activeEgress.delete(current),
-      () => activeEgress.delete(current)
-    );
+    trackEgress(current);
     void tail.then(() => {
       if (egressTails.get(sessionId) === tail) {
         egressTails.delete(sessionId);
       }
     });
     return current;
+  }
+
+  function runOperation<T>(
+    channelId: string,
+    operation: () => Promise<T>
+  ): Promise<T> {
+    if (!registrations.has(channelId)) {
+      return Promise.reject(
+        new Error(`No Channel Adapter is registered for ${channelId}`)
+      );
+    }
+    if (closed) {
+      return Promise.reject(new Error("ChannelRuntime is closed"));
+    }
+    if (!started) {
+      return Promise.reject(new Error("ChannelRuntime is not started"));
+    }
+
+    const current = Promise.resolve().then(() => {
+      if (closed) {
+        throw new Error("ChannelRuntime is closed");
+      }
+      return operation();
+    });
+    trackEgress(current);
+    return current;
+  }
+
+  function trackEgress(operation: Promise<unknown>): void {
+    activeEgress.add(operation);
+    void operation.then(
+      () => activeEgress.delete(operation),
+      () => activeEgress.delete(operation)
+    );
   }
 
   function reportBackgroundError(

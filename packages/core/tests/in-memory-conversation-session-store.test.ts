@@ -74,29 +74,6 @@ describe("InMemoryConversationSessionStore", () => {
     expect(metadata).not.toBe(store.getSession("session-a")?.metadata);
   });
 
-  test("resolves an observed message to its Channel session without exposing the timeline", () => {
-    const store = new InMemoryConversationSessionStore();
-    store.appendChannelMessage("session-a", inboundMessage("message-1"));
-
-    expect(
-      store.getChannelMessageLocation("qq-main", "message-1")
-    ).toEqual({
-      sessionId: "session-a",
-      metadata: {
-        kind: "external_channel",
-        route: {
-          channelId: "qq-main",
-          conversationKind: "group",
-          conversationId: "10001"
-        },
-        contentFormat: "onebot11.cq"
-      }
-    });
-    expect(
-      store.getChannelMessageLocation("qq-secondary", "message-1")
-    ).toBeUndefined();
-  });
-
   test("keeps Agent Tool Call and Tool Result as separate structured entries", () => {
     const store = new InMemoryConversationSessionStore();
     store.appendChannelMessage("session-a", inboundMessage("message-1"));
