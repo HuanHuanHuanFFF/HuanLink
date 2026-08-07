@@ -46,4 +46,5 @@ Use package-scoped tests while iterating, then run verification proportional to 
 - Prefer framework or external-Agent capabilities for single-agent reasoning and Tool Loops. The legacy self-built `AgentLoop`, `ModelClient`, `ToolGateway`, and `PolicyEngine` route has been removed; do not reintroduce it.
 - Keep Agent-specific execution configuration in the corresponding Adapter. Do not leak Codex workspace, branch, or execution-model rules into MainAgent or Core configuration.
 - Do not claim restart recovery, distributed exactly-once, or full A2A coverage unless the current implementation and fresh evidence support it.
-- When dispatching subagents, default to GPT-5.6 Terra with high reasoning and use `$boris-prompts` to keep their tasks short, anchored, and verifiable unless the user specifies otherwise.
+- For non-trivial repository implementation, use `$execute-from-goal` as the default execution workflow unless a more specific skill applies.
+- When dispatching subagents, default to GPT-5.6 Terra with high reasoning and use `$prompt-entropy` to keep their tasks short, anchored, and verifiable unless the user specifies otherwise.
