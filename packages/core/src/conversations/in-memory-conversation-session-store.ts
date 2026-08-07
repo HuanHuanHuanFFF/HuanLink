@@ -10,6 +10,7 @@ import type {
   AppendConversationAgentToolCall,
   AppendConversationAgentToolResult,
   ConversationAgentToolCallEntry,
+  ConversationChannelMessageLocation,
   ConversationChannelMessageEntry,
   ConversationOutboundDelivery,
   ConversationSession,
@@ -63,14 +64,62 @@ export class InMemoryConversationSessionStore {
     PendingOutboundDelivery
   >();
 
-  /** 追加平台观测消息；重复事件按 Channel 消息键幂等更新。 */
+  /** 追加平台观测消息；完全相同的重复事实幂等，冲突事实拒绝覆盖。 */
   appendChannelMessage(
     sessionId: SessionId,
     message: InboundChannelMessageV1
-  ): void {
+  ): "appended" | "duplicate" | "associated" {
     assertValidInboundChannelMessage(message);
     const key = channelMessageKey(message.route.channelId, message.messageId);
     const pending = this.pendingOutboundDeliveries.get(key);
+    const existing = this.messageLocations.get(key);
+    if (existing !== undefined) {
+      assertSameMessageSession(key, sessionId, existing.sessionId);
+      if (
+        existing.entry.observed === undefined ||
+        !isSameInboundChannelMessage(existing.entry.observed, message)
+      ) {
+        throw new Error(
+          `Channel message ${message.messageId} conflicts with existing observed facts`
+        );
+      }
+      if (pending !== undefined) {
+        assertPendingTarget(
+          pending,
+          key,
+          sessionId,
+          message.route,
+          message.contentFormat
+        );
+      }
+      if (
+        (existing.entry.outbound !== undefined || pending !== undefined) &&
+        !message.sender.isSelf
+      ) {
+        throw new Error(
+          `Channel message ${key} has a HuanLink outbound delivery but the observed sender is not self`
+        );
+      }
+      if (pending !== undefined) {
+        if (
+          existing.entry.outbound !== undefined &&
+          !isSameOutboundDelivery(existing.entry.outbound, pending.outbound)
+        ) {
+          throw new Error(
+            `Channel message ${message.messageId} already has a different outbound association`
+          );
+        }
+        if (existing.entry.outbound === undefined) {
+          const session = this.requireSession(sessionId);
+          existing.entry = { ...existing.entry, outbound: pending.outbound };
+          replaceTimelineEntry(session.timeline, existing.entry);
+        }
+        this.pendingOutboundDeliveries.delete(key);
+        return "associated";
+      }
+      return "duplicate";
+    }
+
     if (pending !== undefined) {
       assertPendingTarget(
         pending,
@@ -90,28 +139,6 @@ export class InMemoryConversationSessionStore {
       message.route,
       message.contentFormat
     );
-    const existing = this.messageLocations.get(key);
-    if (existing !== undefined) {
-      assertSameMessageSession(key, sessionId, existing.sessionId);
-      if (
-        (existing.entry.outbound !== undefined || pending !== undefined) &&
-        !message.sender.isSelf
-      ) {
-        throw new Error(
-          `Channel message ${key} has a HuanLink outbound delivery but the observed sender is not self`
-        );
-      }
-      existing.entry = {
-        ...existing.entry,
-        observed: cloneInboundChannelMessage(message),
-        ...(pending === undefined ? {} : { outbound: pending.outbound })
-      };
-      replaceTimelineEntry(session.timeline, existing.entry);
-      if (pending !== undefined) {
-        this.pendingOutboundDeliveries.delete(key);
-      }
-      return;
-    }
 
     const entry: ConversationChannelMessageEntry = {
       type: "channel_message",
@@ -125,6 +152,7 @@ export class InMemoryConversationSessionStore {
     if (pending !== undefined) {
       this.pendingOutboundDeliveries.delete(key);
     }
+    return "appended";
   }
 
   /**
@@ -341,6 +369,29 @@ export class InMemoryConversationSessionStore {
       : cloneConversationSessionMetadata(metadata);
   }
 
+  /** 按稳定 Channel 与消息 ID 返回其 Session 位置，不复制完整时间线。 */
+  getChannelMessageLocation(
+    channelId: string,
+    messageId: string
+  ): ConversationChannelMessageLocation | undefined {
+    requireConversationIdentifier(channelId, "Channel message channelId");
+    requireConversationIdentifier(messageId, "Channel message messageId");
+    const location = this.messageLocations.get(
+      channelMessageKey(channelId, messageId)
+    );
+    if (location === undefined) {
+      return undefined;
+    }
+    const session = this.sessions.get(location.sessionId);
+    if (session === undefined) {
+      throw new Error("Conversation message index is inconsistent");
+    }
+    return {
+      sessionId: location.sessionId,
+      metadata: cloneConversationSessionMetadata(session.metadata)
+    };
+  }
+
   private ensureSession(
     sessionId: SessionId,
     route: ChannelConversationRouteV1,
@@ -421,6 +472,28 @@ function assertSessionMetadata(
       `Conversation session ${sessionId} content format cannot change`
     );
   }
+}
+
+function isSameInboundChannelMessage(
+  left: InboundChannelMessageV1,
+  right: InboundChannelMessageV1
+): boolean {
+  return (
+    left.messageId === right.messageId &&
+    isSameConversationRoute(left.route, right.route) &&
+    left.sender.id === right.sender.id &&
+    left.sender.username === right.sender.username &&
+    left.sender.displayName === right.sender.displayName &&
+    left.sender.isSelf === right.sender.isSelf &&
+    left.receivedAt === right.receivedAt &&
+    left.content === right.content &&
+    left.contentFormat === right.contentFormat &&
+    left.contentOmitted?.reason === right.contentOmitted?.reason &&
+    left.contentOmitted?.originalSizeBytes ===
+      right.contentOmitted?.originalSizeBytes &&
+    left.replyToMessageId === right.replyToMessageId &&
+    left.trigger?.kind === right.trigger?.kind
+  );
 }
 
 function isSameOutboundDelivery(

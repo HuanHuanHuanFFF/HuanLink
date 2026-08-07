@@ -74,6 +74,29 @@ describe("InMemoryConversationSessionStore", () => {
     expect(metadata).not.toBe(store.getSession("session-a")?.metadata);
   });
 
+  test("resolves an observed message to its Channel session without exposing the timeline", () => {
+    const store = new InMemoryConversationSessionStore();
+    store.appendChannelMessage("session-a", inboundMessage("message-1"));
+
+    expect(
+      store.getChannelMessageLocation("qq-main", "message-1")
+    ).toEqual({
+      sessionId: "session-a",
+      metadata: {
+        kind: "external_channel",
+        route: {
+          channelId: "qq-main",
+          conversationKind: "group",
+          conversationId: "10001"
+        },
+        contentFormat: "onebot11.cq"
+      }
+    });
+    expect(
+      store.getChannelMessageLocation("qq-secondary", "message-1")
+    ).toBeUndefined();
+  });
+
   test("keeps Agent Tool Call and Tool Result as separate structured entries", () => {
     const store = new InMemoryConversationSessionStore();
     store.appendChannelMessage("session-a", inboundMessage("message-1"));
@@ -375,12 +398,17 @@ describe("InMemoryConversationSessionStore", () => {
     ).toThrow(/message-2.*different outbound association/i);
   });
 
-  test("deduplicates repeated channel events and returns defensive copies", () => {
+  test("deduplicates identical channel facts and returns defensive copies", () => {
     const store = new InMemoryConversationSessionStore();
     const message = inboundMessage("message-1");
+    const repeated = {
+      ...message,
+      route: { ...message.route },
+      sender: { ...message.sender }
+    };
 
-    store.appendChannelMessage("session-a", message);
-    store.appendChannelMessage("session-a", message);
+    expect(store.appendChannelMessage("session-a", message)).toBe("appended");
+    expect(store.appendChannelMessage("session-a", repeated)).toBe("duplicate");
 
     const first = store.getSession("session-a")!;
     expect(first.timeline).toHaveLength(1);
@@ -401,6 +429,50 @@ describe("InMemoryConversationSessionStore", () => {
         ? second.observed?.sender.username
         : undefined
     ).toBe("Alice");
+  });
+
+  test.each([
+    ["content", { content: "changed" }],
+    [
+      "sender",
+      {
+        sender: {
+          id: "different-user",
+          username: "Mallory",
+          isSelf: false
+        }
+      }
+    ],
+    [
+      "route",
+      {
+        route: {
+          channelId: "qq-main",
+          conversationKind: "group" as const,
+          conversationId: "different-group"
+        }
+      }
+    ]
+  ])("rejects conflicting %s for the same Channel message key", (_label, overrides) => {
+    const store = new InMemoryConversationSessionStore();
+    const original = inboundMessage("message-1");
+    store.appendChannelMessage("session-a", original);
+
+    expect(() =>
+      store.appendChannelMessage(
+        "session-a",
+        inboundMessage("message-1", overrides)
+      )
+    ).toThrow(/message-1.*conflicts with existing observed facts/i);
+
+    expect(store.getSession("session-a")?.timeline).toEqual([
+      {
+        type: "channel_message",
+        channelId: "qq-main",
+        messageId: "message-1",
+        observed: original
+      }
+    ]);
   });
 
   test("keeps message identities distinct when IDs contain delimiter characters", () => {

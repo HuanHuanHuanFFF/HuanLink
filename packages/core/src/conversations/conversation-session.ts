@@ -75,6 +75,12 @@ export type ConversationSession = {
   readonly timeline: readonly ConversationTimelineEntry[];
 };
 
+/** 由 Channel 消息 ID 反查到的最小 Session 位置，不暴露完整时间线。 */
+export type ConversationChannelMessageLocation = {
+  readonly sessionId: SessionId;
+  readonly metadata: ConversationSessionMetadata;
+};
+
 /** 成功发送后登记待回流关联所需的可信数据。 */
 export type RecordConversationOutboundDelivery = {
   readonly route: ChannelConversationRouteV1;
