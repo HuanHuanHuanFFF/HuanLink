@@ -1,6 +1,6 @@
 # HuanLink v1.0 Channel Contract v1 实施计划
 
-> **状态：执行中，B01～B06、B07 Core Conversation Session 基础和当前会话 `reply` 闭环已提交并推送；B07 闭环二曾完成本地实现和压力 Review，但 2026-08-07 需求复核确认其职责边界仍需修订，当前代码不得视为可提交结果。尚未切换正式进程入口，也未执行真实 QQ。** 2026-07-24 起本文不再受原 M1 最小范围约束，改为把 Channel 作为独立模块逐步开发到成熟职责边界。任何后续代码、提交和推送仍须逐批确认。
+> **状态：执行中，B01～B06、B07 Core Conversation Session 基础、当前会话 `reply` 和闭环二均已提交并推送；2026-08-07 需求复核后的两批修订已经完成测试、压力 Review 和复审。尚未切换正式进程入口，名单文件监听、旧 Phase4 清理和真实 QQ 验证仍属于闭环三及 B08。** 2026-07-24 起本文不再受原 M1 最小范围约束，改为把 Channel 作为独立模块逐步开发到成熟职责边界。任何后续代码、提交和推送仍须逐批确认。
 
 ## 1. 目标结果
 
@@ -327,7 +327,7 @@ apps/server/src/
 - Store 已实现固定 route/contentFormat、`runId + toolCallId` 配对、发送回执待回流关联、Bot 自身消息事件写入和 `channelId + messageId` 去重。
 - 成功回执不构造公开消息；来源 Tool Call 缺失或同一消息 ID 出现冲突关联时明确报错。
 
-### 剩余修改
+### 分批设计与当前状态
 
 #### 闭环一：当前会话 `reply`
 
@@ -337,32 +337,32 @@ apps/server/src/
 - Agent Runtime 只增加 `reply` 注册、可信 run context 和结构化调用结果所需的最小接口，不读取完整 Session 历史。普通 `finalOutput`、推理过程和其他 Tool 执行过程不自动发送；没有调用 `reply` 的 turn 不产生 Channel 可见消息。
 - 每次 `reply` 的 Tool Call/Tool Result 都写入来源 session。成功回执只登记待回流关联；平台自身消息事件才创建公开消息并按 `channelId + messageId` 去重。明确失败不登记；`delivery_uncertain` 或成功响应缺少有效 `messageId` 返回 `uncertain`，不猜测成功。
 
+状态：已提交并推送；正式组合入口仍在闭环三统一接线。
+
 #### 闭环二：Server Channel Runtime
 
-- 用 `channel-runtime.ts` 取代 `phase4-qq-runtime.ts`，按稳定 `channelId` 注册和查找 Adapter，采用完整 route 生成无冲突 Session ID，并保留同 route 的入站转发顺序与出站执行顺序；不同 route 可以并行。
+- 提供目标 `channel-runtime.ts`，按稳定 `channelId` 注册和查找 Adapter，采用完整 route 生成无冲突 Session ID，并保留同 route 的入站转发顺序与出站执行顺序；不同 route 可以并行。正式入口取代 `phase4-qq-runtime.ts` 留在闭环三。
 - Channel Runtime 只负责 Adapter 生命周期、能力检查、接收名单过滤和事件转发。它不直接写 Conversation Session Store，不做消息去重或自身消息关联，也不决定是否触发 Agent；通过名单的事件必须把完整 route、`sender.isSelf` 和 trigger 元数据原样交给下游。
-- 把 Channel 配置接入唯一 `.huanlink/config/config.json`。群聊与私聊分别支持可切换的 `allowlist | denylist` 和唯一 ID 列表；默认群聊为 `allowlist + []`，默认私聊为 `denylist + []`。通用 Channel 只要求稳定非空字符串 ID，OneBot 配置层再要求安全正整数字符串。
+- Channel 配置只来自唯一 `.huanlink/config/config.json` 配置树。群聊与私聊分别支持可切换的 `allowlist | denylist` 和唯一 ID 列表，不使用隐式默认；仓库当前配置为群聊 `allowlist + ["20002000"]`、私聊 `denylist + []`。通用 Channel 只要求稳定非空字符串 ID，OneBot 配置层再要求安全正整数字符串。
 - 接收名单决定入站事件是否继续转发，并复用于 `reply` 与 `onebot_standard` 的普通出站目标检查。被拒事件只记录脱敏原因，不交给下游；通过名单的普通消息、@Bot 消息、命令消息和 Bot 自身消息一律转发，Channel 不根据 trigger 或 `isSelf` 决定 Session 写入与 Agent 触发。
 - Runtime 提供原子替换名单策略的接口；正式配置入口在闭环三监听群聊/私聊模式与 ID 列表变化。合法更新整体生效，非法更新整体拒绝并继续使用上一份有效策略；现有 Session 历史不删除，正在运行的 Agent 不取消，后续消息及新的 `reply` / `onebot_standard` 调用使用最新策略。URL、Token、`channelId`、Adapter 类型等其他配置仍须重启。
 - 下游 Conversation/Agent 编排层负责决定是否写入 Session、是否触发 Agent，以及自身消息回流关联。完全相同的 `channelId + messageId` 事件可以幂等去重；同 ID 但 route、发送者或内容等事实不同必须保留第一条、明确报错并留下脱敏日志，禁止静默覆盖。
 - 注册 `onebot_standard` 和 `onebot_privileged` 两个具名 Tool，不向 Agent 暴露原始 OneBot Action 或凭证。`onebot_standard` 的明确群聊/私聊目标复用最新名单；无明确目标的账号状态、能力、好友列表和群列表允许读取；`getMessage` 与 `getForwardMessage` 直接把 Agent 提供的 ID 交给 OneBot，不做 Session 归属或消息索引限制。
 - `onebot_privileged` 接入正式组合入口以便真实测试，但使用独立显式开关且默认关闭；开启后不经过审批、名单或消息归属检查并可真实执行，启动日志和配置文档必须明确警告当前没有防护措施。统一审批后移，不把 `needsApproval` 标记误写成已经可恢复的审批闭环。
-- Runtime 启动完成前拒绝主动发送并返回明确错误；Adapter 启动过程中已经收到的入站事件仍可按名单转发。关闭采用协作式取消：停止收发并通知处理中任务取消，但不因忽略取消信号的代码而无限等待。
+- Runtime 启动完成前拒绝主动发送和 OneBot Tool 操作并返回明确错误；Adapter 启动过程中已经收到的入站事件仍可按名单转发。关闭采用协作式取消：停止收发并通知处理中任务取消，但不因忽略取消信号的代码而无限等待。
 - 普通日志只记录脱敏摘要，不记录完整消息、Tool 参数、附件 URL 或资源级凭证；完整消息与 Tool Call/Tool Result 由下游 Session 层保存。
 
-本地代码现状（2026-08-07，压力 Review 后完成需求复核，待修订且不得提交）：
+闭环二实际结果（2026-08-07）：
 
-- 唯一配置树、稳定 `channelId` 注册、Adapter 能力检查、同 route 顺序、严格具名 Tool schema 和日志脱敏已经形成可复用基础，压力 Review 对当时实现发现的生命周期与重复派发问题已完成修复。
-- 需求复核确认当前 `ChannelRuntime` 错误承担了 Store 写入、去重和 Bot 自身消息截断；它还把通用 ID 固定为正整数、静态持有名单并允许启动完成前发送，必须按上述职责重新收敛。
-- 当前 Store 会让同 ID 后到事件覆盖原事实；`getMessage` / `getForwardMessage` 复用了不适合合并转发资源 ID 的 Session 索引检查；这些行为必须修订。
-- 当前 `onebot_privileged` 只有 SDK `needsApproval` 标记，而现有 Agent Runtime 没有审批中断恢复链；必须改为默认关闭、显式开启后无审批执行并警告的测试模式，不能声称已有审批保护。
-- MainAgent 已提供平台 Tool 的通用注入点；正式 `main.ts`、进程生命周期改名和旧 `phase4-qq` 删除仍属于闭环三，本状态不代表正式进程入口已经切换。
-- 已通过的压力 Review 只证明旧需求边界下未发现可证实的 P0/P1/P2，不能证明本次复核后的需求已经实现；代码修订后必须重新测试和 Review。
-- 本轮 Core 200 个测试、OneBot 154 个测试、Server 151 个测试通过，Server 另有 1 个既有 Windows 权限条件测试跳过，全仓类型检查通过。常规构建仍因 Windows 对既有 `packages/core/dist` 文件返回 `EPERM` 而未完成；未据此宣称构建通过。
+- 第一批提交 `ba88582`：Runtime 收敛为名单过滤、生命周期、事件转发与顺序控制；通用 ID 不再写死 QQ 数字规则；Store 对完全相同事实幂等、对同 ID 冲突事实报错并保留第一条。
+- 第二批提交 `6da56ec`：完成 `onebot_standard` / 显式无保护开关控制的 `onebot_privileged`、唯一配置树合同、MainAgent 通用 Tool 注入和消息日志脱敏；消息与合并转发查询不再依赖 Session 位置索引。
+- 压力 Review 发现 `sendLike` 未进入 route 队列、特权操作可绕过 Runtime 生命周期门，以及动态名单缺少真实联动测试；修复后所有 OneBot Tool 操作经过生命周期门，`sendLike` 与同 route 消息顺序执行，特权路径仍不增加名单、审批或归属检查。复审未发现可证实的 P0/P1/P2。
+- Core 202 个测试、OneBot 154 个测试、Server 157 个测试通过，Server 另有 1 个既有 Windows 权限条件测试跳过；全仓类型检查通过。未执行真实 QQ smoke，也未在本轮宣称构建通过。
+- 正式 `main.ts`、名单文件监听、进程生命周期改名和旧 `phase4-qq` 删除仍属于闭环三；当前结果是可组装模块完成，不代表正式进程入口已经切换。
 
 #### 闭环三：正式切换与清理
 
-- 将当前单个 `groupId` 迁移到正式群聊/私聊策略，接入名单热重载与最后有效配置保留机制；使用规范 route 生成稳定 Session ID，不重复注入固定路由文本。
+- 将当前旧入口的单个 `groupId` 环境装配迁移到正式群聊/私聊策略，接入名单热重载与最后有效配置保留机制；使用规范 route 生成稳定 Session ID，不重复注入固定路由文本。
 - 正式组合入口注册 `reply`、`onebot_standard` 和受显式无保护开关控制的 `onebot_privileged`；统一审批未完成前必须保留启动警告和默认关闭值。
 - 用 `process-lifecycle.ts` 取代 `phase4-process-lifecycle.ts`，迁移现有测试并保持进程关闭行为。
 - 删除旧 `phase4-qq` 入口、旧 Conversation Store 及迁移期 Channel 合同；正式源码、导出、测试、fixture 和日志不再保留 `phase4` / `Phase4`。
@@ -396,7 +396,7 @@ apps/server/src/
 ### 验收
 
 - 多个配置 Channel 使用稳定 `channelId`，相同平台会话 ID 不会串线。
-- 群聊和私聊可独立在 `allowlist | denylist` 间切换；默认群聊空白名单拒绝全部，默认私聊空黑名单允许全部。允许列表只向下游转发已登记 ID，拒绝列表不转发已登记 ID 并转发其他 ID。
+- 群聊和私聊可独立在 `allowlist | denylist` 间切换；仓库配置明确给出群聊白名单和私聊空黑名单，不依赖隐式默认。允许列表只向下游转发已登记 ID，拒绝列表不转发已登记 ID 并转发其他 ID。
 - 通用策略拒绝空白或重复 ID；OneBot 配置额外拒绝非安全正整数字符串。缺失策略或非法模式导致启动失败，不猜测隐式来源。
 - 合法名单热更新整体替换且立即影响后续入站与普通出站；非法更新保留上一份有效策略并记录错误，现有 Session 历史与正在运行的 Agent 不删除或取消。
 - 通过接收名单的普通消息、@Bot 消息、命令消息和 Bot 自身消息都转发给下游，携带完整 route、`isSelf` 和 trigger；Channel Runtime 不直接写 Store、不去重、不决定 Agent 触发。
@@ -411,7 +411,7 @@ apps/server/src/
 - 跨会话发送在来源 session 中保留 Tool Call/Tool Result，在目标 session 中保留完整公开消息及内部 `cross_session` 元数据；两个 session 不互相复制不属于本会话的公开时间线。
 - 当前 Agent turn 显式调用 `reply` 后能回到当前 session 的固定路由；`reply` 与 `onebot_standard` 的明确目标使用调用时最新名单。账号级只读枚举和消息/合并转发查询不做 Session 归属限制。后台任务重新组装上下文不在本批验收。
 - `onebot_privileged` 默认不可见；显式开启无保护测试开关后可真实执行并产生清晰启动警告，不伪装为已经具备审批保护。
-- Runtime 启动完成前主动发送返回明确错误；启动中收到的入站事件不丢失。关闭停止 Channel 收发并协作取消处理中任务，不因忽略取消信号的处理器无限阻塞。
+- Runtime 启动完成前主动发送和 OneBot Tool 操作返回明确错误；启动中收到的入站事件不丢失。关闭停止 Channel 收发并协作取消处理中任务，不因忽略取消信号的处理器无限阻塞。
 - `apps/server/src` 和相应测试中不存在活动的 `phase4` / `Phase4` 命名。
 - 旧 `phase4-qq` 文件和导出不保留兼容别名，避免形成两套入口。
 
