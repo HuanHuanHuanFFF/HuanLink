@@ -404,7 +404,7 @@ describe("OneBot 11 operation Tools", () => {
 
     const forwardArgumentsJson = JSON.stringify({
       channelId: "qq-main",
-      request: { operation: "getForwardMessage", params: { messageId: "808" } }
+      request: { operation: "getForwardMessage", params: { messageId: "forward-1" } }
     });
     const forwardOutput = await tools.standard.invoke(context(), forwardArgumentsJson, {
       toolCall: toolCall(
@@ -417,7 +417,7 @@ describe("OneBot 11 operation Tools", () => {
     expect(JSON.parse(String(forwardOutput))).toEqual({
       messages: [{ content: "forwarded" }]
     });
-    expect(getForwardMessage).toHaveBeenCalledWith({ messageId: "808" });
+    expect(getForwardMessage).toHaveBeenCalledWith({ messageId: "forward-1" });
   });
 
   test("returns delivery uncertainty instead of inventing an outbound association", async () => {

@@ -103,7 +103,7 @@ const standardRequest = z.discriminatedUnion("operation", [
     })
     .strict(),
   z.object({ operation: z.literal("getMessage"), params: z.object({ messageId }).strict() }).strict(),
-  z.object({ operation: z.literal("getForwardMessage"), params: z.object({ messageId }).strict() }).strict(),
+  z.object({ operation: z.literal("getForwardMessage"), params: z.object({ messageId: nonBlank }).strict() }).strict(),
   z.object({ operation: z.literal("getLoginInfo"), params: noParams }).strict(),
   z.object({ operation: z.literal("getVersionInfo"), params: noParams }).strict(),
   z.object({ operation: z.literal("getStatus"), params: noParams }).strict(),
