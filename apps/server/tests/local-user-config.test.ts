@@ -5,7 +5,10 @@ import { fileURLToPath } from "node:url";
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "vitest";
 
-import { loadServerLocalUserConfig } from "../src/local-user-config.js";
+import {
+  loadServerChannelRuntimeConfig,
+  loadServerLocalUserConfig
+} from "../src/local-user-config.js";
 
 const API_KEY = "main-agent-secret";
 const ACCESS_TOKEN = "onebot-access-token";
@@ -94,6 +97,70 @@ describe("loadServerLocalUserConfig", () => {
       channels: [{ channelId: "qq-main" }],
       agents: [{ agentId: "codex-local" }]
     });
+  });
+
+  test("loads the Channel runtime without resolving an unused MainAgent API key", async () => {
+    const configRoot = fileURLToPath(
+      new URL("../../../.huanlink/config/", import.meta.url)
+    );
+
+    const config = await loadServerChannelRuntimeConfig({
+      configRoot,
+      env: { HUANLINK_ONEBOT_ACCESS_TOKEN: ACCESS_TOKEN }
+    });
+
+    expect(config).toMatchObject({
+      mainAgent: {
+        provider: "deepseek",
+        apiKeyEnv: "DEEPSEEK_API_KEY"
+      },
+      channels: [{ channelId: "qq-main", accessToken: ACCESS_TOKEN }],
+      agents: [{ agentId: "codex-local" }],
+      sources: {
+        mainAgent: "server/main-agent.json",
+        channels: ["server/channels/onebot11.json"],
+        agents: ["server/agents/codex-local.json"]
+      }
+    });
+    expect(config.mainAgent).not.toHaveProperty("apiKey");
+  });
+
+  test("loads a Channel-only Server configuration without MainAgent or external Agents", async () => {
+    await writeValidServerConfig(tempRoot, {
+      agents: [],
+      config: {
+        version: 1,
+        server: {
+          channels: ["./server/channels/onebot11.json"],
+          agents: []
+        }
+      }
+    });
+
+    await expect(
+      loadServerChannelRuntimeConfig({
+        configRoot: tempRoot,
+        env: { HUANLINK_ONEBOT_ACCESS_TOKEN: ACCESS_TOKEN }
+      })
+    ).resolves.toMatchObject({
+      channels: [{ channelId: "qq-main" }],
+      agents: []
+    });
+  });
+
+  test("still validates a declared MainAgent file without resolving its API key", async () => {
+    await writeValidServerConfig(tempRoot);
+    await writeJson(path.join(tempRoot, "server", "main-agent.json"), {
+      ...mainAgent,
+      version: 2
+    });
+
+    await expect(
+      loadServerChannelRuntimeConfig({
+        configRoot: tempRoot,
+        env: { HUANLINK_ONEBOT_ACCESS_TOKEN: ACCESS_TOKEN }
+      })
+    ).rejects.toThrow(/server\/main-agent\.json.*version/);
   });
 
   test("loads only explicitly referenced Server files in declaration order and resolves secret references", async () => {
@@ -413,6 +480,25 @@ describe("loadServerLocalUserConfig", () => {
     }
   });
 
+  test("uses an explicit projectRoot without relying on process cwd", async () => {
+    const projectRoot = await mkdtemp(
+      path.join(os.tmpdir(), "huanlink-local-config-project-")
+    );
+    await writeValidServerConfig(
+      path.join(projectRoot, ".huanlink", "config")
+    );
+
+    try {
+      await expect(
+        loadServerLocalUserConfig({ projectRoot })
+      ).resolves.toMatchObject({
+        channels: [{ channelId: "qq-main" }]
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   test("rejects a .huanlink directory junction on the default path", async (context) => {
     await writeValidServerConfig(path.join(escapeRoot, "config"));
     const huanlinkPath = path.join(tempRoot, ".huanlink");
@@ -421,13 +507,31 @@ describe("loadServerLocalUserConfig", () => {
       return;
     }
 
-    const originalCwd = process.cwd();
-    process.chdir(tempRoot);
-    try {
-      await expect(loadServerLocalUserConfig()).rejects.toThrow(/\.huanlink/);
-    } finally {
-      process.chdir(originalCwd);
+    await expect(
+      loadServerLocalUserConfig({ projectRoot: tempRoot })
+    ).rejects.toThrow(/\.huanlink/);
+  });
+
+  test("rejects an explicit projectRoot directory junction", async (context) => {
+    await writeValidServerConfig(
+      path.join(escapeRoot, ".huanlink", "config")
+    );
+    const linkedProjectRoot = path.join(tempRoot, "linked-project-root");
+
+    if (
+      !(await createLinkOrSkip(
+        context,
+        escapeRoot,
+        linkedProjectRoot,
+        "junction"
+      ))
+    ) {
+      return;
     }
+
+    await expect(
+      loadServerChannelRuntimeConfig({ projectRoot: linkedProjectRoot })
+    ).rejects.toThrow(/project root/);
   });
 
   test.each([

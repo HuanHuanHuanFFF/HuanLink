@@ -7,14 +7,14 @@ import type { FlushableRuntimeLogger } from "@huanlink/core";
 import { afterEach, describe, expect, test } from "vitest";
 
 import * as server from "../src/index.js";
-import type { Phase4QqRuntimeConfig } from "../src/runtime-config.js";
+import type { ServerChannelRuntimeConfig } from "../src/local-user-config.js";
 
 type RuntimeLoggerExports = typeof server & {
-  createPhase4ServerRuntimeLogger(options: {
-    config: Phase4QqRuntimeConfig;
+  createServerRuntimeLogger(options: {
+    config: ServerChannelRuntimeConfig;
     moduleUrl: string;
   }): FlushableRuntimeLogger;
-  resolvePhase4ServerLogPath(moduleUrl: string): string;
+  resolveServerLogPath(moduleUrl: string): string;
 };
 
 const tempDirectories = new Set<string>();
@@ -28,12 +28,12 @@ afterEach(async () => {
   tempDirectories.clear();
 });
 
-describe("Phase 4 server runtime logger", () => {
+describe("server runtime logger", () => {
   test("is exported from the server package", () => {
-    expect(typeof runtimeLogging().createPhase4ServerRuntimeLogger).toBe(
+    expect(typeof runtimeLogging().createServerRuntimeLogger).toBe(
       "function"
     );
-    expect(typeof runtimeLogging().resolvePhase4ServerLogPath).toBe("function");
+    expect(typeof runtimeLogging().resolveServerLogPath).toBe("function");
   });
 
   test("writes the shutdown tail under the repository log path with configured secrets redacted", async () => {
@@ -42,23 +42,20 @@ describe("Phase 4 server runtime logger", () => {
       join(directory, "apps", "server", "dist", "main.js")
     ).href;
     const logPath = join(directory, ".huanlink", "logs", "server.jsonl");
-    const deepSeekKey = "deepseek-server-secret";
     const oneBotToken = "onebot-server-secret";
-    const logger = runtimeLogging().createPhase4ServerRuntimeLogger({
+    const logger = runtimeLogging().createServerRuntimeLogger({
       moduleUrl,
-      config: phase4Config(deepSeekKey, oneBotToken)
+      config: serverConfig(oneBotToken)
     });
 
-    expect(runtimeLogging().resolvePhase4ServerLogPath(moduleUrl)).toBe(logPath);
-    logger.info(`shutdown tail ${deepSeekKey}`, {
-      providerCredential: deepSeekKey,
+    expect(runtimeLogging().resolveServerLogPath(moduleUrl)).toBe(logPath);
+    logger.info("shutdown tail", {
       gatewayCredential: oneBotToken
     });
     await logger.close();
 
     const raw = await readFile(logPath, "utf8");
-    expect(raw).toContain("shutdown tail [Redacted]");
-    expect(raw).not.toContain(deepSeekKey);
+    expect(raw).toContain("shutdown tail");
     expect(raw).not.toContain(oneBotToken);
   });
 
@@ -68,19 +65,19 @@ describe("Phase 4 server runtime logger", () => {
       join(directory, "apps", "server", "dist", "main.js")
     ).href;
     const logPath = join(directory, ".huanlink", "logs", "server.jsonl");
-    const config = phase4Config("deepseek-key", "onebot-token");
-    config.oneBot11.url =
+    const config = serverConfig("onebot-token");
+    config.channels[0]!.url =
       "ws://onebot-user-secret:onebot-password-secret@127.0.0.1:3001/?session=onebot-query-secret";
-    config.mainAgentModel.baseURL =
+    config.mainAgent!.baseURL =
       "https://deepseek-user-secret:deepseek-password-secret@api.deepseek.com/beta?session=deepseek-query-secret";
-    const logger = runtimeLogging().createPhase4ServerRuntimeLogger({
+    const logger = runtimeLogging().createServerRuntimeLogger({
       moduleUrl,
       config
     });
 
     logger.error("provider connection failed", {
       error: new Error(
-        `${config.oneBot11.url} ${config.mainAgentModel.baseURL}`
+        `${config.channels[0]!.url} ${config.mainAgent!.baseURL}`
       )
     });
     await logger.close();
@@ -109,29 +106,41 @@ async function createTempDirectory(): Promise<string> {
   return directory;
 }
 
-function phase4Config(
-  deepSeekKey: string,
-  oneBotToken: string
-): Phase4QqRuntimeConfig {
+function serverConfig(oneBotToken: string): ServerChannelRuntimeConfig {
   return {
-    oneBot11: {
-      url: "ws://127.0.0.1:3001/",
-      accessToken: oneBotToken,
-      groupId: "20002",
-      commandPrefix: "/huanlink"
-    },
-    codexA2a: {
-      origin: "http://127.0.0.1:4000",
-      skillId: "codex-code-task"
-    },
-    mainAgentModel: {
+    mainAgent: {
       provider: "deepseek",
       modelId: "deepseek-v4-flash",
       baseURL: "https://api.deepseek.com/beta",
-      apiKey: deepSeekKey
+      apiKeyEnv: "DEEPSEEK_API_KEY"
     },
-    logging: {
-      level: "info"
+    channels: [
+      {
+        channelId: "qq-main",
+        type: "onebot11-forward-websocket",
+        url: "ws://127.0.0.1:3001/",
+        inboundPolicy: {
+          groups: { mode: "allowlist", ids: ["20002"] },
+          directs: { mode: "denylist", ids: [] }
+        },
+        enableUnsafePrivilegedOperations: false,
+        accessToken: oneBotToken
+      }
+    ],
+    agents: [
+      {
+        agentId: "codex-local",
+        displayName: "Codex Local",
+        transport: "a2a",
+        origin: "http://127.0.0.1:4000",
+        skillId: "codex-code-task",
+        enabled: true
+      }
+    ],
+    sources: {
+      mainAgent: "server/main-agent.json",
+      channels: ["server/channels/onebot11.json"],
+      agents: ["server/agents/codex-local.json"]
     }
   };
 }

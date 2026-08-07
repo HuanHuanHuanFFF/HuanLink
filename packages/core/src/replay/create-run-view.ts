@@ -36,15 +36,15 @@ export function createRunView(events: AgentEvent[]): RunView | null {
     switch (event.type) {
       case "channel.message.received":
         input = {
-          channel: event.data.channel,
-          conversationId: event.data.conversationId,
-          messageId: event.data.messageId,
-          senderId: event.data.senderId,
-          senderName: event.data.senderName,
-          text: event.data.text,
-          ...(event.data.trigger === undefined
+          ...event.data.message,
+          route: { ...event.data.message.route },
+          sender: { ...event.data.message.sender },
+          ...(event.data.message.contentOmitted === undefined
             ? {}
-            : { trigger: { ...event.data.trigger } })
+            : { contentOmitted: { ...event.data.message.contentOmitted } }),
+          ...(event.data.message.trigger === undefined
+            ? {}
+            : { trigger: { ...event.data.message.trigger } })
         };
         break;
       case "main_agent.run.started":

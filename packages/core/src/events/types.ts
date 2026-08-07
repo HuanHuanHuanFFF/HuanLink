@@ -1,11 +1,11 @@
 // HuanLink 外层编排事件 schema。
 import type { AgentCallTaskState } from "../agent-call/types.js";
-import type { ChannelTrigger } from "../channels/types.js";
+import type { InboundChannelMessageV1 } from "../channels/contract-v1.js";
 import type { AgentRuntimeTrigger } from "../runtime/agent-runtime.js";
 import type { AgentCallId, RunId, SessionId } from "../shared/ids.js";
 import type { TaskExecutionMode } from "../tasks/types.js";
 
-export const CORE_SCHEMA_VERSION = "2.0" as const;
+export const CORE_SCHEMA_VERSION = "3.0" as const;
 
 export type CoreSchemaVersion = typeof CORE_SCHEMA_VERSION;
 
@@ -31,13 +31,7 @@ export type AgentCallCause = {
 
 export type AgentEventDataByType = {
   "channel.message.received": {
-    channel: "onebot11";
-    conversationId: string;
-    messageId: string;
-    senderId: string;
-    senderName: string;
-    text: string;
-    trigger?: ChannelTrigger;
+    message: InboundChannelMessageV1;
   };
   "main_agent.run.started": {
     trigger?: AgentRuntimeTrigger;

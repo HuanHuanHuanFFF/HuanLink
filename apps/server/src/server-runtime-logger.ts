@@ -6,33 +6,35 @@ import {
   type FlushableRuntimeLogger
 } from "@huanlink/core";
 
-import type { Phase4QqRuntimeConfig } from "./runtime-config.js";
+import type { ServerChannelRuntimeConfig } from "./local-user-config.js";
 
-export type CreatePhase4ServerRuntimeLoggerOptions = {
-  config: Phase4QqRuntimeConfig;
+export type CreateServerRuntimeLoggerOptions = {
+  config: ServerChannelRuntimeConfig;
   moduleUrl: string;
 };
 
-export function resolvePhase4ServerLogPath(moduleUrl: string): string {
+export function resolveServerLogPath(moduleUrl: string): string {
   const repositoryRoot = fileURLToPath(new URL("../../../", moduleUrl));
   return join(repositoryRoot, ".huanlink", "logs", "server.jsonl");
 }
 
-export function createPhase4ServerRuntimeLogger(
-  options: CreatePhase4ServerRuntimeLoggerOptions
+export function createServerRuntimeLogger(
+  options: CreateServerRuntimeLoggerOptions
 ): FlushableRuntimeLogger {
   return createJsonlFileRuntimeLogger(
-    resolvePhase4ServerLogPath(options.moduleUrl),
+    resolveServerLogPath(options.moduleUrl),
     {
-      level: options.config.logging.level,
+      level: "info",
       base: { service: "huanlink-server" },
       redactValues: [
-        options.config.mainAgentModel.apiKey,
-        ...(options.config.oneBot11.accessToken === undefined
+        ...options.config.channels.flatMap((channel) => [
+          ...(channel.accessToken === undefined ? [] : [channel.accessToken]),
+          ...urlSecrets(channel.url)
+        ]),
+        ...(options.config.mainAgent === undefined
           ? []
-          : [options.config.oneBot11.accessToken]),
-        ...urlSecrets(options.config.oneBot11.url),
-        ...urlSecrets(options.config.mainAgentModel.baseURL)
+          : urlSecrets(options.config.mainAgent.baseURL)),
+        ...options.config.agents.flatMap((agent) => urlSecrets(agent.origin))
       ]
     }
   );

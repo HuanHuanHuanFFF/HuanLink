@@ -6,7 +6,13 @@ import { aisdk } from "@openai/agents-extensions/ai-sdk";
 import { wrapLanguageModel, type LanguageModelMiddleware } from "ai";
 
 import type { MainAgentModelBinding } from "./main-agent-runtime.js";
-import type { MainAgentModelConfig } from "./runtime-config.js";
+
+export type MainAgentModelConfig = {
+  provider: "deepseek";
+  modelId: string;
+  baseURL: string;
+  apiKey: string;
+};
 
 export type CreateDeepSeekMainAgentModelBindingOptions = {
   config: MainAgentModelConfig;

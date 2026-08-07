@@ -427,6 +427,15 @@ describe("Channel Contract v1", () => {
     expect(() => assertValidInboundChannelMessage(message)).not.toThrow();
   });
 
+  test("rejects undeclared top-level fields on an inbound message", () => {
+    expect(() =>
+      assertValidInboundChannelMessage({
+        ...inbound(),
+        untrusted: "must not enter the persisted contract"
+      } as never)
+    ).toThrow(/unsupported field untrusted/);
+  });
+
   test.each([
     {
       content: "partial original content",

@@ -85,11 +85,58 @@ const configEntrySchema = z
 
 const serverConfigReferenceSchema = z
   .object({
-    mainAgent: z.string(),
+    mainAgent: z.string().optional(),
     channels: z.array(z.string()).min(1),
-    agents: z.array(z.string()).min(1)
+    agents: z.array(z.string()).default([])
   })
   .strict();
+
+type ServerMainAgentStaticConfig = {
+  provider: "deepseek";
+  modelId: string;
+  baseURL: string;
+  apiKeyEnv: string;
+};
+
+type ServerChannelConfig = {
+  channelId: string;
+  type: "onebot11-forward-websocket";
+  url: string;
+  inboundPolicy: ChannelInboundAccessPolicy;
+  enableUnsafePrivilegedOperations: boolean;
+  accessToken?: string;
+};
+
+type ServerAgentConfig = {
+  agentId: string;
+  displayName: string;
+  transport: "a2a";
+  origin: string;
+  skillId: string;
+  enabled: boolean;
+};
+
+/**
+ * Channel 正式入口实际需要的配置快照。
+ *
+ * MainAgent 与外部 Agent 只做静态校验和热重载比较；在 Agent Runtime 接线前，
+ * 本类型不会解析或持有 MainAgent API Key。
+ */
+export type ServerChannelRuntimeConfig = {
+  mainAgent?: ServerMainAgentStaticConfig;
+  channels: Array<
+    ServerChannelConfig & {
+      accessTokenEnv?: string;
+    }
+  >;
+  agents: ServerAgentConfig[];
+  /** 入口文件中的显式引用身份；引用变化必须重启，不能伪装成名单热更新。 */
+  sources: {
+    mainAgent?: string;
+    channels: string[];
+    agents: string[];
+  };
+};
 
 export type ServerLocalUserConfig = {
   mainAgent: {
@@ -98,35 +145,91 @@ export type ServerLocalUserConfig = {
     baseURL: string;
     apiKey: string;
   };
-  channels: Array<{
-    channelId: string;
-    type: "onebot11-forward-websocket";
-    url: string;
-    inboundPolicy: ChannelInboundAccessPolicy;
-    enableUnsafePrivilegedOperations: boolean;
-    accessToken?: string;
-  }>;
-  agents: Array<{
-    agentId: string;
-    displayName: string;
-    transport: "a2a";
-    origin: string;
-    skillId: string;
-    enabled: boolean;
-  }>;
+  channels: ServerChannelConfig[];
+  agents: ServerAgentConfig[];
 };
 
-export async function loadServerLocalUserConfig(input: {
+export type LoadServerLocalUserConfigInput = {
   configRoot?: string;
+  projectRoot?: string;
   env?: Readonly<Record<string, string | undefined>>;
-} = {}): Promise<ServerLocalUserConfig> {
-  const cwd = process.cwd();
-  if (input.configRoot === undefined) {
-    await requireDefaultConfigurationPath(cwd);
+};
+
+type ParsedServerConfiguration = {
+  mainAgent?: {
+    value: z.infer<typeof mainAgentFileSchema>;
+    relativePath: string;
+  };
+  channels: Array<{
+    value: z.infer<typeof channelFileSchema>;
+    relativePath: string;
+  }>;
+  agents: Array<z.infer<typeof agentFileSchema>>;
+};
+
+export async function loadServerLocalUserConfig(
+  input: LoadServerLocalUserConfigInput = {}
+): Promise<ServerLocalUserConfig> {
+  const { configuration, env } = await readServerConfiguration(input);
+  if (configuration.mainAgent === undefined) {
+    throw configurationError("config.json", "mainAgent: is invalid");
   }
-  const configRoot = path.resolve(
-    input.configRoot ?? path.join(cwd, ".huanlink", "config")
-  );
+
+  return {
+    mainAgent: {
+      provider: configuration.mainAgent.value.provider,
+      modelId: configuration.mainAgent.value.modelId,
+      baseURL: configuration.mainAgent.value.baseURL,
+      apiKey: requireEnvironmentValue(
+        env,
+        configuration.mainAgent.value.apiKeyEnv,
+        configuration.mainAgent.relativePath,
+        "apiKeyEnv"
+      )
+    },
+    channels: configuration.channels.map((channel) =>
+      resolveChannelConfig(channel.value, channel.relativePath, env, false)
+    ),
+    agents: configuration.agents.map(copyAgentConfig)
+  };
+}
+
+/**
+ * 加载正式 Channel 入口所需配置，同时完整校验已声明的 Server 静态配置。
+ * MainAgent API Key 要等 Agent Runtime 真正接线时再解析。
+ */
+export async function loadServerChannelRuntimeConfig(
+  input: LoadServerLocalUserConfigInput = {}
+): Promise<ServerChannelRuntimeConfig> {
+  const { configuration, env, sources } = await readServerConfiguration(input);
+
+  return {
+    ...(configuration.mainAgent === undefined
+      ? {}
+      : {
+          mainAgent: {
+            provider: configuration.mainAgent.value.provider,
+            modelId: configuration.mainAgent.value.modelId,
+            baseURL: configuration.mainAgent.value.baseURL,
+            apiKeyEnv: configuration.mainAgent.value.apiKeyEnv
+          }
+        }),
+    channels: configuration.channels.map((channel) =>
+      resolveChannelConfig(channel.value, channel.relativePath, env, true)
+    ),
+    agents: configuration.agents.map(copyAgentConfig),
+    sources
+  };
+}
+
+async function readServerConfiguration(
+  input: LoadServerLocalUserConfigInput
+): Promise<{
+  configuration: ParsedServerConfiguration;
+  env: Readonly<Record<string, string | undefined>>;
+  sources: ServerChannelRuntimeConfig["sources"];
+}> {
+  const configRoot = await resolveConfigRoot(input);
   const env = input.env ?? process.env;
   const entryRelativePath = "config.json";
   const entry = parseConfigFile(
@@ -142,10 +245,10 @@ export async function loadServerLocalUserConfig(input: {
     entry.server,
     entryRelativePath
   );
-  const mainAgentRelativePath = validateServerReference(
-    references.mainAgent,
-    "mainAgent"
-  );
+  const mainAgentRelativePath =
+    references.mainAgent === undefined
+      ? undefined
+      : validateServerReference(references.mainAgent, "mainAgent");
   const channelFiles = references.channels.map((reference) =>
     validateServerReference(reference, "channels")
   );
@@ -154,11 +257,17 @@ export async function loadServerLocalUserConfig(input: {
   );
   ensureUniqueReferences(channelFiles, "channels");
   ensureUniqueReferences(agentFiles, "agents");
-  const mainAgent = parseConfigFile(
-    mainAgentFileSchema,
-    await readJsonObject(configRoot, mainAgentRelativePath),
-    mainAgentRelativePath
-  );
+  const mainAgent =
+    mainAgentRelativePath === undefined
+      ? undefined
+      : {
+          value: parseConfigFile(
+            mainAgentFileSchema,
+            await readJsonObject(configRoot, mainAgentRelativePath),
+            mainAgentRelativePath
+          ),
+          relativePath: mainAgentRelativePath
+        };
 
   const channels = await Promise.all(
     channelFiles.map(async (relativePath) => {
@@ -168,23 +277,7 @@ export async function loadServerLocalUserConfig(input: {
         relativePath
       );
 
-      return {
-        channelId: parsed.channelId,
-        type: parsed.type,
-        url: parsed.url,
-        inboundPolicy: parsed.inboundPolicy,
-        enableUnsafePrivilegedOperations: parsed.enableUnsafePrivilegedOperations,
-        ...(parsed.accessTokenEnv === undefined
-          ? {}
-          : {
-              accessToken: requireEnvironmentValue(
-                env,
-                parsed.accessTokenEnv,
-                relativePath,
-                "accessTokenEnv"
-              )
-            })
-      };
+      return { value: parsed, relativePath };
     })
   );
   const agents = await Promise.all(
@@ -195,34 +288,121 @@ export async function loadServerLocalUserConfig(input: {
         relativePath
       );
 
-      return {
-        agentId: parsed.agentId,
-        displayName: parsed.displayName,
-        transport: parsed.transport,
-        origin: parsed.origin,
-        skillId: parsed.skillId,
-        enabled: parsed.enabled
-      };
+      return parsed;
     })
   );
 
-  ensureUniqueIds(channels, "channelId", channelFiles);
+  ensureUniqueIds(
+    channels.map((channel) => channel.value),
+    "channelId",
+    channelFiles
+  );
   ensureUniqueIds(agents, "agentId", agentFiles);
 
   return {
-    mainAgent: {
-      provider: mainAgent.provider,
-      modelId: mainAgent.modelId,
-      baseURL: mainAgent.baseURL,
-      apiKey: requireEnvironmentValue(
-        env,
-        mainAgent.apiKeyEnv,
-        mainAgentRelativePath,
-        "apiKeyEnv"
-      )
+    configuration: {
+      ...(mainAgent === undefined ? {} : { mainAgent }),
+      channels,
+      agents
     },
-    channels,
-    agents
+    env,
+    sources: {
+      ...(mainAgentRelativePath === undefined
+        ? {}
+        : { mainAgent: mainAgentRelativePath }),
+      channels: [...channelFiles],
+      agents: [...agentFiles]
+    }
+  };
+}
+
+async function resolveConfigRoot(
+  input: LoadServerLocalUserConfigInput
+): Promise<string> {
+  if (input.configRoot !== undefined && input.projectRoot !== undefined) {
+    throw new TypeError("Specify either configRoot or projectRoot, not both");
+  }
+  if (input.configRoot !== undefined) {
+    return path.resolve(input.configRoot);
+  }
+
+  const projectRoot = path.resolve(input.projectRoot ?? process.cwd());
+  await requireProjectRoot(projectRoot);
+  await requireDefaultConfigurationPath(projectRoot);
+  return path.join(projectRoot, ".huanlink", "config");
+}
+
+async function requireProjectRoot(projectRoot: string): Promise<void> {
+  let metadata: Awaited<ReturnType<typeof lstat>>;
+  try {
+    metadata = await lstat(projectRoot);
+  } catch {
+    throw configurationError(
+      "project root",
+      "root: must be an existing non-link directory"
+    );
+  }
+  if (metadata.isSymbolicLink()) {
+    throw configurationError(
+      "project root",
+      "root: must not be a symbolic link or directory junction"
+    );
+  }
+  if (!metadata.isDirectory()) {
+    throw configurationError("project root", "root: must be a directory");
+  }
+}
+
+function resolveChannelConfig(
+  channel: z.infer<typeof channelFileSchema>,
+  relativePath: string,
+  env: Readonly<Record<string, string | undefined>>,
+  includeEnvironmentReference: false
+): ServerChannelConfig;
+function resolveChannelConfig(
+  channel: z.infer<typeof channelFileSchema>,
+  relativePath: string,
+  env: Readonly<Record<string, string | undefined>>,
+  includeEnvironmentReference: true
+): ServerChannelRuntimeConfig["channels"][number];
+function resolveChannelConfig(
+  channel: z.infer<typeof channelFileSchema>,
+  relativePath: string,
+  env: Readonly<Record<string, string | undefined>>,
+  includeEnvironmentReference: boolean
+): ServerChannelRuntimeConfig["channels"][number] {
+  return {
+    channelId: channel.channelId,
+    type: channel.type,
+    url: channel.url,
+    inboundPolicy: channel.inboundPolicy,
+    enableUnsafePrivilegedOperations: channel.enableUnsafePrivilegedOperations,
+    ...(includeEnvironmentReference && channel.accessTokenEnv !== undefined
+      ? { accessTokenEnv: channel.accessTokenEnv }
+      : {}),
+    ...(channel.accessTokenEnv === undefined
+      ? {}
+      : {
+          accessToken: requireEnvironmentValue(
+            env,
+            channel.accessTokenEnv,
+            relativePath,
+            "accessTokenEnv"
+          )
+        })
+  };
+}
+
+function copyAgentConfig(
+  agent: z.infer<typeof agentFileSchema>
+): ServerAgentConfig {
+  return {
+    agentId: agent.agentId,
+    displayName: agent.displayName,
+    transport: agent.transport,
+    origin: agent.origin,
+    skillId: agent.skillId,
+    enabled: agent.enabled
   };
 }
 

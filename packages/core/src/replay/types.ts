@@ -1,5 +1,5 @@
 import type { AgentCallTaskState } from "../agent-call/types.js";
-import type { ChannelTrigger } from "../channels/types.js";
+import type { InboundChannelMessageV1 } from "../channels/contract-v1.js";
 import type { AgentRuntimeTrigger } from "../runtime/agent-runtime.js";
 import type { AgentCallId, RunId, SessionId } from "../shared/ids.js";
 import type { TaskExecutionMode } from "../tasks/types.js";
@@ -20,15 +20,7 @@ export interface RunViewCause {
   readonly state: AgentCallTaskState;
 }
 
-export interface ChannelInputView {
-  readonly channel: "onebot11";
-  readonly conversationId: string;
-  readonly messageId: string;
-  readonly senderId: string;
-  readonly senderName: string;
-  readonly text: string;
-  readonly trigger?: ChannelTrigger;
-}
+export type ChannelInputView = InboundChannelMessageV1;
 
 export interface AgentCallView {
   readonly agentCallId: AgentCallId;

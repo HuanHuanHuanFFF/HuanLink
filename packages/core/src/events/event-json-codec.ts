@@ -1,6 +1,8 @@
 import { errorMessage } from "../shared/errors.js";
+import { assertValidInboundChannelMessage } from "../channels/channel-validation-v1.js";
 import { AGENT_EVENT_TYPES, CORE_SCHEMA_VERSION } from "./types.js";
 import type { AgentEvent, AgentEventType } from "./types.js";
+import type { InboundChannelMessageV1 } from "../channels/channel-message-v1.js";
 import type { RunId } from "../shared/ids.js";
 
 const EVENT_ENVELOPE_KEYS = new Set([
@@ -12,11 +14,6 @@ const EVENT_ENVELOPE_KEYS = new Set([
   "runId",
   "sessionId",
   "data"
-]);
-
-const CHANNEL_TRIGGER_KINDS: ReadonlySet<string> = new Set([
-  "mention",
-  "command"
 ]);
 
 const AGENT_RUNTIME_TRIGGERS: ReadonlySet<string> = new Set([
@@ -116,13 +113,8 @@ function isAgentEventData(type: AgentEventType, value: unknown): boolean {
   switch (type) {
     case "channel.message.received":
       return (
-        value.channel === "onebot11" &&
-        hasString(value, "conversationId") &&
-        hasString(value, "messageId") &&
-        hasString(value, "senderId") &&
-        hasString(value, "senderName") &&
-        hasString(value, "text") &&
-        (value.trigger === undefined || isChannelTrigger(value.trigger))
+        Object.keys(value).length === 1 &&
+        isInboundChannelMessage(value.message)
       );
     case "main_agent.run.started":
       return (
@@ -161,12 +153,13 @@ function isAgentEventData(type: AgentEventType, value: unknown): boolean {
   }
 }
 
-function isChannelTrigger(value: unknown): boolean {
-  return (
-    isRecord(value) &&
-    isAllowedString(value.kind, CHANNEL_TRIGGER_KINDS) &&
-    hasString(value, "text")
-  );
+function isInboundChannelMessage(value: unknown): boolean {
+  try {
+    assertValidInboundChannelMessage(value as InboundChannelMessageV1);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function isAgentCallCause(value: unknown): boolean {

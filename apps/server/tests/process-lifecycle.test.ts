@@ -3,7 +3,7 @@ import { describe, expect, test, vi } from "vitest";
 import {
   startRuntimeWithSignalShutdown,
   type ProcessSignalSource
-} from "../src/phase4-process-lifecycle.js";
+} from "../src/process-lifecycle.js";
 import { ThrowingMutatingRuntimeLogger } from "./support/hostile-runtime-logger.js";
 import { RecordingRuntimeLogger } from "./support/recording-runtime-logger.js";
 
@@ -54,7 +54,7 @@ class ControlledSignals implements ProcessSignalSource {
   }
 }
 
-describe("Phase 4 process lifecycle", () => {
+describe("process lifecycle", () => {
   test("keeps startup and signal shutdown working when every logger method throws", async () => {
     const signals = new ControlledSignals();
     const start = vi.fn(async () => undefined);

@@ -6,11 +6,11 @@ import {
 
 import { createBestEffortRuntimeLogger } from "./best-effort-runtime-logger.js";
 
-export type Phase4ShutdownSignal = "SIGINT" | "SIGTERM";
+export type ShutdownSignal = "SIGINT" | "SIGTERM";
 
 export interface ProcessSignalSource {
-  once(signal: Phase4ShutdownSignal, listener: () => void): void;
-  off(signal: Phase4ShutdownSignal, listener: () => void): void;
+  once(signal: ShutdownSignal, listener: () => void): void;
+  off(signal: ShutdownSignal, listener: () => void): void;
 }
 
 export interface StartableRuntime {
@@ -21,7 +21,7 @@ export interface StartableRuntime {
 export type StartRuntimeWithSignalShutdownOptions = {
   runtime: StartableRuntime;
   signals?: ProcessSignalSource;
-  onSignal?: (signal: Phase4ShutdownSignal) => void;
+  onSignal?: (signal: ShutdownSignal) => void;
   onShutdownError?: (error: Error) => void;
   logger?: RuntimeLogger;
   closeLogger?: () => Promise<void> | void;
@@ -67,7 +67,7 @@ export async function startRuntimeWithSignalShutdown(
       }
     }
   };
-  const beginShutdown = (signal: Phase4ShutdownSignal): void => {
+  const beginShutdown = (signal: ShutdownSignal): void => {
     if (shutdownOperation !== undefined) {
       return;
     }
@@ -107,7 +107,7 @@ export async function startRuntimeWithSignalShutdown(
 
 function notifySignal(
   listener: StartRuntimeWithSignalShutdownOptions["onSignal"],
-  signal: Phase4ShutdownSignal
+  signal: ShutdownSignal
 ): void {
   try {
     listener?.(signal);

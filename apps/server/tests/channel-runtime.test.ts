@@ -273,6 +273,90 @@ describe("ChannelRuntime", () => {
     await runtime.close();
   });
 
+  test("replaces policies for multiple channels as one atomic update", async () => {
+    const first = new FakeChannelAdapter("qq-main");
+    const second = new FakeChannelAdapter("qq-secondary");
+    const runtime = createChannelRuntime({
+      channels: [first, second].map((adapter) => ({
+        adapter,
+        inboundPolicy: {
+          groups: { mode: "allowlist" as const, ids: ["before"] },
+          directs: { mode: "denylist" as const, ids: [] }
+        }
+      }))
+    });
+
+    runtime.replaceAccessPolicies(
+      new Map([
+        [
+          "qq-main",
+          {
+            groups: { mode: "allowlist", ids: ["after-main"] },
+            directs: { mode: "denylist", ids: [] }
+          }
+        ],
+        [
+          "qq-secondary",
+          {
+            groups: { mode: "allowlist", ids: ["after-secondary"] },
+            directs: { mode: "denylist", ids: [] }
+          }
+        ]
+      ])
+    );
+
+    expect(
+      runtime.isRouteAllowed({
+        channelId: "qq-main",
+        conversationKind: "group",
+        conversationId: "after-main"
+      })
+    ).toBe(true);
+    expect(
+      runtime.isRouteAllowed({
+        channelId: "qq-secondary",
+        conversationKind: "group",
+        conversationId: "after-secondary"
+      })
+    ).toBe(true);
+
+    expect(() =>
+      runtime.replaceAccessPolicies(
+        new Map([
+          [
+            "qq-main",
+            {
+              groups: { mode: "allowlist", ids: ["must-not-apply"] },
+              directs: { mode: "denylist", ids: [] }
+            }
+          ],
+          [
+            "qq-secondary",
+            {
+              groups: { mode: "allowlist", ids: [" "] },
+              directs: { mode: "denylist", ids: [] }
+            }
+          ]
+        ])
+      )
+    ).toThrow(/groups.*non-empty/i);
+
+    expect(
+      runtime.isRouteAllowed({
+        channelId: "qq-main",
+        conversationKind: "group",
+        conversationId: "after-main"
+      })
+    ).toBe(true);
+    expect(
+      runtime.isRouteAllowed({
+        channelId: "qq-main",
+        conversationKind: "group",
+        conversationId: "must-not-apply"
+      })
+    ).toBe(false);
+  });
+
   test("isolates the same route and message IDs across stable channel IDs", async () => {
     const first = new FakeChannelAdapter("qq-main");
     const second = new FakeChannelAdapter("qq-secondary");
@@ -328,7 +412,7 @@ describe("ChannelRuntime", () => {
     await runtime.close();
   });
 
-  test("serializes inbound forwarding per route without blocking another route", async () => {
+  test("serializes user and self-event forwarding per route without blocking another route", async () => {
     const adapter = new FakeChannelAdapter("qq-main");
     let releaseFirst!: () => void;
     const firstPending = new Promise<void>((resolve) => {
@@ -353,7 +437,13 @@ describe("ChannelRuntime", () => {
     await runtime.start();
 
     adapter.emit(inboundMessage({ messageId: "first", conversationId: "10001" }));
-    adapter.emit(inboundMessage({ messageId: "same-route", conversationId: "10001" }));
+    adapter.emit(
+      inboundMessage({
+        messageId: "same-route-self",
+        conversationId: "10001",
+        isSelf: true
+      })
+    );
     adapter.emit(
       inboundMessage({
         messageId: "other-route",
@@ -371,7 +461,10 @@ describe("ChannelRuntime", () => {
 
     releaseFirst();
     await vi.waitFor(() => expect(onMessage).toHaveBeenCalledTimes(3));
-    expect(onMessage.mock.calls[2]?.[0].message.messageId).toBe("same-route");
+    expect(onMessage.mock.calls[2]?.[0].message).toMatchObject({
+      messageId: "same-route-self",
+      sender: { isSelf: true }
+    });
     await runtime.close();
   });
 

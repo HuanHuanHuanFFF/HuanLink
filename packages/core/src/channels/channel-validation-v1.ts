@@ -91,7 +91,7 @@ export function assertValidSendChannelMessageCommand(
   );
 }
 
-/** 在入站消息进入 session 前校验字符串边界和基础元数据。 */
+/** 在入站消息离开 Adapter 边界前校验字符串边界和基础元数据。 */
 export function assertValidInboundChannelMessage(
   message: InboundChannelMessageV1
 ): void {
@@ -100,6 +100,21 @@ export function assertValidInboundChannelMessage(
   }
 
   const rawMessage = message as unknown as Record<string, unknown>;
+  assertOnlyKeys(
+    rawMessage,
+    [
+      "messageId",
+      "route",
+      "sender",
+      "receivedAt",
+      "content",
+      "contentFormat",
+      "contentOmitted",
+      "replyToMessageId",
+      "trigger"
+    ],
+    "Inbound Channel message"
+  );
   requireNonEmptyString(rawMessage.messageId, "Inbound Channel messageId");
   assertValidChannelConversationRoute(rawMessage.route);
   requireUtcIsoTimestamp(rawMessage.receivedAt, "Inbound Channel receivedAt");

@@ -58,6 +58,10 @@ export interface ChannelRuntime {
     channelId: string,
     policy: ChannelInboundAccessPolicy
   ): void;
+  /** 先校验全部候选，再一次性替换多个 Channel 的名单。 */
+  replaceAccessPolicies(
+    policies: ReadonlyMap<string, ChannelInboundAccessPolicy>
+  ): void;
   /** 使用 Core 的规范规则生成目标外部会话 ID。 */
   sessionIdForRoute(route: ChannelConversationRouteV1): SessionId;
   runOutbound<T>(
@@ -122,6 +126,7 @@ export function createChannelRuntime(
       );
     },
     replaceAccessPolicy,
+    replaceAccessPolicies,
     sessionIdForRoute: channelSessionIdFor,
     runOutbound,
     runOperation
@@ -343,30 +348,49 @@ export function createChannelRuntime(
     channelId: string,
     policy: ChannelInboundAccessPolicy
   ): void {
-    const registration = registrations.get(channelId);
-    if (registration === undefined) {
-      throw new Error(`No Channel Adapter is registered for ${channelId}`);
-    }
+    replaceAccessPolicies(new Map([[channelId, policy]]));
+  }
 
-    let replacement: ChannelInboundAccessPolicy;
+  function replaceAccessPolicies(
+    policies: ReadonlyMap<string, ChannelInboundAccessPolicy>
+  ): void {
+    const replacements: Array<{
+      channelId: string;
+      registration: RegisteredChannel;
+      policy: ChannelInboundAccessPolicy;
+    }> = [];
+
     try {
-      replacement = copyChannelInboundAccessPolicy(policy);
+      for (const [channelId, policy] of policies) {
+        const registration = registrations.get(channelId);
+        if (registration === undefined) {
+          throw new Error(`No Channel Adapter is registered for ${channelId}`);
+        }
+        replacements.push({
+          channelId,
+          registration,
+          policy: copyChannelInboundAccessPolicy(policy)
+        });
+      }
     } catch (error) {
       logger.error("channel.runtime.access_policy_rejected", {
-        channelId,
         errorType: normalizeError(error).name
       });
       throw error;
     }
 
-    registration.inboundPolicy = replacement;
-    logger.info("channel.runtime.access_policy_replaced", {
-      channelId,
-      groupMode: replacement.groups.mode,
-      groupIdCount: replacement.groups.ids.length,
-      directMode: replacement.directs.mode,
-      directIdCount: replacement.directs.ids.length
-    });
+    for (const replacement of replacements) {
+      replacement.registration.inboundPolicy = replacement.policy;
+    }
+    for (const replacement of replacements) {
+      logger.info("channel.runtime.access_policy_replaced", {
+        channelId: replacement.channelId,
+        groupMode: replacement.policy.groups.mode,
+        groupIdCount: replacement.policy.groups.ids.length,
+        directMode: replacement.policy.directs.mode,
+        directIdCount: replacement.policy.directs.ids.length
+      });
+    }
   }
 
   function runOutbound<T>(

@@ -11,7 +11,7 @@ import type {
   AgentEventDraft,
   AgentEventType,
   AgentRuntimeTrigger,
-  ChannelTrigger,
+  ChannelTriggerV1,
   EventLog,
   EventReader,
   EventWriter,
@@ -27,10 +27,7 @@ describe("core public types", () => {
     const agentCallId: AgentCallId = "agent_call_01";
     const eventType: AgentEventType = "agent_call.created";
     const trigger: AgentRuntimeTrigger = "agent_call_terminal";
-    const channelTrigger: ChannelTrigger = {
-      kind: "mention",
-      text: "@bot continue"
-    };
+    const channelTrigger: ChannelTriggerV1 = { kind: "mention" };
     const state: AgentCallTaskState = "submitted";
     const executionMode: TaskExecutionMode = "async";
 
@@ -72,10 +69,10 @@ describe("core public types", () => {
       readRunEvents: eventReader.readRunEvents
     };
 
-    expect(CORE_SCHEMA_VERSION).toBe("2.0");
+    expect(CORE_SCHEMA_VERSION).toBe("3.0");
     expect(eventWriter.append(eventDraft)).toEqual(event);
     expect(eventLog.readRunEvents(runId)).toEqual([event]);
-    expect(channelTrigger).toEqual({ kind: "mention", text: "@bot continue" });
+    expect(channelTrigger).toEqual({ kind: "mention" });
   });
 
   test("does not expose the retired inner-loop runtime API", () => {
