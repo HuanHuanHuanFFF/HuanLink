@@ -380,7 +380,9 @@ apps/server/src/
 - Core `channel.message.received` 改为完整 V1 入站消息，`CORE_SCHEMA_VERSION` 升至 `3.0`；严格拒绝未声明字段和旧 `2.0` JSONL，不提供迁移器。
 - 两名独立压力 Reviewer 先后发现并推动修复：配置根 junction 绕过、热重载旧快照竞态、Channel 引用身份丢失、未使用 Agent 密钥阻塞 Channel-only 启动、持久化合同接受额外字段，以及配置说明与 Codex Adapter 运行事实不一致。三路最终复审均未发现剩余可证实的 P0/P1/P2。
 - 最终自动化结果：Core 197、OneBot 104、Server 133、Codex Adapter 143、A2A Client 17、OpenAI Agents 58，共 652 个测试通过；Server 与 Codex Adapter 各有 1 个 Windows 权限条件测试跳过。全仓类型检查和全仓构建通过。
-- 未执行真实 QQ smoke；当前只能声明正式进程已接入 Channel 与热重载，不能声明 QQ -> Agent 全链路可用。消息队列、Session/回流关联、Agent 调度、Tool 正式注入和上下文管理继续后移。
+- 已完成真实 QQ 的 Channel-only smoke：Server 与远端 LLBot 正向 WebSocket 完成握手并进入 `server.ready`；真实群消息能被 OneBot Adapter 解析，允许群的普通消息与 `mention` 消息按 route 进入统一下游出口，其他群消息按名单拒绝。该结果只证明 QQ -> Channel 下游出口，不代表 QQ -> Agent 全链路可用；私聊、媒体、自身消息、出站 Tool、断线重连和名单热重载仍未完成真实环境验证。
+- 日志增长实测快照：约 15.5 分钟收到 52 条消息并新增 31.65 KiB，平均每条入站约 616 字节，按该时段流量折算约 2.9 MiB/天。现有 `server.jsonl` 的约 7.72 MiB 中超过 99% 来自旧阶段 payload 日志；当前 Logger 仍为单文件追加且没有轮转。日志轮转后移处理，暂定单文件 10 MiB、保留最近 3 份，不在本批修改运行代码。
+- 消息队列、Session/回流关联、Agent 调度、Tool 正式注入和上下文管理继续后移。
 
 ### 明确后移到 Agent Runtime 模块
 
