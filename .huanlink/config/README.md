@@ -1,10 +1,10 @@
 # HuanLink 本地配置
 
-这里是 HuanLink v1.0 唯一的配置树。代码只固定读取 `.huanlink/config/config.json`；其他 JSON 只有被该入口显式引用时才会生效。
+这里是 HuanLink v1.0 的目标唯一配置树。Server 正式入口只固定读取 `.huanlink/config/config.json`；其他 Server JSON 只有被该入口显式引用时才会生效。Codex A2A Adapter 进程仍有一项尚未完成的迁移边界，见“当前阶段边界”。
 
 ## 修改规则
 
-- `config.json` 是唯一入口，不要新增第二个配置根、备用入口或环境变量入口。
+- `config.json` 是最终唯一入口，不要新增第二个配置根或备用配置树。
 - 引用必须以 `./` 开头、使用 `/`、以 `.json` 结尾，并位于对应进程的目录内：Server 使用 `./server/**`，Codex Adapter 使用 `./adapters/codex/**`。
 - 每个路径段都必须非空，不能使用 `.`、`..` 或反斜杠；数组中的重复引用会直接报错。
 - 加载器不扫描目录、不按文件名猜配置、不递归 include，也不合并多套配置。未写入 `config.json` 的 JSON 不生效。
@@ -23,7 +23,15 @@
 
 ## 当前阶段边界
 
-配置合同已经建立并验证，但两个 loader 尚未接入各自 `main.ts`。当前启动流程仍保留旧环境变量装配；正式入口切换和名单文件监听安排在 B07 闭环三，不要提前删除旧启动参数，也不要把当前状态理解为已经支持文件热重载。
+Server 正式入口已经只从本配置树装配 V1 Channel；旧的单群号、命令前缀和 OneBot 地址环境变量入口不再生效。环境变量只承载 JSON 明确引用的秘密值。
+
+当前 Channel-only 入口只解析实际建连所需的 Channel Token；即使声明了 MainAgent，也只校验 `apiKeyEnv` 名称而不读取对应 API Key。MainAgent 凭证会在 Agent Runtime 正式接线时再解析，因此缺少模型密钥不会阻塞纯 Channel 启动。
+
+Codex A2A Adapter 的配置加载器已经能读取 `./adapters/codex/**`，但该进程的 `main.ts` 尚未切换到加载器，当前仍使用 `HUANLINK_CODEX_*`、`HUANLINK_LOG_LEVEL` 等遗留环境变量和内置默认值。因而，现阶段修改 `adapters/codex` JSON 不会改变正在运行的 Codex Adapter；该迁移后移到 Codex Adapter 自身批次，不属于本次 Server Channel 闭环。这里记录的是已知过渡状态，不代表允许长期保留第二套正式配置来源。
+
+当前只把名单变化热重载到正在运行的 Channel：每次保存仍会完整校验 Server 配置树；除 `groups`、`directs` 的 `mode` 与 `ids` 外，任何配置变化都要求重启，并且不会与新名单部分混用。无效 JSON、缺失字段或非法 ID 会保留上一份有效名单并记录脱敏告警。文件监听属于本机文件系统上的最佳努力便利能力，确定性校验仍以进程启动为准。
+
+正式入口目前只把名单允许的事件按 route 顺序交给统一下游出口，保留 `sender.isSelf` 和 `trigger`。消息缓冲队列、Session 写入、Agent 触发和多个外部 Agent 路由尚未接入；因此不能把“Server 已连接 Channel”理解为 QQ -> Agent 全链路已经可用。
 
 ## Channel 接收名单
 
@@ -51,10 +59,10 @@
 - 群号或私聊 ID 使用正整数安全字符串，并且同一策略中的 `ids` 不能重复。缺少策略、模式非法或 ID 非法时启动失败，不使用隐式默认值。
 - 同一份名单也限制当前会话 `reply` 和 `onebot_standard` 的明确群聊/私聊目标，调用时读取最新已生效名单。这样不会出现普通 Tool 能向一个完全不接收回流事件的会话发送消息。
 - 通过名单的普通消息、@ Bot 消息、斜杠命令和 Bot 自身消息都由 Channel Runtime 原样转发；`trigger` 和 `sender.isSelf` 只是下游判断依据。Runtime 不决定是否写 Session、去重或启动 Agent。
-- Runtime 已提供完整校验后原子替换名单的接口；闭环三接入正式入口和文件监听后，合法保存会整体替换，非法保存会保留上一份有效名单。现阶段 JSON loader 尚未接入当前旧入口，修改本文件不会改变正在运行的旧 QQ 链路。
+- Runtime 会先校验所有配置 Channel 的候选名单，再一次性整体替换；任一名单非法时不会让其他 Channel 先应用一半。已有处理不会被取消，保存成功后的后续事件使用新名单。
 
 ## OneBot 特权操作
 
-- `enableUnsafePrivilegedOperations` 必须显式填写，仓库默认值为 `false`。此时不会向 Agent 提供 `onebot_privileged`。
-- 改为 `true` 只用于明确的真实测试：禁言、踢人、撤回、群管理和请求处理会直接执行，当前没有审批恢复、名单或消息归属保护；创建 Tool 时会记录风险警告。
+- `enableUnsafePrivilegedOperations` 必须显式填写，仓库默认值为 `false`，并且变化后必须重启。
+- `onebot_privileged` 合同仍是无审批测试能力：以后正式注入 Agent Runtime 后，改为 `true` 会允许禁言、踢人、撤回、群管理和请求处理直接执行。当前消息队列、Session 和 Agent Tool 组合尚未接入，因此本开关不会单独使 Tool 出现在正在运行的 Agent 中。
 - 真实测试前确认所连账号、群聊和操作目标。统一审批链完成前不要把该开关作为日常默认值。

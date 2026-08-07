@@ -1,6 +1,6 @@
 # HuanLink v1.0 Channel Contract v1 实施计划
 
-> **状态：执行中，B01～B06、B07 Core Conversation Session 基础、当前会话 `reply` 和闭环二均已提交并推送；2026-08-07 需求复核后的两批修订已经完成测试、压力 Review 和复审。尚未切换正式进程入口，名单文件监听、旧 Phase4 清理和真实 QQ 验证仍属于闭环三及 B08。** 2026-07-24 起本文不再受原 M1 最小范围约束，改为把 Channel 作为独立模块逐步开发到成熟职责边界。任何后续代码、提交和推送仍须逐批确认。
+> **状态：执行中，B01～B06、B07 Core Conversation Session 基础、当前会话 `reply` 和闭环二均已提交并推送；闭环三的正式 Channel 入口、名单热重载、旧 Phase4 清理、EventLog 3.0 升级、压力 Review 和自动验证已于 2026-08-07 完成。消息缓冲队列、Session 写入、Agent 调度及真实 QQ 全链路验证明确后移。** 2026-07-24 起本文不再受原 M1 最小范围约束，改为把 Channel 作为独立模块逐步开发到成熟职责边界。任何后续代码、提交和推送仍须逐批确认。
 
 ## 1. 目标结果
 
@@ -111,7 +111,7 @@ apps/server/src/
 
 ### 修改
 
-- 为保证当前 QQ 链在 B07 切换前始终可构建，B01 先以 `contract-v1.ts` 暴露新合同，暂时保留现有 Demo 合同；B07 切换所有调用方后删除旧合同并把 v1 名称收敛为正式名称，不长期保留双接口。
+- 为保证当前 QQ 链在 B07 切换前始终可构建，B01 先以 `contract-v1.ts` 暴露新合同，暂时保留现有 Demo 合同；B07 切换所有调用方后删除旧合同，不长期保留双接口。类型名中的 `V1` 作为合同版本继续保留。
 - 用 `channelId + platform + accountId + capabilities` 描述 Channel 实例。
 - 定义 `direct | group | channel` 会话路由和可选 `threadId`。
 - 发送者身份包含必填 `id`、必填 `username` 和可选会话内 `displayName`；基础名称缺失时 Adapter 用 `id` 回退。
@@ -362,19 +362,36 @@ apps/server/src/
 
 #### 闭环三：正式切换与清理
 
-- 将当前旧入口的单个 `groupId` 环境装配迁移到正式群聊/私聊策略，接入名单热重载与最后有效配置保留机制；使用规范 route 生成稳定 Session ID，不重复注入固定路由文本。
-- 正式组合入口注册 `reply`、`onebot_standard` 和受显式无保护开关控制的 `onebot_privileged`；统一审批未完成前必须保留启动警告和默认关闭值。
+- 将当前旧入口的单个 `groupId` 环境装配迁移到正式群聊/私聊策略，接入名单热重载与最后有效配置保留机制；使用规范 route 生成稳定事件分区键，不重复注入固定路由文本。
+- 正式组合入口只负责建立 V1 Channel Adapter、Channel Runtime、名单监听和下游事件出口。通过名单的事件按 route 保序交给下游，完整保留 `isSelf` 与 trigger；本批不写 Session、不判断 Agent 触发，也不选择或限制外部 Agent。
+- 后续消息队列接在统一事件出口，负责按设计暂存消息；平台上报的 Bot/Agent 自身消息与其他消息一样，按同 route 的实际到达顺序回流。当前不得在出站成功时伪造公开消息替代平台回流。
+- `reply`、`onebot_standard` 和显式无保护开关控制的 `onebot_privileged` 保持为已经测试的可组合组件；其正式 MainAgent 注入与调用随消息队列、Session 和 Agent 调度一并后移，闭环三不为此隐式选择第一个 enabled Agent。
 - 用 `process-lifecycle.ts` 取代 `phase4-process-lifecycle.ts`，迁移现有测试并保持进程关闭行为。
 - 删除旧 `phase4-qq` 入口、旧 Conversation Store 及迁移期 Channel 合同；正式源码、导出、测试、fixture 和日志不再保留 `phase4` / `Phase4`。
+- Core EventLog 的 `channel.message.received` 改为持久化完整 V1 入站消息，并把 `CORE_SCHEMA_VERSION` 升级到 `3.0`。开发期 `2.0` JSONL 明确不兼容，不保留旧 DTO，也不在本批编写迁移器。
 - 完成 B07 自动化验证和文件级 review 后停下报告，不在本批增加数据库、重启恢复或可靠投递补偿。
+
+闭环三实际结果（2026-08-07）：
+
+- 正式 `main.ts` 已改为从项目根唯一 Server 配置树装配 V1 OneBot Channel、Channel Runtime、名单热重载器与通用进程生命周期。Channel 启动不再解析未使用的 MainAgent API Key，也不要求至少一个外部 Agent；已声明的 MainAgent/Agent 文件仍会完整做静态校验。
+- 名单文件监听采用 200 ms 防抖、完整候选配置校验和最后有效值保留。只有既有 Channel 的 `groups` / `directs` 模式与 ID 可热更新；URL、Token 引用、特权开关、显式配置引用或 Agent/模型字段变化均要求重启。加载期间出现更新时会丢弃旧候选，禁止过时名单抢先生效。
+- 统一事件出口只接收名单允许且通过 Adapter 能力校验的完整消息，并保留 route、`sender.isSelf` 与 trigger；同 route 保持平台实际到达顺序。入口不会写 Session、去重、选择 Agent 或判断是否触发 Agent。
+- 旧 `phase4-qq` / `Phase4` Server 源码、旧 Core Channel DTO 与旧 Conversation Store、旧 OneBot 兼容入口及其测试已删除；进程生命周期与日志命名改为职责名。Codex A2A Adapter 的 `main.ts` 尚未切换其已经存在的 JSON loader，配置说明已明确把该遗留迁移后移到 Adapter 自身批次。
+- Core `channel.message.received` 改为完整 V1 入站消息，`CORE_SCHEMA_VERSION` 升至 `3.0`；严格拒绝未声明字段和旧 `2.0` JSONL，不提供迁移器。
+- 两名独立压力 Reviewer 先后发现并推动修复：配置根 junction 绕过、热重载旧快照竞态、Channel 引用身份丢失、未使用 Agent 密钥阻塞 Channel-only 启动、持久化合同接受额外字段，以及配置说明与 Codex Adapter 运行事实不一致。三路最终复审均未发现剩余可证实的 P0/P1/P2。
+- 最终自动化结果：Core 197、OneBot 104、Server 133、Codex Adapter 143、A2A Client 17、OpenAI Agents 58，共 652 个测试通过；Server 与 Codex Adapter 各有 1 个 Windows 权限条件测试跳过。全仓类型检查和全仓构建通过。
+- 未执行真实 QQ smoke；当前只能声明正式进程已接入 Channel 与热重载，不能声明 QQ -> Agent 全链路可用。消息队列、Session/回流关联、Agent 调度、Tool 正式注入和上下文管理继续后移。
 
 ### 明确后移到 Agent Runtime 模块
 
+- 设计 Channel 下游消息缓冲队列，以及队列、Session 和 Agent turn 之间的消费与背压规则。
 - 建立统一的 Conversation Session 抽象：普通内部 session 显式标记为 `internal`，外部群聊/私聊 session 标记为 `external_channel` 并保存固定 Channel route；当前 B07 Store 仍只代表外部 Channel session，不宣称已经保存普通 session 历史。
 - 把完整 Conversation Session 转换成具体模型或 SDK 输入。
+- 当前消息进入模型时只提供简短发送者身份和原始消息内容；固定 route 留在 Session 元数据。该输入构造随 Agent Runtime 实现，不在闭环三临时拼接。
 - 在后续 turn 向模型重放历史 Tool Call/Tool Result，并消除 Tool 参数与回流正文的重复展示。
 - Token 计算、上下文窗口、裁剪与压缩。
 - 后台任务终态读取最新历史并重新触发 MainAgent turn。
+- 选择和路由多个 enabled 外部 Agent；闭环三不增加“必须恰好一个”的临时限制，也不隐式选择首个 Agent。
 
 ### 正式命名
 
@@ -403,14 +420,13 @@ apps/server/src/
 - 被接收名单拒绝的消息不交给下游，且不产生 Channel 出站回复。
 - 群聊 session 整群共享，私聊 session 按私聊 ID 隔离。
 - 固定 route 和 `contentFormat` 只保存在 session 元数据；每条消息保留发送者和完整 CQ 内容，超过 8 KiB 时保存占位记录。
-- 下游会话/Agent 编排层决定 Store 写入、去重、自身消息关联和 Agent 触发。完全相同事件幂等去重；同 `channelId + messageId` 的事实冲突保留第一条并明确报错，不得覆盖。
+- 闭环三的统一事件出口不写 Store、不去重、不判断 Agent 触发；通过名单的事件按 route 保序到达出口。后续队列/会话编排层再决定暂存、Store 写入、去重、自身消息关联和 Agent 触发。
 - Channel Runtime 不根据 trigger 或 `isSelf` 替 Agent 决定是否回复；对应策略由上层测试。Agent 普通最终文本不会自动发到 Channel，只有成功执行 `reply` Tool 才产生当前会话可见回复。
 - Conversation Session Store 能保存成对的 Tool Call/Tool Result；`reply` 的 Tool Result 不复制正文。本批不验收这些历史是否已经在后续 turn 投影给模型。
 - 当前会话 `reply` 只向显式 `external_channel` session 提供，route 不能由 Agent 覆盖；成功回执返回 `messageId` 但不创建公开消息，自身事件回流后才按 `channelId + messageId` 写入并关联 Tool Call，重复事件不会产生第二条上下文记录。
 - `delivery_uncertain` 不产生猜测性成功记录；若后续真实自身事件到达，仍可按事件创建消息。
 - 跨会话发送在来源 session 中保留 Tool Call/Tool Result，在目标 session 中保留完整公开消息及内部 `cross_session` 元数据；两个 session 不互相复制不属于本会话的公开时间线。
-- 当前 Agent turn 显式调用 `reply` 后能回到当前 session 的固定路由；`reply` 与 `onebot_standard` 的明确目标使用调用时最新名单。账号级只读枚举和消息/合并转发查询不做 Session 归属限制。后台任务重新组装上下文不在本批验收。
-- `onebot_privileged` 默认不可见；显式开启无保护测试开关后可真实执行并产生清晰启动警告，不伪装为已经具备审批保护。
+- `reply`、`onebot_standard` 和 `onebot_privileged` 的既有合同与测试继续通过；正式 MainAgent 注入、最新名单联动和真实调用留到队列/Session/Agent 调度组合阶段，不在闭环三伪造可运行证据。
 - Runtime 启动完成前主动发送和 OneBot Tool 操作返回明确错误；启动中收到的入站事件不丢失。关闭停止 Channel 收发并协作取消处理中任务，不因忽略取消信号的处理器无限阻塞。
 - `apps/server/src` 和相应测试中不存在活动的 `phase4` / `Phase4` 命名。
 - 旧 `phase4-qq` 文件和导出不保留兼容别名，避免形成两套入口。
