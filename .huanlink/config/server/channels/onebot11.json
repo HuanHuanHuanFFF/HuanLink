@@ -6,7 +6,7 @@
   "inboundPolicy": {
     "groups": {
       "mode": "allowlist",
-      "ids": ["20002000"]
+      "ids": []
     },
     "directs": {
       "mode": "denylist",
