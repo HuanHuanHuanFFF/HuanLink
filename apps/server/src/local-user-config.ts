@@ -607,10 +607,20 @@ function httpsUrlSchema(): z.ZodType<string> {
 function websocketUrlSchema(): z.ZodType<string> {
   return z.string().trim().url().refine(
     (value) => {
-      const protocol = getUrlProtocol(value);
-      return protocol === "ws:" || protocol === "wss:";
+      try {
+        const url = new URL(value);
+        return (
+          (url.protocol === "ws:" || url.protocol === "wss:") &&
+          url.username.length === 0 &&
+          url.password.length === 0 &&
+          !value.includes("?") &&
+          !value.includes("#")
+        );
+      } catch {
+        return false;
+      }
     },
-    "must use ws or wss"
+    "must use credential-free ws or wss without query or fragment"
   );
 }
 

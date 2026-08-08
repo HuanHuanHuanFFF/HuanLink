@@ -550,6 +550,65 @@ describe("loadServerLocalUserConfig", () => {
   });
 
   test.each([
+    [
+      "userinfo",
+      "ws://tracked-user:tracked-password@127.0.0.1:3001/",
+      "tracked-password"
+    ],
+    [
+      "an access-token query",
+      "ws://127.0.0.1:3001/?access_token=tracked-token",
+      "tracked-token"
+    ],
+    [
+      "an arbitrary query",
+      "ws://127.0.0.1:3001/?client=tracked-query-value",
+      "tracked-query-value"
+    ],
+    [
+      "a fragment",
+      "ws://127.0.0.1:3001/#tracked-fragment",
+      "tracked-fragment"
+    ],
+    ["a bare query delimiter", "ws://127.0.0.1:3001/?", "?"],
+    ["a bare fragment delimiter", "ws://127.0.0.1:3001/#", "#"],
+    ["bare query and fragment delimiters", "ws://127.0.0.1:3001/?#", "?#"]
+  ])("rejects OneBot WebSocket URLs containing %s", async (_case, url, secret) => {
+    await writeValidServerConfig(tempRoot);
+    await writeJson(path.join(tempRoot, "server/channels/onebot11.json"), {
+      ...oneBotChannel,
+      url
+    });
+
+    let thrown: unknown;
+    try {
+      await loadServerLocalUserConfig({ configRoot: tempRoot });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toContain(
+      "server/channels/onebot11.json"
+    );
+    expect((thrown as Error).message).toContain("url");
+    expect((thrown as Error).message).not.toContain(secret);
+  });
+
+  test("allows credential-free wss endpoints with custom host, port, and path", async () => {
+    await writeValidServerConfig(tempRoot);
+    const url = "wss://onebot.example.test:8443/onebot/v11";
+    await writeJson(path.join(tempRoot, "server/channels/onebot11.json"), {
+      ...oneBotChannel,
+      url
+    });
+
+    await expect(
+      loadServerLocalUserConfig({ configRoot: tempRoot })
+    ).resolves.toMatchObject({ channels: [{ url }] });
+  });
+
+  test.each([
     ["channels", "channelId"],
     ["agents", "agentId"]
   ])("rejects duplicate stable %s without disclosing its value", async (directory, field) => {
