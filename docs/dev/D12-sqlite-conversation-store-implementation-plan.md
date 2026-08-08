@@ -1,6 +1,6 @@
 # HuanLink SQLite Conversation Store 实施计划
 
-> **状态：执行中。** 本计划只实施 Core 层可替换的 SQLite Conversation Store；正式 Server 接线、消息缓冲队列、Agent 触发、日志轮转和可靠投递均不在本批。代码基于独立 Prettier 基线开发，文档与代码分开提交。
+> **状态：已完成（2026-08-08）。** 本计划只实施 Core 层可替换的 SQLite Conversation Store；正式 Server 接线、消息缓冲队列、Agent 触发、日志轮转和可靠投递均不在本批。代码基于独立 Prettier 基线开发，文档与代码分开提交。
 
 ## 1. 目标结果
 
@@ -76,12 +76,14 @@ SQLite Conversation Store 是下列 Conversation 事实的唯一权威来源：
 | `conversation_entries` | Session 时间线顺序、条目类型和 JSON payload |
 | `channel_messages` | 全局消息身份、目标 Session、对应时间线位置 |
 | `outbound_deliveries` | 尚未与平台消息合并的发送关联 |
+| `conversation_tool_calls` | Tool Call 唯一身份、名称和时间线位置 |
+| `conversation_tool_results` | Tool Result 唯一身份及与 Tool Call 的配对关系 |
 
 时间线排序键预留间隔，使晚到的 Tool Result 可以插入对应 Tool Call 之后，而不重写业务内容。所有 JSON 在写入前继续使用现有校验与防御性复制边界。
 
 ## 5. migration 与事务约束
 
-- migration 按整数版本只前进；当前首版为 schema version 1；
+- migration 按整数版本只前进；v1 建立 Session、时间线、Channel 消息和发送关联，v2 只新增 Tool Call/Result 索引表；
 - migration SQL 随 TypeScript 编译进入 `dist`，不依赖遗漏的外部 `.sql` 资产；
 - 每个版本保存固定 checksum；同版本内容变化必须拒绝启动；
 - migration 使用事务，失败时回滚并让 Store 构造失败；
@@ -118,28 +120,48 @@ SQLite 生命周期另通过构造、`close()`、重开同一路径观察，不�
 
 ## 7. 小批次
 
-### B01：合同与首个持久化切片
+### B01：合同与首个持久化切片（完成）
 
 - 提取 `ConversationSessionStore`；
 - 让 In-memory 实现显式满足合同；
 - 先写 SQLite 文件重开后的 Session 持久化红灯测试；
 - 建立 schema v1、最小 migration 和 Channel 消息读写。
 
-### B02：Tool 历史与回流关联
+### B02：Tool 历史与回流关联（完成）
 
 - 持久化 Tool Call/Tool Result；
 - 持久化 pending outbound delivery；
 - 保持先回流/后回执、先回执/后回流和跨 Session 语义；
 - 复用行为合同测试。
 
-### B03：完整验证与压力审查
+### B03：完整验证与压力审查（完成）
 
 - Core 定向测试、全仓 build/test/typecheck/format check；
 - SQLite 文件重开、冲突回滚和 migration 幂等测试；
 - 两名独立 Reviewer 交叉检查状态所有权、事务原子性和范围边界；
 - 修复确认的问题后再提交代码。
 
-## 8. 完成定义
+## 8. 实际结果
+
+- 提取了同步 `ConversationSessionStore` 六方法合同，In-memory 与 SQLite 实现共同通过核心行为矩阵；
+- SQLite 实现使用 Node.js 24 内建 `node:sqlite`，没有新增 ORM、native addon 或 lockfile 依赖；
+- schema v1/v2、连续版本检查、名称与 SHA-256 checksum 校验均已落地；bootstrap 和待执行 migration 在同一事务内完成；
+- 公开写操作使用短事务，覆盖 Channel 消息、Tool Call/Result、pending outbound delivery、两种回流顺序和跨 Session 关联；
+- 时间线以 1024 为常规步长，为晚到的 Tool Result 保留紧邻 Tool Call 的插入位置；
+- `:memory:` 与真实临时文件均已验证；关闭重开后，Session、Tool 历史、去重和 pending 关联仍然有效；
+- 两路独立压力审查最终均未发现未解决的 P0/P1/P2；审查过程中发现的 migration 空洞接受和 bootstrap 事务边界问题已经修复并补测试；
+- 代码提交为 `d6b5821 feat(core): 接入 SQLite Conversation Store`；本批没有修改 Server、Channel Adapter、Agent Runtime 或 EventLog，也不会在正式进程中创建数据库文件。
+
+### 验证记录
+
+- `corepack pnpm format:check`：通过；
+- `corepack pnpm build`：6 个 workspace 项目全部通过；
+- `corepack pnpm test`：Core 223、OneBot 104、OpenAI Agents 58、A2A Client 17、Codex Adapter 143、Server 145，共 690 项通过，2 项跳过；
+- `corepack pnpm typecheck`：6 个 workspace 项目全部通过；
+- `git diff --check`：通过；
+- 工作树未产生 SQLite、WAL/SHM 或临时测试配置文件。
+
+## 9. 完成定义
 
 只有同时满足以下条件，才可报告 SQLite 基础批次完成：
 
