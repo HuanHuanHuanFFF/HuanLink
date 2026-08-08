@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "channelId": "qq-main",
+  "type": "onebot11-forward-websocket",
+  "url": "ws://127.0.0.1:3001/",
+  "inboundPolicy": {
+    "groups": {
+      "mode": "allowlist",
+      "ids": []
+    },
+    "directs": {
+      "mode": "denylist",
+      "ids": []
+    }
+  },
+  "enableUnsafePrivilegedOperations": false,
+  "accessTokenEnv": "HUANLINK_ONEBOT_ACCESS_TOKEN"
+}

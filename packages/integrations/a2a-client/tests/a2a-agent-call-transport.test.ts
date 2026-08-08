@@ -718,6 +718,213 @@ describe("A2aAgentCallTransport", () => {
     }
   });
 
+  test("keeps watching when GetTask temporarily fails more than once after interrupted subscriptions", async () => {
+    vi.useFakeTimers();
+    try {
+      const logger = new RecordingLogger();
+      const completed = remoteTask(TaskState.TASK_STATE_COMPLETED);
+      completed.artifacts = [
+        {
+          artifactId: "reconciled-result",
+          name: "Reconciled result",
+          description: "Result observed after GetTask recovered",
+          parts: [
+            {
+              content: { $case: "text", value: "completed after reconciliation" },
+              metadata: undefined,
+              filename: "",
+              mediaType: "text/plain"
+            }
+          ],
+          metadata: undefined,
+          extensions: []
+        }
+      ];
+      const getTask = vi
+        .fn<() => Promise<Task>>()
+        .mockRejectedValueOnce(new TypeError("fetch failed"))
+        .mockRejectedValueOnce(new TypeError("terminated"))
+        .mockResolvedValueOnce(completed);
+      let subscriptionAttempts = 0;
+      const client = {
+        protocolVersion: A2A_PROTOCOL_VERSION,
+        async *resubscribeTask() {
+          subscriptionAttempts += 1;
+          throw new TypeError("terminated");
+        },
+        getTask
+      } as unknown as Client;
+      vi.spyOn(ClientFactory.prototype, "createFromUrl").mockResolvedValue(client);
+      const transport = new A2aAgentCallTransport({
+        origin: "http://127.0.0.1:1",
+        logger
+      });
+      const snapshots: AgentCallTaskSnapshot[] = [];
+
+      const watching = (async () => {
+        for await (const snapshot of transport.watchTask("a2a-task-lagging", {
+          signal: new AbortController().signal
+        })) {
+          snapshots.push(snapshot);
+        }
+      })();
+      const outcome = watching.then(
+        () => ({ status: "fulfilled" as const }),
+        (error: unknown) => ({ status: "rejected" as const, error })
+      );
+      await vi.runAllTimersAsync();
+
+      await expect(outcome).resolves.toEqual({ status: "fulfilled" });
+      expect(subscriptionAttempts).toBe(3);
+      expect(getTask).toHaveBeenCalledTimes(3);
+      expect(snapshots.at(-1)).toMatchObject({
+        taskId: "a2a-task-lagging",
+        state: "completed",
+        artifacts: [
+          {
+            id: "reconciled-result",
+            text: "completed after reconciliation"
+          }
+        ]
+      });
+      expect(logger.entries).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            level: "warn",
+            message: "a2a.watch.reconcile_failed",
+            fields: expect.objectContaining({
+              a2aTaskId: "a2a-task-lagging",
+              attempt: 1,
+              errorCategory: "network"
+            })
+          }),
+          expect.objectContaining({ message: "a2a.watch.ended" })
+        ])
+      );
+      expect(logger.entries.map(({ message }) => message)).not.toContain(
+        "a2a.watch.failed"
+      );
+      expect(
+        logger.entries.filter(
+          ({ message }) => message === "a2a.watch.reconcile_failed"
+        )
+      ).toHaveLength(2);
+      expect(JSON.stringify(logger.entries)).not.toContain("fetch failed");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("does not retry a non-network TypeError from GetTask", async () => {
+    vi.useFakeTimers();
+    try {
+      const logger = new RecordingLogger();
+      const controller = new AbortController();
+      const programmingError = new TypeError("invalid task payload");
+      let subscriptionAttempts = 0;
+      const client = {
+        protocolVersion: A2A_PROTOCOL_VERSION,
+        async *resubscribeTask() {
+          subscriptionAttempts += 1;
+          if (subscriptionAttempts > 1) {
+            controller.abort(new Error("unexpected retry"));
+          }
+          throw new TypeError("terminated");
+        },
+        getTask: vi.fn(async () => Promise.reject(programmingError))
+      } as unknown as Client;
+      vi.spyOn(ClientFactory.prototype, "createFromUrl").mockResolvedValue(client);
+      const transport = new A2aAgentCallTransport({
+        origin: "http://127.0.0.1:1",
+        logger
+      });
+
+      const watching = (async () => {
+        for await (const _snapshot of transport.watchTask("a2a-task-invalid", {
+          signal: controller.signal
+        })) {
+          // This task never produces a valid snapshot.
+        }
+      })();
+      const outcome = watching.then(
+        () => ({ status: "fulfilled" as const }),
+        (error: unknown) => ({ status: "rejected" as const, error })
+      );
+      await vi.runAllTimersAsync();
+
+      await expect(outcome).resolves.toEqual({
+        status: "rejected",
+        error: programmingError
+      });
+      expect(subscriptionAttempts).toBe(1);
+      expect(logger.entries).toContainEqual(
+        expect.objectContaining({
+          level: "error",
+          message: "a2a.watch.failed"
+        })
+      );
+      expect(logger.entries.map(({ message }) => message)).not.toContain(
+        "a2a.watch.reconcile_failed"
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("aborts immediately while waiting to retry a failed reconciliation", async () => {
+    const logger = new RecordingLogger();
+    const reconcileFailed = deferred();
+    const originalWarn = logger.warn.bind(logger);
+    vi.spyOn(logger, "warn").mockImplementation((message, fields) => {
+      originalWarn(message, fields);
+      if (message === "a2a.watch.reconcile_failed") {
+        reconcileFailed.resolve();
+      }
+    });
+    const client = {
+      protocolVersion: A2A_PROTOCOL_VERSION,
+      async *resubscribeTask() {
+        throw new TypeError("terminated");
+      },
+      getTask: vi.fn(async () => Promise.reject(new TypeError("fetch failed")))
+    } as unknown as Client;
+    vi.spyOn(ClientFactory.prototype, "createFromUrl").mockResolvedValue(client);
+    const transport = new A2aAgentCallTransport({
+      origin: "http://127.0.0.1:1",
+      logger
+    });
+    const controller = new AbortController();
+    const abortError = new Error("stop observing");
+
+    const watching = (async () => {
+      for await (const _snapshot of transport.watchTask("a2a-task-aborted", {
+        signal: controller.signal
+      })) {
+        // This task is aborted during reconciliation backoff.
+      }
+    })();
+    const outcome = watching.then(
+      () => ({ status: "fulfilled" as const }),
+      (error: unknown) => ({ status: "rejected" as const, error })
+    );
+    await reconcileFailed.promise;
+    controller.abort(abortError);
+
+    await expect(outcome).resolves.toEqual({
+      status: "rejected",
+      error: abortError
+    });
+    expect(logger.entries).toContainEqual(
+      expect.objectContaining({
+        level: "debug",
+        message: "a2a.watch.aborted"
+      })
+    );
+    expect(logger.entries.map(({ message }) => message)).not.toContain(
+      "a2a.watch.failed"
+    );
+  });
+
   test("preserves structured questions from an input-required status message", async () => {
     const paused = remoteInputRequiredTask();
     const client = {

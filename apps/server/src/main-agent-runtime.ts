@@ -13,9 +13,18 @@ import {
   type OpenAiAgentsRunContext,
   type OpenAiAgentsRunner
 } from "@huanlink/integration-openai-agents";
-import { Agent, type Model, type ModelSettings } from "@openai/agents";
+import {
+  Agent,
+  type Model,
+  type ModelSettings,
+  type Tool
+} from "@openai/agents";
 
 import { createBestEffortRuntimeLogger } from "./best-effort-runtime-logger.js";
+import {
+  createChannelReplyTool,
+  type CreateChannelReplyToolOptions
+} from "./channel-reply-tool.js";
 
 export type MainAgentModelBinding = {
   model: string | Model;
@@ -30,6 +39,10 @@ export type CreatePhase3MainAgentRuntimeOptions = {
   codexSkillId?: string;
   modelBinding?: MainAgentModelBinding;
   logger?: RuntimeLogger;
+  /** B07 当前会话回复；未注入时 MainAgent 不注册 reply。 */
+  channelReply?: CreateChannelReplyToolOptions;
+  /** 由 Server 组合根注入的平台受控 Tool；MainAgent 不理解平台协议。 */
+  additionalTools?: readonly Tool<OpenAiAgentsRunContext>[];
 };
 
 export function createPhase3MainAgentRuntime(
@@ -52,6 +65,13 @@ export function createPhase3MainAgentRuntime(
     continuator: options.taskContinuator,
     logger: logger.child({ source: "main_agent.tool.continue" })
   });
+  const channelReplyTool =
+    options.channelReply === undefined
+      ? undefined
+      : createChannelReplyTool({
+          ...options.channelReply,
+          logger: logger.child({ source: "main_agent.tool.reply" })
+        });
   const agent = new Agent<OpenAiAgentsRunContext>({
     name: "HuanLink MainAgent",
     instructions: [
@@ -65,6 +85,7 @@ export function createPhase3MainAgentRuntime(
       "Use executionMode async unless the user explicitly asks to block until completion.",
       "After an async task is accepted, acknowledge its task ID and continue the current turn without waiting.",
       "After a blocking task returns, use its result in the current turn.",
+      "When the reply tool is available, only an explicit reply call sends content to the external Channel; ordinary final text remains internal.",
       "When receiving an AgentCall terminal notification, summarize that result with the supplied latest context.",
       "If the latest context contains an explicit, unambiguous follow-up that the user already authorized and no confirmation is required, submit that next task as a new async AgentCall in the same session.",
       "Never repeat the completed task or invent a follow-up; a task already accepted or completed in the supplied result or context is not pending and must not be submitted again.",
@@ -74,7 +95,13 @@ export function createPhase3MainAgentRuntime(
     ...(options.modelBinding?.modelSettings === undefined
       ? {}
       : { modelSettings: options.modelBinding.modelSettings }),
-    tools: [submitTool, taskStatusTool, taskContinuationTool]
+    tools: [
+      submitTool,
+      taskStatusTool,
+      taskContinuationTool,
+      ...(channelReplyTool === undefined ? [] : [channelReplyTool]),
+      ...(options.additionalTools ?? [])
+    ]
   });
 
   return new OpenAiAgentsRuntime({

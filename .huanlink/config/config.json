@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "server": {
+    "mainAgent": "./server/main-agent.json",
+    "channels": ["./server/channels/onebot11.json"],
+    "agents": ["./server/agents/codex-local.json"]
+  },
+  "adapters": {
+    "codex": {
+      "runtime": "./adapters/codex/runtime.json",
+      "projects": ["./adapters/codex/projects/huanlink.json"]
+    }
+  }
+}

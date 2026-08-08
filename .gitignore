@@ -37,7 +37,9 @@ yarn-error.log*
 !.env.sample
 *.traj.json
 .huaness/
-.huanlink/
+.huanlink/*
+!.huanlink/config/
+!.huanlink/config/**
 runs/
 traces/
 

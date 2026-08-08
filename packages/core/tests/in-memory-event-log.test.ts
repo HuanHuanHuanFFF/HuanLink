@@ -15,13 +15,7 @@ describe("InMemoryEventLog", () => {
       runId: runA,
       sessionId,
       data: {
-        channel: "onebot11",
-        conversationId: "group_01",
-        messageId: "message_01",
-        senderId: "user_01",
-        senderName: "User One",
-        text: "@bot start",
-        trigger: { kind: "mention", text: "@bot" }
+        message: channelMessage()
       }
     });
     const otherRun = eventLog.append({
@@ -45,7 +39,7 @@ describe("InMemoryEventLog", () => {
       type: "channel.message.received",
       runId: runA,
       sessionId,
-      data: { text: "@bot start" }
+      data: { message: { content: "@bot start" } }
     });
     expect(Object.keys(first).sort()).toEqual([
       "data",
@@ -105,3 +99,24 @@ describe("InMemoryEventLog", () => {
     expect(eventLog.readRunEvents("missing_run")).toEqual([]);
   });
 });
+
+function channelMessage() {
+  return {
+    route: {
+      channelId: "qq-main",
+      conversationKind: "group" as const,
+      conversationId: "group_01"
+    },
+    messageId: "message_01",
+    sender: {
+      id: "user_01",
+      username: "User One",
+      displayName: "User One",
+      isSelf: false
+    },
+    content: "@bot start",
+    contentFormat: "onebot11.cq",
+    receivedAt: "2026-07-15T00:00:00.000Z",
+    trigger: { kind: "mention" as const }
+  };
+}

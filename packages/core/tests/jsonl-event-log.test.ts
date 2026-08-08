@@ -84,6 +84,38 @@ describe("JsonlEventLog", () => {
     ]);
   });
 
+  test("reads schema 3.0 Channel events with the V1 message contract", async () => {
+    const eventLog = new JsonlEventLog({ baseDir });
+    const event = await eventLog.append({
+      type: "channel.message.received",
+      runId: "run_channel_v1",
+      sessionId: "session_channel_v1",
+      data: {
+        message: {
+          messageId: "message_01",
+          route: {
+            channelId: "qq-main",
+            conversationKind: "group",
+            conversationId: "20002000"
+          },
+          sender: {
+            id: "10001000",
+            username: "Tester",
+            isSelf: false
+          },
+          receivedAt: "2026-07-15T00:00:00.000Z",
+          content: "hello",
+          contentFormat: "onebot11.cq",
+          trigger: { kind: "mention" }
+        }
+      }
+    });
+
+    await expect(eventLog.readRunEvents("run_channel_v1")).resolves.toEqual([
+      event
+    ]);
+  });
+
   test("queues concurrent appends for the same run in call order", async () => {
     const eventLog = new JsonlEventLog({ baseDir });
     const runId = "run_concurrent";
@@ -231,6 +263,7 @@ describe("JsonlEventLog", () => {
 
   test.each([
     ["schema 1.0", { ...validRawEvent("run_invalid"), schemaVersion: "1.0" }],
+    ["schema 2.0", { ...validRawEvent("run_invalid"), schemaVersion: "2.0" }],
     [
       "an invalid timestamp",
       { ...validRawEvent("run_invalid"), timestamp: "not-a-timestamp" }
@@ -328,13 +361,49 @@ describe("JsonlEventLog", () => {
         ...validRawEvent("run_invalid"),
         type: "channel.message.received",
         data: {
-          channel: "onebot11",
-          conversationId: "group_invalid",
-          messageId: "message_invalid",
-          senderId: "user_invalid",
-          senderName: "Invalid User",
-          text: "hello",
-          trigger: { kind: "ambient", text: "hello" }
+          message: {
+            messageId: "message_invalid",
+            route: {
+              channelId: "qq-main",
+              conversationKind: "group",
+              conversationId: "group_invalid"
+            },
+            sender: {
+              id: "user_invalid",
+              username: "Invalid User",
+              isSelf: false
+            },
+            receivedAt: "2026-07-15T00:00:00.000Z",
+            content: "hello",
+            contentFormat: "onebot11.cq",
+            trigger: { kind: "ambient" }
+          }
+        }
+      }
+    ],
+    [
+      "an undeclared channel.message.received field",
+      {
+        ...validRawEvent("run_invalid"),
+        type: "channel.message.received",
+        data: {
+          message: {
+            messageId: "message_invalid",
+            route: {
+              channelId: "qq-main",
+              conversationKind: "group",
+              conversationId: "group_invalid"
+            },
+            sender: {
+              id: "user_invalid",
+              username: "Invalid User",
+              isSelf: false
+            },
+            receivedAt: "2026-07-15T00:00:00.000Z",
+            content: "hello",
+            contentFormat: "onebot11.cq",
+            untrusted: "must not enter schema 3.0"
+          }
         }
       }
     ],
@@ -429,7 +498,7 @@ function createDraft(runId: RunId, sessionId: SessionId): AgentEventDraft {
 
 function validRawEvent(runId: RunId, seq = 1): AgentEvent {
   return {
-    schemaVersion: "2.0",
+    schemaVersion: CORE_SCHEMA_VERSION,
     id: `event_${seq}`,
     seq,
     timestamp: "2026-07-15T00:00:00.000Z",

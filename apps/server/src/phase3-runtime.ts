@@ -16,7 +16,11 @@ import {
   type SessionId
 } from "@huanlink/core";
 import { A2aAgentCallTransport } from "@huanlink/integration-a2a-client";
-import type { OpenAiAgentsRunner } from "@huanlink/integration-openai-agents";
+import type {
+  OpenAiAgentsRunContext,
+  OpenAiAgentsRunner
+} from "@huanlink/integration-openai-agents";
+import type { Tool } from "@openai/agents";
 
 import {
   buildAgentCallPausedPayload,
@@ -29,6 +33,7 @@ import {
   type MainAgentModelBinding
 } from "./main-agent-runtime.js";
 import { createBestEffortRuntimeLogger } from "./best-effort-runtime-logger.js";
+import type { CreateChannelReplyToolOptions } from "./channel-reply-tool.js";
 
 export type Phase3ReentryResult = {
   runId: RunId;
@@ -63,6 +68,9 @@ export type CreatePhase3HuanLinkRuntimeOptions = {
   onReentry?: (result: Phase3ReentryResult) => Promise<void> | void;
   onBackgroundError?: AgentCallBackgroundErrorListener;
   logger?: RuntimeLogger;
+  channelReply?: CreateChannelReplyToolOptions;
+  /** Server 组合根提供的平台受控 Tool。 */
+  additionalTools?: readonly Tool<OpenAiAgentsRunContext>[];
 };
 
 export type Phase3MainAgentInput = Pick<
@@ -99,6 +107,12 @@ export function createPhase3HuanLinkRuntime(
     codexSkillId: options.codexSkillId,
     runner: options.runner,
     modelBinding: options.modelBinding,
+    ...(options.channelReply === undefined
+      ? {}
+      : { channelReply: options.channelReply }),
+    ...(options.additionalTools === undefined
+      ? {}
+      : { additionalTools: options.additionalTools }),
     logger: logger.child({ source: "main_agent" })
   });
   const turns = new AgentTurnScheduler({ runtime: mainAgent });
@@ -134,21 +148,24 @@ export function createPhase3HuanLinkRuntime(
     logger.info("main_agent.run.started", fields);
     logger.debug("main_agent.run.input", {
       ...fields,
-      payload: { input: input.input }
+      inputChars: input.input.length
     });
     try {
       const result = await turns.run(input);
       logger.info("main_agent.run.completed", fields);
       logger.debug("main_agent.run.output", {
         ...fields,
-        payload: { output: result.output }
+        outputChars: result.output.length
       });
       return result;
     } catch (error) {
       if (input.signal?.aborted === true) {
         logger.debug("main_agent.run.aborted", fields);
       } else {
-        logger.error("main_agent.run.failed", { ...fields, error });
+        logger.error("main_agent.run.failed", {
+          ...fields,
+          errorType: runtimeErrorType(error)
+        });
       }
       throw error;
     }
@@ -197,7 +214,8 @@ export function createPhase3HuanLinkRuntime(
       logger.info("main_agent.reentry.context_ready", reentryFields);
       logger.debug("main_agent.reentry.payload", {
         ...reentryFields,
-        payload: { latestContext, input }
+        latestContextChars: latestContext.length,
+        inputChars: input.length
       });
       const result = await waitWithSignal(
         runMainAgentTurn({
@@ -236,7 +254,7 @@ export function createPhase3HuanLinkRuntime(
       } else {
         logger.error("main_agent.reentry.failed", {
           ...failureFields,
-          error
+          errorType: runtimeErrorType(error)
         });
       }
       throw error;
@@ -350,4 +368,8 @@ function waitWithSignal<T>(
 
 function abortReason(signal: AbortSignal): unknown {
   return signal.reason ?? new Error("Phase 3 re-entry aborted");
+}
+
+function runtimeErrorType(error: unknown): string {
+  return error instanceof Error ? error.name : typeof error;
 }

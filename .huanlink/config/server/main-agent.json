@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "provider": "deepseek",
+  "modelId": "deepseek-v4-flash",
+  "baseURL": "https://api.deepseek.com/beta",
+  "apiKeyEnv": "DEEPSEEK_API_KEY"
+}

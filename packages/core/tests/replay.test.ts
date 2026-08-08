@@ -2,6 +2,7 @@
 import { describe, expect, test } from "vitest";
 
 import {
+  CORE_SCHEMA_VERSION,
   EventLogRunViewReader,
   InMemoryEventLog,
   createRunView
@@ -87,13 +88,21 @@ describe("replay reducer", () => {
       eventCount: 7,
       lastSeq: 7,
       input: {
-        channel: "onebot11",
-        conversationId: "group_01",
+        route: {
+          channelId: "qq-main",
+          conversationKind: "group",
+          conversationId: "group_01"
+        },
         messageId: "message_01",
-        senderId: "user_01",
-        senderName: "User One",
-        text: "@bot start",
-        trigger: { kind: "mention", text: "@bot" }
+        sender: {
+          id: "user_01",
+          username: "User One",
+          displayName: "User One",
+          isSelf: false
+        },
+        content: "@bot start",
+        contentFormat: "onebot11.cq",
+        trigger: { kind: "mention" }
       },
       output: "MainAgent finished",
       agentCalls: [
@@ -365,13 +374,24 @@ function channelMessage(runId: string, sessionId: string): AgentEventDraft {
     runId,
     sessionId,
     data: {
-      channel: "onebot11",
-      conversationId: "group_01",
-      messageId: "message_01",
-      senderId: "user_01",
-      senderName: "User One",
-      text: "@bot start",
-      trigger: { kind: "mention", text: "@bot" }
+      message: {
+        route: {
+          channelId: "qq-main",
+          conversationKind: "group",
+          conversationId: "group_01"
+        },
+        messageId: "message_01",
+        sender: {
+          id: "user_01",
+          username: "User One",
+          displayName: "User One",
+          isSelf: false
+        },
+        content: "@bot start",
+        contentFormat: "onebot11.cq",
+        receivedAt: "2026-07-15T00:00:00.000Z",
+        trigger: { kind: "mention" }
+      }
     }
   };
 }
@@ -382,7 +402,7 @@ function completeEvent(
   data: AgentEvent["data"]
 ): AgentEvent {
   return {
-    schemaVersion: "2.0",
+    schemaVersion: CORE_SCHEMA_VERSION,
     id: `event_${seq}`,
     seq,
     timestamp: `2026-07-15T00:00:0${seq}.000Z`,
