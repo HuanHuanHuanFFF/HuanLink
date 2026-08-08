@@ -12,9 +12,9 @@ for await (const line of lines) {
           userAgent: "codex-cli/0.142.5",
           codexHome: "C:/Users/demo/.codex",
           platformFamily: "windows",
-          platformOs: "windows"
-        }
-      })}\n`
+          platformOs: "windows",
+        },
+      })}\n`,
     );
   }
 }

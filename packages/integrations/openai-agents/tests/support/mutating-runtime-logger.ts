@@ -1,7 +1,7 @@
 import type {
   RuntimeLogFields,
   RuntimeLogLevel,
-  RuntimeLogger
+  RuntimeLogger,
 } from "@huanlink/core";
 
 export type MutableRuntimeLogEntry = {
@@ -16,7 +16,7 @@ export class MutatingRuntimeLogger implements RuntimeLogger {
   constructor(
     private readonly mutate: (entry: MutableRuntimeLogEntry) => void,
     entries: MutableRuntimeLogEntry[] = [],
-    private readonly bindings: RuntimeLogFields = {}
+    private readonly bindings: RuntimeLogFields = {},
   ) {
     this.entries = entries;
   }
@@ -40,19 +40,19 @@ export class MutatingRuntimeLogger implements RuntimeLogger {
   child(bindings: RuntimeLogFields): RuntimeLogger {
     return new MutatingRuntimeLogger(this.mutate, this.entries, {
       ...this.bindings,
-      ...bindings
+      ...bindings,
     });
   }
 
   private record(
     level: RuntimeLogLevel,
     message: string,
-    fields: RuntimeLogFields = {}
+    fields: RuntimeLogFields = {},
   ): void {
     const entry = {
       level,
       message,
-      fields: { ...this.bindings, ...fields }
+      fields: { ...this.bindings, ...fields },
     };
     this.entries.push(entry);
     this.mutate(entry);

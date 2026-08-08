@@ -4,10 +4,11 @@ import {
   TaskNotCancelableError,
   type AgentExecutor,
   type ExecutionEventBus,
-  type RequestContext
+  type RequestContext,
 } from "@a2a-js/sdk/server";
 
-export const CONTROLLED_RESPONSE = "Controlled test executor completed the task.";
+export const CONTROLLED_RESPONSE =
+  "Controlled test executor completed the task.";
 
 interface ControlledTaskExecutorOptions {
   waitBeforeComplete?: (signal: AbortSignal) => Promise<void>;
@@ -29,7 +30,7 @@ export class ControlledTaskExecutor implements AgentExecutor {
 
   async execute(
     requestContext: RequestContext,
-    eventBus: ExecutionEventBus
+    eventBus: ExecutionEventBus,
   ): Promise<void> {
     const { contextId, taskId, userMessage } = requestContext;
     const controller = new AbortController();
@@ -41,11 +42,11 @@ export class ControlledTaskExecutor implements AgentExecutor {
       status: {
         state: TaskState.TASK_STATE_SUBMITTED,
         message: undefined,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
       },
       artifacts: [],
       history: [userMessage],
-      metadata: undefined
+      metadata: undefined,
     };
 
     eventBus.publish(AgentEvent.task(initialTask));
@@ -56,10 +57,10 @@ export class ControlledTaskExecutor implements AgentExecutor {
         status: {
           state: TaskState.TASK_STATE_WORKING,
           message: undefined,
-          timestamp: new Date().toISOString()
+          timestamp: new Date().toISOString(),
         },
-        metadata: undefined
-      })
+        metadata: undefined,
+      }),
     );
 
     try {
@@ -77,11 +78,11 @@ export class ControlledTaskExecutor implements AgentExecutor {
             content: { $case: "text", value: CONTROLLED_RESPONSE },
             metadata: undefined,
             filename: "",
-            mediaType: "text/plain"
-          }
+            mediaType: "text/plain",
+          },
         ],
         metadata: undefined,
-        extensions: []
+        extensions: [],
       };
 
       eventBus.publish(
@@ -91,8 +92,8 @@ export class ControlledTaskExecutor implements AgentExecutor {
           artifact,
           append: false,
           lastChunk: true,
-          metadata: undefined
-        })
+          metadata: undefined,
+        }),
       );
       eventBus.publish(
         AgentEvent.statusUpdate({
@@ -101,10 +102,10 @@ export class ControlledTaskExecutor implements AgentExecutor {
           status: {
             state: TaskState.TASK_STATE_COMPLETED,
             message: undefined,
-            timestamp: new Date().toISOString()
+            timestamp: new Date().toISOString(),
           },
-          metadata: undefined
-        })
+          metadata: undefined,
+        }),
       );
       eventBus.finished();
     } finally {
@@ -126,10 +127,10 @@ export class ControlledTaskExecutor implements AgentExecutor {
         status: {
           state: TaskState.TASK_STATE_CANCELED,
           message: undefined,
-          timestamp: new Date().toISOString()
+          timestamp: new Date().toISOString(),
         },
-        metadata: undefined
-      })
+        metadata: undefined,
+      }),
     );
     eventBus.finished();
   }

@@ -22,7 +22,7 @@ const positiveSafeIntegerStringSchema = z
   .regex(/^[1-9]\d*$/, "must be a positive integer string")
   .refine(
     (value) => Number.isSafeInteger(Number(value)),
-    "must be a safe positive integer string"
+    "must be a safe positive integer string",
   );
 
 const channelAccessRuleSchema = z
@@ -30,16 +30,20 @@ const channelAccessRuleSchema = z
     mode: z.enum(["allowlist", "denylist"]),
     ids: z
       .array(positiveSafeIntegerStringSchema)
-      .refine((ids) => new Set(ids).size === ids.length, "must not contain duplicate IDs")
+      .refine(
+        (ids) => new Set(ids).size === ids.length,
+        "must not contain duplicate IDs",
+      ),
   })
   .strict();
 
-const channelInboundAccessPolicySchema: z.ZodType<ChannelInboundAccessPolicy> = z
-  .object({
-    groups: channelAccessRuleSchema,
-    directs: channelAccessRuleSchema
-  })
-  .strict();
+const channelInboundAccessPolicySchema: z.ZodType<ChannelInboundAccessPolicy> =
+  z
+    .object({
+      groups: channelAccessRuleSchema,
+      directs: channelAccessRuleSchema,
+    })
+    .strict();
 
 const mainAgentFileSchema = z
   .object({
@@ -47,7 +51,7 @@ const mainAgentFileSchema = z
     provider: z.literal("deepseek"),
     modelId: z.string().trim().min(1),
     baseURL: httpsUrlSchema(),
-    apiKeyEnv: environmentVariableNameSchema
+    apiKeyEnv: environmentVariableNameSchema,
   })
   .strict();
 
@@ -59,7 +63,7 @@ const channelFileSchema = z
     url: websocketUrlSchema(),
     inboundPolicy: channelInboundAccessPolicySchema,
     enableUnsafePrivilegedOperations: z.boolean(),
-    accessTokenEnv: environmentVariableNameSchema.optional()
+    accessTokenEnv: environmentVariableNameSchema.optional(),
   })
   .strict();
 
@@ -71,7 +75,7 @@ const agentFileSchema = z
     transport: z.literal("a2a"),
     origin: loopbackHttpUrlSchema(),
     skillId: z.string().trim().min(1),
-    enabled: z.boolean()
+    enabled: z.boolean(),
   })
   .strict();
 
@@ -79,7 +83,7 @@ const configEntrySchema = z
   .object({
     version: z.literal(1),
     server: z.unknown().optional(),
-    adapters: z.unknown().optional()
+    adapters: z.unknown().optional(),
   })
   .strict();
 
@@ -87,7 +91,7 @@ const serverConfigReferenceSchema = z
   .object({
     mainAgent: z.string().optional(),
     channels: z.array(z.string()).min(1),
-    agents: z.array(z.string()).default([])
+    agents: z.array(z.string()).default([]),
   })
   .strict();
 
@@ -168,7 +172,7 @@ type ParsedServerConfiguration = {
 };
 
 export async function loadServerLocalUserConfig(
-  input: LoadServerLocalUserConfigInput = {}
+  input: LoadServerLocalUserConfigInput = {},
 ): Promise<ServerLocalUserConfig> {
   const { configuration, env } = await readServerConfiguration(input);
   if (configuration.mainAgent === undefined) {
@@ -184,13 +188,13 @@ export async function loadServerLocalUserConfig(
         env,
         configuration.mainAgent.value.apiKeyEnv,
         configuration.mainAgent.relativePath,
-        "apiKeyEnv"
-      )
+        "apiKeyEnv",
+      ),
     },
     channels: configuration.channels.map((channel) =>
-      resolveChannelConfig(channel.value, channel.relativePath, env, false)
+      resolveChannelConfig(channel.value, channel.relativePath, env, false),
     ),
-    agents: configuration.agents.map(copyAgentConfig)
+    agents: configuration.agents.map(copyAgentConfig),
   };
 }
 
@@ -199,7 +203,7 @@ export async function loadServerLocalUserConfig(
  * MainAgent API Key 要等 Agent Runtime 真正接线时再解析。
  */
 export async function loadServerChannelRuntimeConfig(
-  input: LoadServerLocalUserConfigInput = {}
+  input: LoadServerLocalUserConfigInput = {},
 ): Promise<ServerChannelRuntimeConfig> {
   const { configuration, env, sources } = await readServerConfiguration(input);
 
@@ -211,19 +215,19 @@ export async function loadServerChannelRuntimeConfig(
             provider: configuration.mainAgent.value.provider,
             modelId: configuration.mainAgent.value.modelId,
             baseURL: configuration.mainAgent.value.baseURL,
-            apiKeyEnv: configuration.mainAgent.value.apiKeyEnv
-          }
+            apiKeyEnv: configuration.mainAgent.value.apiKeyEnv,
+          },
         }),
     channels: configuration.channels.map((channel) =>
-      resolveChannelConfig(channel.value, channel.relativePath, env, true)
+      resolveChannelConfig(channel.value, channel.relativePath, env, true),
     ),
     agents: configuration.agents.map(copyAgentConfig),
-    sources
+    sources,
   };
 }
 
 async function readServerConfiguration(
-  input: LoadServerLocalUserConfigInput
+  input: LoadServerLocalUserConfigInput,
 ): Promise<{
   configuration: ParsedServerConfiguration;
   env: Readonly<Record<string, string | undefined>>;
@@ -235,7 +239,7 @@ async function readServerConfiguration(
   const entry = parseConfigFile(
     configEntrySchema,
     await readJsonObject(configRoot, entryRelativePath),
-    entryRelativePath
+    entryRelativePath,
   );
   if (entry.server === undefined) {
     throw configurationError(entryRelativePath, "server: is invalid");
@@ -243,17 +247,17 @@ async function readServerConfiguration(
   const references = parseConfigFile(
     serverConfigReferenceSchema,
     entry.server,
-    entryRelativePath
+    entryRelativePath,
   );
   const mainAgentRelativePath =
     references.mainAgent === undefined
       ? undefined
       : validateServerReference(references.mainAgent, "mainAgent");
   const channelFiles = references.channels.map((reference) =>
-    validateServerReference(reference, "channels")
+    validateServerReference(reference, "channels"),
   );
   const agentFiles = references.agents.map((reference) =>
-    validateServerReference(reference, "agents")
+    validateServerReference(reference, "agents"),
   );
   ensureUniqueReferences(channelFiles, "channels");
   ensureUniqueReferences(agentFiles, "agents");
@@ -264,9 +268,9 @@ async function readServerConfiguration(
           value: parseConfigFile(
             mainAgentFileSchema,
             await readJsonObject(configRoot, mainAgentRelativePath),
-            mainAgentRelativePath
+            mainAgentRelativePath,
           ),
-          relativePath: mainAgentRelativePath
+          relativePath: mainAgentRelativePath,
         };
 
   const channels = await Promise.all(
@@ -274,28 +278,28 @@ async function readServerConfiguration(
       const parsed = parseConfigFile(
         channelFileSchema,
         await readJsonObject(configRoot, relativePath),
-        relativePath
+        relativePath,
       );
 
       return { value: parsed, relativePath };
-    })
+    }),
   );
   const agents = await Promise.all(
     agentFiles.map(async (relativePath) => {
       const parsed = parseConfigFile(
         agentFileSchema,
         await readJsonObject(configRoot, relativePath),
-        relativePath
+        relativePath,
       );
 
       return parsed;
-    })
+    }),
   );
 
   ensureUniqueIds(
     channels.map((channel) => channel.value),
     "channelId",
-    channelFiles
+    channelFiles,
   );
   ensureUniqueIds(agents, "agentId", agentFiles);
 
@@ -303,7 +307,7 @@ async function readServerConfiguration(
     configuration: {
       ...(mainAgent === undefined ? {} : { mainAgent }),
       channels,
-      agents
+      agents,
     },
     env,
     sources: {
@@ -311,13 +315,13 @@ async function readServerConfiguration(
         ? {}
         : { mainAgent: mainAgentRelativePath }),
       channels: [...channelFiles],
-      agents: [...agentFiles]
-    }
+      agents: [...agentFiles],
+    },
   };
 }
 
 async function resolveConfigRoot(
-  input: LoadServerLocalUserConfigInput
+  input: LoadServerLocalUserConfigInput,
 ): Promise<string> {
   if (input.configRoot !== undefined && input.projectRoot !== undefined) {
     throw new TypeError("Specify either configRoot or projectRoot, not both");
@@ -339,13 +343,13 @@ async function requireProjectRoot(projectRoot: string): Promise<void> {
   } catch {
     throw configurationError(
       "project root",
-      "root: must be an existing non-link directory"
+      "root: must be an existing non-link directory",
     );
   }
   if (metadata.isSymbolicLink()) {
     throw configurationError(
       "project root",
-      "root: must not be a symbolic link or directory junction"
+      "root: must not be a symbolic link or directory junction",
     );
   }
   if (!metadata.isDirectory()) {
@@ -357,19 +361,19 @@ function resolveChannelConfig(
   channel: z.infer<typeof channelFileSchema>,
   relativePath: string,
   env: Readonly<Record<string, string | undefined>>,
-  includeEnvironmentReference: false
+  includeEnvironmentReference: false,
 ): ServerChannelConfig;
 function resolveChannelConfig(
   channel: z.infer<typeof channelFileSchema>,
   relativePath: string,
   env: Readonly<Record<string, string | undefined>>,
-  includeEnvironmentReference: true
+  includeEnvironmentReference: true,
 ): ServerChannelRuntimeConfig["channels"][number];
 function resolveChannelConfig(
   channel: z.infer<typeof channelFileSchema>,
   relativePath: string,
   env: Readonly<Record<string, string | undefined>>,
-  includeEnvironmentReference: boolean
+  includeEnvironmentReference: boolean,
 ): ServerChannelRuntimeConfig["channels"][number] {
   return {
     channelId: channel.channelId,
@@ -387,14 +391,14 @@ function resolveChannelConfig(
             env,
             channel.accessTokenEnv,
             relativePath,
-            "accessTokenEnv"
-          )
-        })
+            "accessTokenEnv",
+          ),
+        }),
   };
 }
 
 function copyAgentConfig(
-  agent: z.infer<typeof agentFileSchema>
+  agent: z.infer<typeof agentFileSchema>,
 ): ServerAgentConfig {
   return {
     agentId: agent.agentId,
@@ -402,13 +406,13 @@ function copyAgentConfig(
     transport: agent.transport,
     origin: agent.origin,
     skillId: agent.skillId,
-    enabled: agent.enabled
+    enabled: agent.enabled,
   };
 }
 
 async function readJsonObject(
   configRoot: string,
-  relativePath: string
+  relativePath: string,
 ): Promise<unknown> {
   await requireRegularPath(configRoot, relativePath, "file");
   const absolutePath = path.join(configRoot, ...relativePath.split("/"));
@@ -417,7 +421,10 @@ async function readJsonObject(
   try {
     bytes = await readFile(absolutePath);
   } catch {
-    throw configurationError(relativePath, "root: must be a readable regular JSON file");
+    throw configurationError(
+      relativePath,
+      "root: must be a readable regular JSON file",
+    );
   }
 
   let content: string;
@@ -429,19 +436,26 @@ async function readJsonObject(
 
   try {
     const parsed: unknown = JSON.parse(content);
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      Array.isArray(parsed)
+    ) {
       throw new Error("not an object");
     }
     return parsed;
   } catch {
-    throw configurationError(relativePath, "root: must contain a valid JSON object");
+    throw configurationError(
+      relativePath,
+      "root: must contain a valid JSON object",
+    );
   }
 }
 
 function ensureUniqueIds<T extends Record<Key, string>, Key extends string>(
   items: readonly T[],
   field: Key,
-  relativePaths: readonly string[]
+  relativePaths: readonly string[],
 ): void {
   const seen = new Set<string>();
 
@@ -449,7 +463,7 @@ function ensureUniqueIds<T extends Record<Key, string>, Key extends string>(
     if (seen.has(item[field])) {
       throw configurationError(
         relativePaths[index]!,
-        `${field}: duplicates another configured entry`
+        `${field}: duplicates another configured entry`,
       );
     }
     seen.add(item[field]);
@@ -464,7 +478,9 @@ function validateServerReference(reference: string, field: string): string {
     reference
       .slice(2)
       .split("/")
-      .every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
+      .every(
+        (segment) => segment.length > 0 && segment !== "." && segment !== "..",
+      );
   if (!isValid) {
     throw configurationError("config.json", `${field}: is invalid`);
   }
@@ -472,7 +488,10 @@ function validateServerReference(reference: string, field: string): string {
   return reference.slice(2);
 }
 
-function ensureUniqueReferences(references: readonly string[], field: string): void {
+function ensureUniqueReferences(
+  references: readonly string[],
+  field: string,
+): void {
   if (new Set(references).size !== references.length) {
     throw configurationError("config.json", `${field}: is invalid`);
   }
@@ -482,11 +501,14 @@ function requireEnvironmentValue(
   env: Readonly<Record<string, string | undefined>>,
   name: string,
   relativePath: string,
-  field: string
+  field: string,
 ): string {
   const value = env[name];
   if (value === undefined || value.trim().length === 0) {
-    throw configurationError(relativePath, `${field} references a missing environment value`);
+    throw configurationError(
+      relativePath,
+      `${field} references a missing environment value`,
+    );
   }
   return value;
 }
@@ -503,12 +525,15 @@ async function requireDefaultConfigurationPath(cwd: string): Promise<void> {
     try {
       metadata = await lstat(currentPath);
     } catch {
-      throw configurationError(label, "root: must be an existing non-link directory");
+      throw configurationError(
+        label,
+        "root: must be an existing non-link directory",
+      );
     }
     if (metadata.isSymbolicLink()) {
       throw configurationError(
         label,
-        "root: must not be a symbolic link or directory junction"
+        "root: must not be a symbolic link or directory junction",
       );
     }
     if (!metadata.isDirectory()) {
@@ -520,7 +545,7 @@ async function requireDefaultConfigurationPath(cwd: string): Promise<void> {
 async function requireRegularPath(
   configRoot: string,
   relativePath: string,
-  finalKind: "file" | "directory"
+  finalKind: "file" | "directory",
 ): Promise<void> {
   let rootMetadata: Awaited<ReturnType<typeof lstat>>;
   try {
@@ -528,13 +553,13 @@ async function requireRegularPath(
   } catch {
     throw configurationError(
       "configuration root",
-      "root: must be an existing non-link directory"
+      "root: must be an existing non-link directory",
     );
   }
   if (rootMetadata.isSymbolicLink()) {
     throw configurationError(
       "configuration root",
-      "root: must not be a symbolic link or directory junction"
+      "root: must not be a symbolic link or directory junction",
     );
   }
   if (!rootMetadata.isDirectory()) {
@@ -554,38 +579,53 @@ async function requireRegularPath(
     } catch {
       throw configurationError(
         currentRelativePath,
-        "root: must be an existing non-link path"
+        "root: must be an existing non-link path",
       );
     }
 
     if (metadata.isSymbolicLink()) {
       throw configurationError(
         currentRelativePath,
-        "root: must not be a symbolic link or directory junction"
+        "root: must not be a symbolic link or directory junction",
       );
     }
 
     const isFinalSegment = index === segments.length - 1;
     if (!isFinalSegment && !metadata.isDirectory()) {
-      throw configurationError(currentRelativePath, "root: must be a directory");
+      throw configurationError(
+        currentRelativePath,
+        "root: must be a directory",
+      );
     }
     if (isFinalSegment && finalKind === "file" && !metadata.isFile()) {
-      throw configurationError(currentRelativePath, "root: must be a regular file");
+      throw configurationError(
+        currentRelativePath,
+        "root: must be a regular file",
+      );
     }
-    if (isFinalSegment && finalKind === "directory" && !metadata.isDirectory()) {
-      throw configurationError(currentRelativePath, "root: must be a directory");
+    if (
+      isFinalSegment &&
+      finalKind === "directory" &&
+      !metadata.isDirectory()
+    ) {
+      throw configurationError(
+        currentRelativePath,
+        "root: must be a directory",
+      );
     }
   }
 }
 
 function configurationError(relativePath: string, detail: string): Error {
-  return new Error(`Invalid Server local configuration at ${relativePath}: ${detail}`);
+  return new Error(
+    `Invalid Server local configuration at ${relativePath}: ${detail}`,
+  );
 }
 
 function parseConfigFile<T>(
   schema: z.ZodType<T>,
   value: unknown,
-  relativePath: string
+  relativePath: string,
 ): T {
   const result = schema.safeParse(value);
   if (result.success) {
@@ -598,15 +638,19 @@ function parseConfigFile<T>(
 }
 
 function httpsUrlSchema(): z.ZodType<string> {
-  return z.string().trim().url().refine(
-    (value) => getUrlProtocol(value) === "https:",
-    "must use https"
-  );
+  return z
+    .string()
+    .trim()
+    .url()
+    .refine((value) => getUrlProtocol(value) === "https:", "must use https");
 }
 
 function websocketUrlSchema(): z.ZodType<string> {
-  return z.string().trim().url().refine(
-    (value) => {
+  return z
+    .string()
+    .trim()
+    .url()
+    .refine((value) => {
       try {
         const url = new URL(value);
         return (
@@ -619,14 +663,15 @@ function websocketUrlSchema(): z.ZodType<string> {
       } catch {
         return false;
       }
-    },
-    "must use credential-free ws or wss without query or fragment"
-  );
+    }, "must use credential-free ws or wss without query or fragment");
 }
 
 function loopbackHttpUrlSchema(): z.ZodType<string> {
-  return z.string().trim().url().refine(
-    (value) => {
+  return z
+    .string()
+    .trim()
+    .url()
+    .refine((value) => {
       try {
         const url = new URL(value);
         return (

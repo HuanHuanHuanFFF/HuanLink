@@ -1,6 +1,6 @@
 import {
   createDeepSeek,
-  type DeepSeekProviderSettings
+  type DeepSeekProviderSettings,
 } from "@ai-sdk/deepseek";
 import { aisdk } from "@openai/agents-extensions/ai-sdk";
 import { wrapLanguageModel, type LanguageModelMiddleware } from "ai";
@@ -27,23 +27,23 @@ const strictFunctionToolsMiddleware: LanguageModelMiddleware = {
       ? {}
       : {
           tools: params.tools.map((tool) =>
-            tool.type === "function" ? { ...tool, strict: true } : tool
-          )
-        })
-  })
+            tool.type === "function" ? { ...tool, strict: true } : tool,
+          ),
+        }),
+  }),
 };
 
 export function createDeepSeekMainAgentModelBinding(
-  options: CreateDeepSeekMainAgentModelBindingOptions
+  options: CreateDeepSeekMainAgentModelBindingOptions,
 ): MainAgentModelBinding {
   const provider = createDeepSeek({
     apiKey: options.config.apiKey,
     baseURL: options.config.baseURL,
-    ...(options.fetch === undefined ? {} : { fetch: options.fetch })
+    ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
   });
   const model = wrapLanguageModel({
     model: provider(options.config.modelId),
-    middleware: strictFunctionToolsMiddleware
+    middleware: strictFunctionToolsMiddleware,
   });
 
   return {
@@ -53,10 +53,10 @@ export function createDeepSeekMainAgentModelBinding(
         providerOptions: {
           deepseek: {
             thinking: { type: "enabled" },
-            reasoningEffort: "high"
-          }
-        }
-      }
-    }
+            reasoningEffort: "high",
+          },
+        },
+      },
+    },
   };
 }

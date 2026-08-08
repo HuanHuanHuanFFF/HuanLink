@@ -3,11 +3,19 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  test,
+} from "vitest";
 
 import {
   loadServerChannelRuntimeConfig,
-  loadServerLocalUserConfig
+  loadServerLocalUserConfig,
 } from "../src/local-user-config.js";
 
 const API_KEY = "main-agent-secret";
@@ -19,7 +27,7 @@ let previousAccessToken: string | undefined;
 
 function restoreEnvironmentValue(
   name: "DEEPSEEK_API_KEY" | "HUANLINK_ONEBOT_ACCESS_TOKEN",
-  value: string | undefined
+  value: string | undefined,
 ): void {
   if (value === undefined) {
     delete process.env[name];
@@ -32,7 +40,9 @@ beforeEach(async () => {
   previousApiKey = process.env.DEEPSEEK_API_KEY;
   previousAccessToken = process.env.HUANLINK_ONEBOT_ACCESS_TOKEN;
   tempRoot = await mkdtemp(path.join(os.tmpdir(), "huanlink-local-config-"));
-  escapeRoot = await mkdtemp(path.join(os.tmpdir(), "huanlink-local-config-escape-"));
+  escapeRoot = await mkdtemp(
+    path.join(os.tmpdir(), "huanlink-local-config-escape-"),
+  );
   process.env.DEEPSEEK_API_KEY = API_KEY;
   process.env.HUANLINK_ONEBOT_ACCESS_TOKEN = ACCESS_TOKEN;
 });
@@ -61,14 +71,17 @@ describe("test environment isolation", () => {
     try {
       expect({
         apiKey: process.env.DEEPSEEK_API_KEY,
-        accessToken: process.env.HUANLINK_ONEBOT_ACCESS_TOKEN
+        accessToken: process.env.HUANLINK_ONEBOT_ACCESS_TOKEN,
       }).toEqual({
         apiKey: preexistingApiKey,
-        accessToken: preexistingAccessToken
+        accessToken: preexistingAccessToken,
       });
     } finally {
       restoreEnvironmentValue("DEEPSEEK_API_KEY", originalApiKey);
-      restoreEnvironmentValue("HUANLINK_ONEBOT_ACCESS_TOKEN", originalAccessToken);
+      restoreEnvironmentValue(
+        "HUANLINK_ONEBOT_ACCESS_TOKEN",
+        originalAccessToken,
+      );
     }
   });
 
@@ -81,7 +94,7 @@ describe("test environment isolation", () => {
 describe("loadServerLocalUserConfig", () => {
   test("loads the repository's single tracked configuration tree", async () => {
     const configRoot = fileURLToPath(
-      new URL("../../../.huanlink/config/", import.meta.url)
+      new URL("../../../.huanlink/config/", import.meta.url),
     );
 
     await expect(
@@ -89,38 +102,38 @@ describe("loadServerLocalUserConfig", () => {
         configRoot,
         env: {
           DEEPSEEK_API_KEY: API_KEY,
-          HUANLINK_ONEBOT_ACCESS_TOKEN: ACCESS_TOKEN
-        }
-      })
+          HUANLINK_ONEBOT_ACCESS_TOKEN: ACCESS_TOKEN,
+        },
+      }),
     ).resolves.toMatchObject({
       mainAgent: { provider: "deepseek" },
       channels: [{ channelId: "qq-main" }],
-      agents: [{ agentId: "codex-local" }]
+      agents: [{ agentId: "codex-local" }],
     });
   });
 
   test("loads the Channel runtime without resolving an unused MainAgent API key", async () => {
     const configRoot = fileURLToPath(
-      new URL("../../../.huanlink/config/", import.meta.url)
+      new URL("../../../.huanlink/config/", import.meta.url),
     );
 
     const config = await loadServerChannelRuntimeConfig({
       configRoot,
-      env: { HUANLINK_ONEBOT_ACCESS_TOKEN: ACCESS_TOKEN }
+      env: { HUANLINK_ONEBOT_ACCESS_TOKEN: ACCESS_TOKEN },
     });
 
     expect(config).toMatchObject({
       mainAgent: {
         provider: "deepseek",
-        apiKeyEnv: "DEEPSEEK_API_KEY"
+        apiKeyEnv: "DEEPSEEK_API_KEY",
       },
       channels: [{ channelId: "qq-main", accessToken: ACCESS_TOKEN }],
       agents: [{ agentId: "codex-local" }],
       sources: {
         mainAgent: "server/main-agent.json",
         channels: ["server/channels/onebot11.json"],
-        agents: ["server/agents/codex-local.json"]
-      }
+        agents: ["server/agents/codex-local.json"],
+      },
     });
     expect(config.mainAgent).not.toHaveProperty("apiKey");
   });
@@ -132,19 +145,19 @@ describe("loadServerLocalUserConfig", () => {
         version: 1,
         server: {
           channels: ["./server/channels/onebot11.json"],
-          agents: []
-        }
-      }
+          agents: [],
+        },
+      },
     });
 
     await expect(
       loadServerChannelRuntimeConfig({
         configRoot: tempRoot,
-        env: { HUANLINK_ONEBOT_ACCESS_TOKEN: ACCESS_TOKEN }
-      })
+        env: { HUANLINK_ONEBOT_ACCESS_TOKEN: ACCESS_TOKEN },
+      }),
     ).resolves.toMatchObject({
       channels: [{ channelId: "qq-main" }],
-      agents: []
+      agents: [],
     });
   });
 
@@ -152,14 +165,14 @@ describe("loadServerLocalUserConfig", () => {
     await writeValidServerConfig(tempRoot);
     await writeJson(path.join(tempRoot, "server", "main-agent.json"), {
       ...mainAgent,
-      version: 2
+      version: 2,
     });
 
     await expect(
       loadServerChannelRuntimeConfig({
         configRoot: tempRoot,
-        env: { HUANLINK_ONEBOT_ACCESS_TOKEN: ACCESS_TOKEN }
-      })
+        env: { HUANLINK_ONEBOT_ACCESS_TOKEN: ACCESS_TOKEN },
+      }),
     ).rejects.toThrow(/server\/main-agent\.json.*version/);
   });
 
@@ -167,22 +180,22 @@ describe("loadServerLocalUserConfig", () => {
     await writeValidServerConfig(tempRoot, {
       channels: [
         ["z-second.json", { ...oneBotChannel, channelId: "qq-second" }],
-        ["a-first.json", { ...oneBotChannel, channelId: "qq-first" }]
+        ["a-first.json", { ...oneBotChannel, channelId: "qq-first" }],
       ],
       agents: [
         ["z-second.json", { ...a2aAgent, agentId: "agent-second" }],
-        ["a-first.json", { ...a2aAgent, agentId: "agent-first" }]
-      ]
+        ["a-first.json", { ...a2aAgent, agentId: "agent-first" }],
+      ],
     });
 
     await expect(
-      loadServerLocalUserConfig({ configRoot: tempRoot })
+      loadServerLocalUserConfig({ configRoot: tempRoot }),
     ).resolves.toEqual({
       mainAgent: {
         provider: "deepseek",
         modelId: "deepseek-v4-flash",
         baseURL: "https://api.deepseek.com/beta",
-        apiKey: API_KEY
+        apiKey: API_KEY,
       },
       channels: [
         {
@@ -191,10 +204,10 @@ describe("loadServerLocalUserConfig", () => {
           url: "ws://127.0.0.1:3001/",
           inboundPolicy: {
             groups: { mode: "allowlist", ids: ["20002000"] },
-            directs: { mode: "denylist", ids: [] }
+            directs: { mode: "denylist", ids: [] },
           },
           enableUnsafePrivilegedOperations: false,
-          accessToken: ACCESS_TOKEN
+          accessToken: ACCESS_TOKEN,
         },
         {
           channelId: "qq-first",
@@ -202,11 +215,11 @@ describe("loadServerLocalUserConfig", () => {
           url: "ws://127.0.0.1:3001/",
           inboundPolicy: {
             groups: { mode: "allowlist", ids: ["20002000"] },
-            directs: { mode: "denylist", ids: [] }
+            directs: { mode: "denylist", ids: [] },
           },
           enableUnsafePrivilegedOperations: false,
-          accessToken: ACCESS_TOKEN
-        }
+          accessToken: ACCESS_TOKEN,
+        },
       ],
       agents: [
         {
@@ -215,7 +228,7 @@ describe("loadServerLocalUserConfig", () => {
           transport: "a2a",
           origin: "http://127.0.0.1:4000",
           skillId: "codex-code-task",
-          enabled: true
+          enabled: true,
         },
         {
           agentId: "agent-first",
@@ -223,9 +236,9 @@ describe("loadServerLocalUserConfig", () => {
           transport: "a2a",
           origin: "http://127.0.0.1:4000",
           skillId: "codex-code-task",
-          enabled: true
-        }
-      ]
+          enabled: true,
+        },
+      ],
     });
   });
 
@@ -241,26 +254,28 @@ describe("loadServerLocalUserConfig", () => {
             url: "ws://127.0.0.1:3001/",
             inboundPolicy: {
               groups: { mode: "allowlist", ids: ["20002000"] },
-              directs: { mode: "denylist", ids: ["30003000"] }
+              directs: { mode: "denylist", ids: ["30003000"] },
             },
             enableUnsafePrivilegedOperations: true,
-            accessTokenEnv: "HUANLINK_ONEBOT_ACCESS_TOKEN"
-          }
-        ]
-      ]
+            accessTokenEnv: "HUANLINK_ONEBOT_ACCESS_TOKEN",
+          },
+        ],
+      ],
     });
 
-    await expect(loadServerLocalUserConfig({ configRoot: tempRoot })).resolves.toMatchObject({
+    await expect(
+      loadServerLocalUserConfig({ configRoot: tempRoot }),
+    ).resolves.toMatchObject({
       channels: [
         {
           channelId: "qq-main",
           inboundPolicy: {
             groups: { mode: "allowlist", ids: ["20002000"] },
-            directs: { mode: "denylist", ids: ["30003000"] }
+            directs: { mode: "denylist", ids: ["30003000"] },
           },
-          enableUnsafePrivilegedOperations: true
-        }
-      ]
+          enableUnsafePrivilegedOperations: true,
+        },
+      ],
     });
   });
 
@@ -273,8 +288,8 @@ describe("loadServerLocalUserConfig", () => {
         type: "onebot11-forward-websocket",
         url: "ws://127.0.0.1:3001/",
         enableUnsafePrivilegedOperations: false,
-        accessTokenEnv: "HUANLINK_ONEBOT_ACCESS_TOKEN"
-      }
+        accessTokenEnv: "HUANLINK_ONEBOT_ACCESS_TOKEN",
+      },
     ],
     [
       "a missing privileged-operation switch",
@@ -285,10 +300,10 @@ describe("loadServerLocalUserConfig", () => {
         url: "ws://127.0.0.1:3001/",
         inboundPolicy: {
           groups: { mode: "allowlist", ids: ["20002000"] },
-          directs: { mode: "denylist", ids: [] }
+          directs: { mode: "denylist", ids: [] },
         },
-        accessTokenEnv: "HUANLINK_ONEBOT_ACCESS_TOKEN"
-      }
+        accessTokenEnv: "HUANLINK_ONEBOT_ACCESS_TOKEN",
+      },
     ],
     [
       "an unsupported access mode",
@@ -296,9 +311,9 @@ describe("loadServerLocalUserConfig", () => {
         ...oneBotChannel,
         inboundPolicy: {
           groups: { mode: "observe", ids: ["20002000"] },
-          directs: { mode: "allowlist", ids: [] }
-        }
-      }
+          directs: { mode: "allowlist", ids: [] },
+        },
+      },
     ],
     [
       "a non-positive group id",
@@ -306,9 +321,9 @@ describe("loadServerLocalUserConfig", () => {
         ...oneBotChannel,
         inboundPolicy: {
           groups: { mode: "allowlist", ids: ["0"] },
-          directs: { mode: "allowlist", ids: [] }
-        }
-      }
+          directs: { mode: "allowlist", ids: [] },
+        },
+      },
     ],
     [
       "an unsafe direct id",
@@ -316,9 +331,9 @@ describe("loadServerLocalUserConfig", () => {
         ...oneBotChannel,
         inboundPolicy: {
           groups: { mode: "allowlist", ids: [] },
-          directs: { mode: "allowlist", ids: ["9007199254740992"] }
-        }
-      }
+          directs: { mode: "allowlist", ids: ["9007199254740992"] },
+        },
+      },
     ],
     [
       "duplicate ids within one access policy",
@@ -326,37 +341,42 @@ describe("loadServerLocalUserConfig", () => {
         ...oneBotChannel,
         inboundPolicy: {
           groups: { mode: "allowlist", ids: ["20002000", "20002000"] },
-          directs: { mode: "allowlist", ids: [] }
-        }
-      }
+          directs: { mode: "allowlist", ids: [] },
+        },
+      },
     ],
     [
       "legacy groupId and commandPrefix fields",
       {
         ...oneBotChannel,
         groupId: "20002000",
-        commandPrefix: "/huanlink"
-      }
-    ]
+        commandPrefix: "/huanlink",
+      },
+    ],
   ])("rejects %s in a Channel inbound policy", async (_name, channel) => {
     await writeValidServerConfig(tempRoot, {
-      channels: [["onebot11.json", channel]]
+      channels: [["onebot11.json", channel]],
     });
 
-    await expect(loadServerLocalUserConfig({ configRoot: tempRoot })).rejects.toThrow(
-      /server\/channels\/onebot11\.json/
-    );
+    await expect(
+      loadServerLocalUserConfig({ configRoot: tempRoot }),
+    ).rejects.toThrow(/server\/channels\/onebot11\.json/);
   });
 
   test("ignores an invalid Server JSON file that config.json does not reference", async () => {
     await writeValidServerConfig(tempRoot);
-    await writeJson(path.join(tempRoot, "server", "channels", "unreferenced.json"), {
-      version: 1,
-      channelId: "bad id"
-    });
+    await writeJson(
+      path.join(tempRoot, "server", "channels", "unreferenced.json"),
+      {
+        version: 1,
+        channelId: "bad id",
+      },
+    );
 
-    await expect(loadServerLocalUserConfig({ configRoot: tempRoot })).resolves.toMatchObject({
-      channels: [{ channelId: "qq-main" }]
+    await expect(
+      loadServerLocalUserConfig({ configRoot: tempRoot }),
+    ).resolves.toMatchObject({
+      channels: [{ channelId: "qq-main" }],
     });
   });
 
@@ -366,8 +386,8 @@ describe("loadServerLocalUserConfig", () => {
     [
       "an unknown config.json field",
       { version: 1, server: serverConfigEntry(), unexpected: true },
-      "root"
-    ]
+      "root",
+    ],
   ])("rejects %s", async (_name, contents, field) => {
     await writeValidServerConfig(tempRoot);
     const configPath = path.join(tempRoot, "config.json");
@@ -379,32 +399,62 @@ describe("loadServerLocalUserConfig", () => {
       await writeJson(configPath, contents);
     }
 
-    await expect(loadServerLocalUserConfig({ configRoot: tempRoot })).rejects.toThrow(
-      new RegExp(`config\\.json.*${field}`)
-    );
+    await expect(
+      loadServerLocalUserConfig({ configRoot: tempRoot }),
+    ).rejects.toThrow(new RegExp(`config\\.json.*${field}`));
   });
 
   test.each([
     ["a missing Server section", { version: 1 }, "server"],
-    ["an unknown Server field", { version: 1, server: { ...serverConfigEntry(), unexpected: true } }, "root"],
-    ["a missing mainAgent reference", { version: 1, server: { channels: ["./server/channels/onebot11.json"], agents: ["./server/agents/codex-local.json"] } }, "mainAgent"],
-    ["an empty channels list", { version: 1, server: { ...serverConfigEntry(), channels: [] } }, "channels"],
-    ["a non-string Agent reference", { version: 1, server: { ...serverConfigEntry(), agents: [42] } }, "agents"]
+    [
+      "an unknown Server field",
+      { version: 1, server: { ...serverConfigEntry(), unexpected: true } },
+      "root",
+    ],
+    [
+      "a missing mainAgent reference",
+      {
+        version: 1,
+        server: {
+          channels: ["./server/channels/onebot11.json"],
+          agents: ["./server/agents/codex-local.json"],
+        },
+      },
+      "mainAgent",
+    ],
+    [
+      "an empty channels list",
+      { version: 1, server: { ...serverConfigEntry(), channels: [] } },
+      "channels",
+    ],
+    [
+      "a non-string Agent reference",
+      { version: 1, server: { ...serverConfigEntry(), agents: [42] } },
+      "agents",
+    ],
   ])("rejects config.json with %s", async (_name, entry, field) => {
     await writeValidServerConfig(tempRoot);
     await writeJson(path.join(tempRoot, "config.json"), entry);
 
-    await expect(loadServerLocalUserConfig({ configRoot: tempRoot })).rejects.toThrow(
-      new RegExp(`config\\.json.*${field}`)
-    );
+    await expect(
+      loadServerLocalUserConfig({ configRoot: tempRoot }),
+    ).rejects.toThrow(new RegExp(`config\\.json.*${field}`));
   });
 
   test.each([
     ["a reference without ./", "mainAgent", "server/main-agent.json"],
     ["an absolute reference", "channels", "/server/channels/onebot11.json"],
     ["a backslash reference", "agents", ".\\server\\agents\\codex-local.json"],
-    ["a parent-directory reference", "channels", "./server/channels/../channels/onebot11.json"],
-    ["a reference outside the Server namespace", "agents", "./adapters/codex/projects/huanlink.json"]
+    [
+      "a parent-directory reference",
+      "channels",
+      "./server/channels/../channels/onebot11.json",
+    ],
+    [
+      "a reference outside the Server namespace",
+      "agents",
+      "./adapters/codex/projects/huanlink.json",
+    ],
   ])("rejects %s", async (_name, field, reference) => {
     await writeValidServerConfig(tempRoot);
     const server = serverConfigEntry();
@@ -417,24 +467,27 @@ describe("loadServerLocalUserConfig", () => {
     }
     await writeJson(path.join(tempRoot, "config.json"), { version: 1, server });
 
-    await expect(loadServerLocalUserConfig({ configRoot: tempRoot })).rejects.toThrow(
-      new RegExp(`config\\.json.*${field}`)
-    );
+    await expect(
+      loadServerLocalUserConfig({ configRoot: tempRoot }),
+    ).rejects.toThrow(new RegExp(`config\\.json.*${field}`));
   });
 
   test.each([
-    ["duplicate references", ["./server/channels/onebot11.json", "./server/channels/onebot11.json"]],
-    ["an alias reference", ["./server/channels/./onebot11.json"]]
+    [
+      "duplicate references",
+      ["./server/channels/onebot11.json", "./server/channels/onebot11.json"],
+    ],
+    ["an alias reference", ["./server/channels/./onebot11.json"]],
   ])("rejects %s", async (_name, channels) => {
     await writeValidServerConfig(tempRoot);
     await writeJson(path.join(tempRoot, "config.json"), {
       version: 1,
-      server: { ...serverConfigEntry(), channels }
+      server: { ...serverConfigEntry(), channels },
     });
 
-    await expect(loadServerLocalUserConfig({ configRoot: tempRoot })).rejects.toThrow(
-      /config\.json.*channels/
-    );
+    await expect(
+      loadServerLocalUserConfig({ configRoot: tempRoot }),
+    ).rejects.toThrow(/config\.json.*channels/);
   });
 
   test("loads its own explicit references while a malformed Adapter section does not block it", async () => {
@@ -442,29 +495,42 @@ describe("loadServerLocalUserConfig", () => {
     const alternateMainAgent = { ...mainAgent, modelId: "deepseek-v4-alt" };
     const alternateChannel = { ...oneBotChannel, channelId: "qq-alt" };
     const alternateAgent = { ...a2aAgent, agentId: "agent-alt" };
-    await writeJson(path.join(tempRoot, "server", "main-agent-alt.json"), alternateMainAgent);
-    await writeJson(path.join(tempRoot, "server", "channels", "alt.json"), alternateChannel);
-    await writeJson(path.join(tempRoot, "server", "agents", "alt.json"), alternateAgent);
+    await writeJson(
+      path.join(tempRoot, "server", "main-agent-alt.json"),
+      alternateMainAgent,
+    );
+    await writeJson(
+      path.join(tempRoot, "server", "channels", "alt.json"),
+      alternateChannel,
+    );
+    await writeJson(
+      path.join(tempRoot, "server", "agents", "alt.json"),
+      alternateAgent,
+    );
     await writeJson(path.join(tempRoot, "config.json"), {
       version: 1,
       server: {
         mainAgent: "./server/main-agent-alt.json",
         channels: ["./server/channels/alt.json"],
-        agents: ["./server/agents/alt.json"]
+        agents: ["./server/agents/alt.json"],
       },
-      adapters: { codex: { runtime: 42 } }
+      adapters: { codex: { runtime: 42 } },
     });
 
-    await expect(loadServerLocalUserConfig({ configRoot: tempRoot })).resolves.toMatchObject({
+    await expect(
+      loadServerLocalUserConfig({ configRoot: tempRoot }),
+    ).resolves.toMatchObject({
       mainAgent: { modelId: "deepseek-v4-alt" },
       channels: [{ channelId: "qq-alt" }],
-      agents: [{ agentId: "agent-alt" }]
+      agents: [{ agentId: "agent-alt" }],
     });
   });
 
   test("uses cwd/.huanlink/config by default", async () => {
     const originalCwd = process.cwd();
-    const cwd = await mkdtemp(path.join(os.tmpdir(), "huanlink-local-config-cwd-"));
+    const cwd = await mkdtemp(
+      path.join(os.tmpdir(), "huanlink-local-config-cwd-"),
+    );
     await writeValidServerConfig(path.join(cwd, ".huanlink", "config"));
     process.chdir(cwd);
 
@@ -472,7 +538,7 @@ describe("loadServerLocalUserConfig", () => {
       await expect(loadServerLocalUserConfig()).resolves.toMatchObject({
         mainAgent: { apiKey: API_KEY },
         channels: [{ channelId: "qq-main" }],
-        agents: [{ agentId: "codex-local" }]
+        agents: [{ agentId: "codex-local" }],
       });
     } finally {
       process.chdir(originalCwd);
@@ -482,17 +548,15 @@ describe("loadServerLocalUserConfig", () => {
 
   test("uses an explicit projectRoot without relying on process cwd", async () => {
     const projectRoot = await mkdtemp(
-      path.join(os.tmpdir(), "huanlink-local-config-project-")
+      path.join(os.tmpdir(), "huanlink-local-config-project-"),
     );
-    await writeValidServerConfig(
-      path.join(projectRoot, ".huanlink", "config")
-    );
+    await writeValidServerConfig(path.join(projectRoot, ".huanlink", "config"));
 
     try {
       await expect(
-        loadServerLocalUserConfig({ projectRoot })
+        loadServerLocalUserConfig({ projectRoot }),
       ).resolves.toMatchObject({
-        channels: [{ channelId: "qq-main" }]
+        channels: [{ channelId: "qq-main" }],
       });
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
@@ -503,19 +567,19 @@ describe("loadServerLocalUserConfig", () => {
     await writeValidServerConfig(path.join(escapeRoot, "config"));
     const huanlinkPath = path.join(tempRoot, ".huanlink");
 
-    if (!(await createLinkOrSkip(context, escapeRoot, huanlinkPath, "junction"))) {
+    if (
+      !(await createLinkOrSkip(context, escapeRoot, huanlinkPath, "junction"))
+    ) {
       return;
     }
 
     await expect(
-      loadServerLocalUserConfig({ projectRoot: tempRoot })
+      loadServerLocalUserConfig({ projectRoot: tempRoot }),
     ).rejects.toThrow(/\.huanlink/);
   });
 
   test("rejects an explicit projectRoot directory junction", async (context) => {
-    await writeValidServerConfig(
-      path.join(escapeRoot, ".huanlink", "config")
-    );
+    await writeValidServerConfig(path.join(escapeRoot, ".huanlink", "config"));
     const linkedProjectRoot = path.join(tempRoot, "linked-project-root");
 
     if (
@@ -523,133 +587,160 @@ describe("loadServerLocalUserConfig", () => {
         context,
         escapeRoot,
         linkedProjectRoot,
-        "junction"
+        "junction",
       ))
     ) {
       return;
     }
 
     await expect(
-      loadServerChannelRuntimeConfig({ projectRoot: linkedProjectRoot })
+      loadServerChannelRuntimeConfig({ projectRoot: linkedProjectRoot }),
     ).rejects.toThrow(/project root/);
   });
 
   test.each([
     ["server/main-agent.json", { ...mainAgent, version: 2 }, "version"],
     ["server/main-agent.json", { ...mainAgent, unexpected: true }, "root"],
-    ["server/channels/onebot11.json", { ...oneBotChannel, channelId: "bad id" }, "channelId"],
-    ["server/channels/onebot11.json", { ...oneBotChannel, url: "http://127.0.0.1:3001" }, "url"],
-    ["server/agents/codex-local.json", { ...a2aAgent, origin: "https://example.test" }, "origin"]
-  ])("rejects invalid %s without leaking configuration contents", async (file, value, field) => {
-    await writeValidServerConfig(tempRoot);
-    await writeJson(path.join(tempRoot, file), value);
+    [
+      "server/channels/onebot11.json",
+      { ...oneBotChannel, channelId: "bad id" },
+      "channelId",
+    ],
+    [
+      "server/channels/onebot11.json",
+      { ...oneBotChannel, url: "http://127.0.0.1:3001" },
+      "url",
+    ],
+    [
+      "server/agents/codex-local.json",
+      { ...a2aAgent, origin: "https://example.test" },
+      "origin",
+    ],
+  ])(
+    "rejects invalid %s without leaking configuration contents",
+    async (file, value, field) => {
+      await writeValidServerConfig(tempRoot);
+      await writeJson(path.join(tempRoot, file), value);
 
-    await expect(loadServerLocalUserConfig({ configRoot: tempRoot })).rejects.toThrow(
-      new RegExp(`${escapeRegExp(file)}.*${field}`)
-    );
-  });
+      await expect(
+        loadServerLocalUserConfig({ configRoot: tempRoot }),
+      ).rejects.toThrow(new RegExp(`${escapeRegExp(file)}.*${field}`));
+    },
+  );
 
   test.each([
     [
       "userinfo",
       "ws://tracked-user:tracked-password@127.0.0.1:3001/",
-      "tracked-password"
+      "tracked-password",
     ],
     [
       "an access-token query",
       "ws://127.0.0.1:3001/?access_token=tracked-token",
-      "tracked-token"
+      "tracked-token",
     ],
     [
       "an arbitrary query",
       "ws://127.0.0.1:3001/?client=tracked-query-value",
-      "tracked-query-value"
+      "tracked-query-value",
     ],
-    [
-      "a fragment",
-      "ws://127.0.0.1:3001/#tracked-fragment",
-      "tracked-fragment"
-    ],
+    ["a fragment", "ws://127.0.0.1:3001/#tracked-fragment", "tracked-fragment"],
     ["a bare query delimiter", "ws://127.0.0.1:3001/?", "?"],
     ["a bare fragment delimiter", "ws://127.0.0.1:3001/#", "#"],
-    ["bare query and fragment delimiters", "ws://127.0.0.1:3001/?#", "?#"]
-  ])("rejects OneBot WebSocket URLs containing %s", async (_case, url, secret) => {
-    await writeValidServerConfig(tempRoot);
-    await writeJson(path.join(tempRoot, "server/channels/onebot11.json"), {
-      ...oneBotChannel,
-      url
-    });
+    ["bare query and fragment delimiters", "ws://127.0.0.1:3001/?#", "?#"],
+  ])(
+    "rejects OneBot WebSocket URLs containing %s",
+    async (_case, url, secret) => {
+      await writeValidServerConfig(tempRoot);
+      await writeJson(path.join(tempRoot, "server/channels/onebot11.json"), {
+        ...oneBotChannel,
+        url,
+      });
 
-    let thrown: unknown;
-    try {
-      await loadServerLocalUserConfig({ configRoot: tempRoot });
-    } catch (error) {
-      thrown = error;
-    }
+      let thrown: unknown;
+      try {
+        await loadServerLocalUserConfig({ configRoot: tempRoot });
+      } catch (error) {
+        thrown = error;
+      }
 
-    expect(thrown).toBeInstanceOf(Error);
-    expect((thrown as Error).message).toContain(
-      "server/channels/onebot11.json"
-    );
-    expect((thrown as Error).message).toContain("url");
-    expect((thrown as Error).message).not.toContain(secret);
-  });
+      expect(thrown).toBeInstanceOf(Error);
+      expect((thrown as Error).message).toContain(
+        "server/channels/onebot11.json",
+      );
+      expect((thrown as Error).message).toContain("url");
+      expect((thrown as Error).message).not.toContain(secret);
+    },
+  );
 
   test("allows credential-free wss endpoints with custom host, port, and path", async () => {
     await writeValidServerConfig(tempRoot);
     const url = "wss://onebot.example.test:8443/onebot/v11";
     await writeJson(path.join(tempRoot, "server/channels/onebot11.json"), {
       ...oneBotChannel,
-      url
+      url,
     });
 
     await expect(
-      loadServerLocalUserConfig({ configRoot: tempRoot })
+      loadServerLocalUserConfig({ configRoot: tempRoot }),
     ).resolves.toMatchObject({ channels: [{ url }] });
   });
 
   test.each([
     ["channels", "channelId"],
-    ["agents", "agentId"]
-  ])("rejects duplicate stable %s without disclosing its value", async (directory, field) => {
-    await writeValidServerConfig(tempRoot);
-    const secretId = `do-not-disclose-${directory}-id`;
-    const fixture = {
-      ...(directory === "channels" ? oneBotChannel : a2aAgent),
-      [field]: secretId
-    };
-    const originalFile = directory === "channels" ? "onebot11.json" : "codex-local.json";
-    await writeJson(path.join(tempRoot, "server", directory, originalFile), fixture);
-    await writeJson(
-      path.join(tempRoot, "server", directory, "z-duplicate.json"),
-      fixture
-    );
-    const server = serverConfigEntry();
-    if (directory === "channels") {
-      server.channels.push("./server/channels/z-duplicate.json");
-    } else {
-      server.agents.push("./server/agents/z-duplicate.json");
-    }
-    await writeJson(path.join(tempRoot, "config.json"), { version: 1, server });
+    ["agents", "agentId"],
+  ])(
+    "rejects duplicate stable %s without disclosing its value",
+    async (directory, field) => {
+      await writeValidServerConfig(tempRoot);
+      const secretId = `do-not-disclose-${directory}-id`;
+      const fixture = {
+        ...(directory === "channels" ? oneBotChannel : a2aAgent),
+        [field]: secretId,
+      };
+      const originalFile =
+        directory === "channels" ? "onebot11.json" : "codex-local.json";
+      await writeJson(
+        path.join(tempRoot, "server", directory, originalFile),
+        fixture,
+      );
+      await writeJson(
+        path.join(tempRoot, "server", directory, "z-duplicate.json"),
+        fixture,
+      );
+      const server = serverConfigEntry();
+      if (directory === "channels") {
+        server.channels.push("./server/channels/z-duplicate.json");
+      } else {
+        server.agents.push("./server/agents/z-duplicate.json");
+      }
+      await writeJson(path.join(tempRoot, "config.json"), {
+        version: 1,
+        server,
+      });
 
-    const promise = loadServerLocalUserConfig({ configRoot: tempRoot });
-    await expect(promise).rejects.toThrow(
-      new RegExp(`${directory}/z-duplicate\\.json.*${field}`)
-    );
-    await expect(promise).rejects.not.toThrow(secretId);
-  });
+      const promise = loadServerLocalUserConfig({ configRoot: tempRoot });
+      await expect(promise).rejects.toThrow(
+        new RegExp(`${directory}/z-duplicate\\.json.*${field}`),
+      );
+      await expect(promise).rejects.not.toThrow(secretId);
+    },
+  );
 
   test.each([
     ["server/main-agent.json"],
     ["server/channels"],
-    ["server/agents"]
+    ["server/agents"],
   ])("requires %s", async (relativePath) => {
     await writeValidServerConfig(tempRoot);
-    await rm(path.join(tempRoot, relativePath), { recursive: true, force: true });
+    await rm(path.join(tempRoot, relativePath), {
+      recursive: true,
+      force: true,
+    });
 
-    await expect(loadServerLocalUserConfig({ configRoot: tempRoot })).rejects.toThrow(
-      new RegExp(escapeRegExp(relativePath))
-    );
+    await expect(
+      loadServerLocalUserConfig({ configRoot: tempRoot }),
+    ).rejects.toThrow(new RegExp(escapeRegExp(relativePath)));
   });
 
   test("requires referenced environment values and never includes the secret in errors", async () => {
@@ -674,59 +765,74 @@ describe("loadServerLocalUserConfig", () => {
 
   test.each([
     ["server/main-agent.json", "{ invalid JSON"],
-    ["server/main-agent.json", "[]"]
-  ])("rejects damaged or non-object JSON in %s", async (relativePath, content) => {
-    await writeValidServerConfig(tempRoot);
-    await writeFile(path.join(tempRoot, relativePath), content, "utf8");
+    ["server/main-agent.json", "[]"],
+  ])(
+    "rejects damaged or non-object JSON in %s",
+    async (relativePath, content) => {
+      await writeValidServerConfig(tempRoot);
+      await writeFile(path.join(tempRoot, relativePath), content, "utf8");
 
-    await expect(loadServerLocalUserConfig({ configRoot: tempRoot })).rejects.toThrow(
-      new RegExp(escapeRegExp(relativePath))
-    );
-  });
+      await expect(
+        loadServerLocalUserConfig({ configRoot: tempRoot }),
+      ).rejects.toThrow(new RegExp(escapeRegExp(relativePath)));
+    },
+  );
 
   test("rejects invalid UTF-8 even when replacement decoding would leave valid JSON", async () => {
     await writeValidServerConfig(tempRoot);
     const invalidUtf8 = Buffer.concat([
       Buffer.from('{"version":1,"provider":"deepseek","modelId":"'),
       Buffer.from([0x80]),
-      Buffer.from('","baseURL":"https://api.deepseek.com/beta","apiKeyEnv":"DEEPSEEK_API_KEY"}')
+      Buffer.from(
+        '","baseURL":"https://api.deepseek.com/beta","apiKeyEnv":"DEEPSEEK_API_KEY"}',
+      ),
     ]);
     await writeFile(
       path.join(tempRoot, "server", "main-agent.json"),
-      invalidUtf8
+      invalidUtf8,
     );
 
-    await expect(loadServerLocalUserConfig({ configRoot: tempRoot })).rejects.toThrow(
-      /server\/main-agent\.json.*UTF-8/
-    );
+    await expect(
+      loadServerLocalUserConfig({ configRoot: tempRoot }),
+    ).rejects.toThrow(/server\/main-agent\.json.*UTF-8/);
   });
 
-  test.each(["channels", "agents"])("rejects an empty %s directory", async (directory) => {
-    await writeValidServerConfig(tempRoot);
-    const directoryPath = path.join(tempRoot, "server", directory);
-    await rm(directoryPath, { recursive: true, force: true });
-    await mkdir(directoryPath, { recursive: true });
+  test.each(["channels", "agents"])(
+    "rejects an empty %s directory",
+    async (directory) => {
+      await writeValidServerConfig(tempRoot);
+      const directoryPath = path.join(tempRoot, "server", directory);
+      await rm(directoryPath, { recursive: true, force: true });
+      await mkdir(directoryPath, { recursive: true });
 
-    await expect(loadServerLocalUserConfig({ configRoot: tempRoot })).rejects.toThrow(
-      new RegExp(`server/${directory}`)
-    );
-  });
+      await expect(
+        loadServerLocalUserConfig({ configRoot: tempRoot }),
+      ).rejects.toThrow(new RegExp(`server/${directory}`));
+    },
+  );
 
   test.each([
-    ["server/main-agent.json", { ...mainAgent, apiKeyEnv: "BAD-NAME" }, "apiKeyEnv"],
+    [
+      "server/main-agent.json",
+      { ...mainAgent, apiKeyEnv: "BAD-NAME" },
+      "apiKeyEnv",
+    ],
     [
       "server/channels/onebot11.json",
       { ...oneBotChannel, accessTokenEnv: "BAD-NAME" },
-      "accessTokenEnv"
-    ]
-  ])("rejects invalid environment variable names in %s", async (relativePath, value, field) => {
-    await writeValidServerConfig(tempRoot);
-    await writeJson(path.join(tempRoot, relativePath), value);
+      "accessTokenEnv",
+    ],
+  ])(
+    "rejects invalid environment variable names in %s",
+    async (relativePath, value, field) => {
+      await writeValidServerConfig(tempRoot);
+      await writeJson(path.join(tempRoot, relativePath), value);
 
-    await expect(loadServerLocalUserConfig({ configRoot: tempRoot })).rejects.toThrow(
-      new RegExp(`${escapeRegExp(relativePath)}.*${field}`)
-    );
-  });
+      await expect(
+        loadServerLocalUserConfig({ configRoot: tempRoot }),
+      ).rejects.toThrow(new RegExp(`${escapeRegExp(relativePath)}.*${field}`));
+    },
+  );
 
   test("rejects a declared OneBot token that is missing or blank without leaking another secret", async () => {
     await writeValidServerConfig(tempRoot);
@@ -742,7 +848,9 @@ describe("loadServerLocalUserConfig", () => {
     }
 
     expect(thrown).toBeInstanceOf(Error);
-    expect((thrown as Error).message).toContain("server/channels/onebot11.json");
+    expect((thrown as Error).message).toContain(
+      "server/channels/onebot11.json",
+    );
     expect((thrown as Error).message).toContain("accessTokenEnv");
     expect((thrown as Error).message).not.toContain(unrelatedSecret);
   });
@@ -755,28 +863,33 @@ describe("loadServerLocalUserConfig", () => {
         configRoot: tempRoot,
         env: {
           DEEPSEEK_API_KEY: "injected-main-agent-key",
-          HUANLINK_ONEBOT_ACCESS_TOKEN: "injected-onebot-token"
-        }
-      })
+          HUANLINK_ONEBOT_ACCESS_TOKEN: "injected-onebot-token",
+        },
+      }),
     ).resolves.toMatchObject({
       mainAgent: { apiKey: "injected-main-agent-key" },
-      channels: [{ accessToken: "injected-onebot-token" }]
+      channels: [{ accessToken: "injected-onebot-token" }],
     });
   });
 
   test.each([
     "http://127.0.0.1:4100",
     "https://localhost:4100",
-    "http://[::1]:4100"
+    "http://[::1]:4100",
   ])("accepts loopback A2A origin %s", async (origin) => {
     await writeValidServerConfig(tempRoot);
-    await writeJson(path.join(tempRoot, "server", "agents", "codex-local.json"), {
-      ...a2aAgent,
-      origin
-    });
+    await writeJson(
+      path.join(tempRoot, "server", "agents", "codex-local.json"),
+      {
+        ...a2aAgent,
+        origin,
+      },
+    );
 
-    await expect(loadServerLocalUserConfig({ configRoot: tempRoot })).resolves.toMatchObject({
-      agents: [{ origin }]
+    await expect(
+      loadServerLocalUserConfig({ configRoot: tempRoot }),
+    ).resolves.toMatchObject({
+      agents: [{ origin }],
     });
   });
 
@@ -786,7 +899,7 @@ describe("loadServerLocalUserConfig", () => {
     const rawSecret = "raw-secret-that-must-not-leak";
     await writeJson(path.join(tempRoot, "server", "main-agent.json"), {
       ...mainAgent,
-      [secretField]: rawSecret
+      [secretField]: rawSecret,
     });
 
     let thrown: unknown;
@@ -808,8 +921,10 @@ describe("loadServerLocalUserConfig", () => {
     const secretWithWhitespace = "  main-agent-secret\t";
     process.env.DEEPSEEK_API_KEY = secretWithWhitespace;
 
-    await expect(loadServerLocalUserConfig({ configRoot: tempRoot })).resolves.toMatchObject({
-      mainAgent: { apiKey: secretWithWhitespace }
+    await expect(
+      loadServerLocalUserConfig({ configRoot: tempRoot }),
+    ).resolves.toMatchObject({
+      mainAgent: { apiKey: secretWithWhitespace },
     });
   });
 
@@ -820,25 +935,39 @@ describe("loadServerLocalUserConfig", () => {
     await writeJson(externalMainAgentPath, mainAgent);
     await rm(mainAgentPath);
 
-    if (!(await createLinkOrSkip(context, externalMainAgentPath, mainAgentPath, "file"))) {
+    if (
+      !(await createLinkOrSkip(
+        context,
+        externalMainAgentPath,
+        mainAgentPath,
+        "file",
+      ))
+    ) {
       return;
     }
 
-    await expect(loadServerLocalUserConfig({ configRoot: tempRoot })).rejects.toThrow(
-      /server\/main-agent\.json/
-    );
+    await expect(
+      loadServerLocalUserConfig({ configRoot: tempRoot }),
+    ).rejects.toThrow(/server\/main-agent\.json/);
   });
 
   test("rejects a directory junction used as configRoot", async (context) => {
     await writeValidServerConfig(escapeRoot);
     const linkedConfigRoot = path.join(tempRoot, "linked-config-root");
 
-    if (!(await createLinkOrSkip(context, escapeRoot, linkedConfigRoot, "junction"))) {
+    if (
+      !(await createLinkOrSkip(
+        context,
+        escapeRoot,
+        linkedConfigRoot,
+        "junction",
+      ))
+    ) {
       return;
     }
 
     await expect(
-      loadServerLocalUserConfig({ configRoot: linkedConfigRoot })
+      loadServerLocalUserConfig({ configRoot: linkedConfigRoot }),
     ).rejects.toThrow(/configuration root/);
   });
 
@@ -847,7 +976,11 @@ describe("loadServerLocalUserConfig", () => {
   });
 
   test("rejects a directory junction at server/channels", async (context) => {
-    await expectDirectoryJunctionRejection(context, "server/channels", "channels");
+    await expectDirectoryJunctionRejection(
+      context,
+      "server/channels",
+      "channels",
+    );
   });
 
   test("rejects a directory junction at server/agents", async (context) => {
@@ -860,7 +993,7 @@ const mainAgent = {
   provider: "deepseek",
   modelId: "deepseek-v4-flash",
   baseURL: "https://api.deepseek.com/beta",
-  apiKeyEnv: "DEEPSEEK_API_KEY"
+  apiKeyEnv: "DEEPSEEK_API_KEY",
 };
 
 const oneBotChannel = {
@@ -870,10 +1003,10 @@ const oneBotChannel = {
   url: "ws://127.0.0.1:3001/",
   inboundPolicy: {
     groups: { mode: "allowlist", ids: ["20002000"] },
-    directs: { mode: "denylist", ids: [] }
+    directs: { mode: "denylist", ids: [] },
   },
   enableUnsafePrivilegedOperations: false,
-  accessTokenEnv: "HUANLINK_ONEBOT_ACCESS_TOKEN"
+  accessTokenEnv: "HUANLINK_ONEBOT_ACCESS_TOKEN",
 };
 
 const a2aAgent = {
@@ -883,7 +1016,7 @@ const a2aAgent = {
   transport: "a2a",
   origin: "http://127.0.0.1:4000",
   skillId: "codex-code-task",
-  enabled: true
+  enabled: true,
 };
 
 type ServerConfigEntry = {
@@ -896,7 +1029,7 @@ function serverConfigEntry(): ServerConfigEntry {
   return {
     mainAgent: "./server/main-agent.json",
     channels: ["./server/channels/onebot11.json"],
-    agents: ["./server/agents/codex-local.json"]
+    agents: ["./server/agents/codex-local.json"],
   };
 }
 
@@ -906,7 +1039,7 @@ async function writeValidServerConfig(
     channels?: Array<[string, object]>;
     agents?: Array<[string, object]>;
     config?: object;
-  } = {}
+  } = {},
 ): Promise<void> {
   const channels = input.channels ?? [["onebot11.json", oneBotChannel]];
   const agents = input.agents ?? [["codex-local.json", a2aAgent]];
@@ -924,9 +1057,9 @@ async function writeValidServerConfig(
       server: {
         mainAgent: "./server/main-agent.json",
         channels: channels.map(([name]) => `./server/channels/${name}`),
-        agents: agents.map(([name]) => `./server/agents/${name}`)
-      }
-    }
+        agents: agents.map(([name]) => `./server/agents/${name}`),
+      },
+    },
   );
 }
 
@@ -939,7 +1072,7 @@ async function createLinkOrSkip(
   context: { skip: () => void },
   target: string,
   linkPath: string,
-  type: "file" | "junction"
+  type: "file" | "junction",
 ): Promise<boolean> {
   try {
     await symlink(target, linkPath, type);
@@ -949,7 +1082,9 @@ async function createLinkOrSkip(
       typeof error === "object" &&
       error !== null &&
       "code" in error &&
-      (error.code === "EPERM" || error.code === "EACCES" || error.code === "ENOSYS")
+      (error.code === "EPERM" ||
+        error.code === "EACCES" ||
+        error.code === "ENOSYS")
     ) {
       context.skip();
       return false;
@@ -961,7 +1096,7 @@ async function createLinkOrSkip(
 async function expectDirectoryJunctionRejection(
   context: { skip: () => void },
   relativePath: "server" | "server/channels" | "server/agents",
-  targetDirectoryName: "server" | "channels" | "agents"
+  targetDirectoryName: "server" | "channels" | "agents",
 ): Promise<void> {
   await writeValidServerConfig(tempRoot);
   const linkPath = path.join(tempRoot, ...relativePath.split("/"));
@@ -976,13 +1111,15 @@ async function expectDirectoryJunctionRejection(
   }
 
   await rm(linkPath, { recursive: true, force: true });
-  if (!(await createLinkOrSkip(context, targetDirectory, linkPath, "junction"))) {
+  if (
+    !(await createLinkOrSkip(context, targetDirectory, linkPath, "junction"))
+  ) {
     return;
   }
 
-  await expect(loadServerLocalUserConfig({ configRoot: tempRoot })).rejects.toThrow(
-    new RegExp(escapeRegExp(relativePath))
-  );
+  await expect(
+    loadServerLocalUserConfig({ configRoot: tempRoot }),
+  ).rejects.toThrow(new RegExp(escapeRegExp(relativePath)));
 }
 
 function escapeRegExp(value: string): string {

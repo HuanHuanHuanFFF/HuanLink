@@ -9,13 +9,13 @@ import {
   type InboundChannelMessageV1,
   type RuntimeLogFields,
   type RuntimeLogger,
-  type SessionId
+  type SessionId,
 } from "@huanlink/core";
 
 import {
   copyChannelInboundAccessPolicy,
   isChannelRouteAllowed,
-  type ChannelInboundAccessPolicy
+  type ChannelInboundAccessPolicy,
 } from "./channel-access-policy.js";
 import { createBestEffortRuntimeLogger } from "./best-effort-runtime-logger.js";
 
@@ -38,12 +38,10 @@ export type ChannelRuntimeBackgroundErrorContext = {
 
 export type CreateChannelRuntimeOptions = {
   readonly channels: readonly ChannelRuntimeRegistration[];
-  readonly onMessage?: (
-    input: ChannelRuntimeMessage
-  ) => Promise<void> | void;
+  readonly onMessage?: (input: ChannelRuntimeMessage) => Promise<void> | void;
   readonly onBackgroundError?: (
     error: Error,
-    context: ChannelRuntimeBackgroundErrorContext
+    context: ChannelRuntimeBackgroundErrorContext,
   ) => Promise<void> | void;
   readonly logger?: RuntimeLogger;
 };
@@ -56,26 +54,23 @@ export interface ChannelRuntime {
   /** 原子替换一个 Channel 的接收名单；校验失败时继续使用旧策略。 */
   replaceAccessPolicy(
     channelId: string,
-    policy: ChannelInboundAccessPolicy
+    policy: ChannelInboundAccessPolicy,
   ): void;
   /** 先校验全部候选，再一次性替换多个 Channel 的名单。 */
   replaceAccessPolicies(
-    policies: ReadonlyMap<string, ChannelInboundAccessPolicy>
+    policies: ReadonlyMap<string, ChannelInboundAccessPolicy>,
   ): void;
   /** 使用 Core 的规范规则生成目标外部会话 ID。 */
   sessionIdForRoute(route: ChannelConversationRouteV1): SessionId;
   runOutbound<T>(
     route: ChannelConversationRouteV1,
-    operation: () => Promise<T>
+    operation: () => Promise<T>,
   ): Promise<T>;
   /**
    * 在 Runtime 生命周期内执行不绑定可信 route 的 Channel 操作。
    * 此入口不做接收名单检查，也不提供审批或消息归属保护。
    */
-  runOperation<T>(
-    channelId: string,
-    operation: () => Promise<T>
-  ): Promise<T>;
+  runOperation<T>(channelId: string, operation: () => Promise<T>): Promise<T>;
 }
 
 type RegisteredChannel = {
@@ -91,14 +86,14 @@ type RegisteredChannel = {
  * Session 写入、消息去重、自身消息关联及 Agent 触发都属于下游编排层。
  */
 export function createChannelRuntime(
-  options: CreateChannelRuntimeOptions
+  options: CreateChannelRuntimeOptions,
 ): ChannelRuntime {
   if (options.channels.length === 0) {
     throw new Error("ChannelRuntime requires at least one Channel Adapter");
   }
 
   const logger = createBestEffortRuntimeLogger(
-    options.logger ?? new NoopRuntimeLogger()
+    options.logger ?? new NoopRuntimeLogger(),
   );
   const registrations = new Map<string, RegisteredChannel>();
   const forwardTails = new Map<SessionId, Promise<void>>();
@@ -129,7 +124,7 @@ export function createChannelRuntime(
     replaceAccessPolicies,
     sessionIdForRoute: channelSessionIdFor,
     runOutbound,
-    runOperation
+    runOperation,
   };
 
   for (const registration of options.channels) {
@@ -139,10 +134,8 @@ export function createChannelRuntime(
     }
     registrations.set(channelId, {
       adapter: registration.adapter,
-      inboundPolicy: copyChannelInboundAccessPolicy(
-        registration.inboundPolicy
-      ),
-      orderedAdapter: orderedAdapter(registration.adapter, runOutbound)
+      inboundPolicy: copyChannelInboundAccessPolicy(registration.inboundPolicy),
+      orderedAdapter: orderedAdapter(registration.adapter, runOutbound),
     });
   }
 
@@ -172,8 +165,8 @@ export function createChannelRuntime(
         startingChannelId = channelId;
         unsubscribers.push(
           registration.adapter.onMessage((message) =>
-            receive(registration, message)
-          )
+            receive(registration, message),
+          ),
         );
         await registration.adapter.start();
         if (closed) {
@@ -187,7 +180,7 @@ export function createChannelRuntime(
         reportBackgroundError(startError, {
           ...(startingChannelId === undefined
             ? {}
-            : { channelId: startingChannelId })
+            : { channelId: startingChannelId }),
         });
       }
       closed = true;
@@ -217,11 +210,11 @@ export function createChannelRuntime(
       closeRegisteredAdapters(),
       Promise.allSettled([...activeForwards]),
       Promise.allSettled([...activeEgress]),
-      ...(startDrain === undefined ? [] : [startDrain])
+      ...(startDrain === undefined ? [] : [startDrain]),
     ]);
     started = false;
     const failure = results.find(
-      (result): result is PromiseRejectedResult => result.status === "rejected"
+      (result): result is PromiseRejectedResult => result.status === "rejected",
     );
     if (failure !== undefined) {
       throw normalizeError(failure.reason);
@@ -231,11 +224,11 @@ export function createChannelRuntime(
   async function closeRegisteredAdapters(): Promise<void> {
     const results = await Promise.allSettled(
       [...registrations.values()].map((registration) =>
-        registration.adapter.close()
-      )
+        registration.adapter.close(),
+      ),
     );
     const failures = results.flatMap((result) =>
-      result.status === "rejected" ? [normalizeError(result.reason)] : []
+      result.status === "rejected" ? [normalizeError(result.reason)] : [],
     );
     if (failures.length === 1) {
       throw failures[0];
@@ -253,38 +246,38 @@ export function createChannelRuntime(
 
   async function receive(
     registration: ChannelRuntimeRegistration,
-    message: InboundChannelMessageV1
+    message: InboundChannelMessageV1,
   ): Promise<void> {
     const expectedChannelId = registration.adapter.descriptor.channelId;
     const fields = messageLogFields(message);
     if (closed) {
       logger.debug("channel.runtime.message_ignored", {
         ...fields,
-        reason: "runtime_closed"
+        reason: "runtime_closed",
       });
       return;
     }
     if (message.route.channelId !== expectedChannelId) {
       reportBackgroundError(
         new Error(
-          `Channel Adapter ${expectedChannelId} emitted a message for ${message.route.channelId}`
+          `Channel Adapter ${expectedChannelId} emitted a message for ${message.route.channelId}`,
         ),
         {
           channelId: expectedChannelId,
-          messageId: message.messageId
-        }
+          messageId: message.messageId,
+        },
       );
       return;
     }
     if (
       !isRegisteredRouteAllowed(registration, message.route) ||
       !registration.adapter.descriptor.capabilities.inboundContentFormats.includes(
-        message.contentFormat
+        message.contentFormat,
       )
     ) {
       logger.info("channel.runtime.message_rejected", {
         ...fields,
-        reason: "access_policy"
+        reason: "access_policy",
       });
       return;
     }
@@ -301,7 +294,7 @@ export function createChannelRuntime(
   function scheduleForward(
     sessionId: SessionId,
     message: InboundChannelMessageV1,
-    fields: RuntimeLogFields
+    fields: RuntimeLogFields,
   ): void {
     const controller = new AbortController();
     const previous = forwardTails.get(sessionId) ?? Promise.resolve();
@@ -311,10 +304,14 @@ export function createChannelRuntime(
         if (closed || controller.signal.aborted) {
           return;
         }
-        return options.onMessage?.({ sessionId, message, signal: controller.signal });
+        return options.onMessage?.({
+          sessionId,
+          message,
+          signal: controller.signal,
+        });
       });
     const operation = waitWithSignal(handler, controller.signal).then(
-      () => undefined
+      () => undefined,
     );
     const tail = operation.catch(() => undefined);
     forwardTails.set(sessionId, tail);
@@ -327,11 +324,11 @@ export function createChannelRuntime(
           reportBackgroundError(normalizeError(error), {
             channelId: message.route.channelId,
             sessionId,
-            messageId: message.messageId
+            messageId: message.messageId,
           });
         }
         finishForward();
-      }
+      },
     );
 
     function finishForward(): void {
@@ -346,13 +343,13 @@ export function createChannelRuntime(
 
   function replaceAccessPolicy(
     channelId: string,
-    policy: ChannelInboundAccessPolicy
+    policy: ChannelInboundAccessPolicy,
   ): void {
     replaceAccessPolicies(new Map([[channelId, policy]]));
   }
 
   function replaceAccessPolicies(
-    policies: ReadonlyMap<string, ChannelInboundAccessPolicy>
+    policies: ReadonlyMap<string, ChannelInboundAccessPolicy>,
   ): void {
     const replacements: Array<{
       channelId: string;
@@ -369,12 +366,12 @@ export function createChannelRuntime(
         replacements.push({
           channelId,
           registration,
-          policy: copyChannelInboundAccessPolicy(policy)
+          policy: copyChannelInboundAccessPolicy(policy),
         });
       }
     } catch (error) {
       logger.error("channel.runtime.access_policy_rejected", {
-        errorType: normalizeError(error).name
+        errorType: normalizeError(error).name,
       });
       throw error;
     }
@@ -388,69 +385,71 @@ export function createChannelRuntime(
         groupMode: replacement.policy.groups.mode,
         groupIdCount: replacement.policy.groups.ids.length,
         directMode: replacement.policy.directs.mode,
-        directIdCount: replacement.policy.directs.ids.length
+        directIdCount: replacement.policy.directs.ids.length,
       });
     }
   }
 
   function runOutbound<T>(
     route: ChannelConversationRouteV1,
-    operation: () => Promise<T>
+    operation: () => Promise<T>,
   ): Promise<T> {
     const registration = registrations.get(route.channelId);
     if (registration === undefined) {
       return Promise.reject(
         new ChannelOperationError(
           "invalid_target",
-          `No Channel Adapter is registered for ${route.channelId}`
-        )
+          `No Channel Adapter is registered for ${route.channelId}`,
+        ),
       );
     }
     if (closed) {
       return Promise.reject(
         new ChannelOperationError(
           "temporarily_unavailable",
-          "ChannelRuntime is closed"
-        )
+          "ChannelRuntime is closed",
+        ),
       );
     }
     if (!started) {
       return Promise.reject(
         new ChannelOperationError(
           "temporarily_unavailable",
-          "ChannelRuntime is not started"
-        )
+          "ChannelRuntime is not started",
+        ),
       );
     }
     if (!isRegisteredRouteAllowed(registration, route)) {
       return Promise.reject(
         new ChannelOperationError(
           "invalid_target",
-          "Channel target is outside the allowed scope"
-        )
+          "Channel target is outside the allowed scope",
+        ),
       );
     }
 
     const sessionId = channelSessionIdFor(route);
     const previous = egressTails.get(sessionId) ?? Promise.resolve();
-    const current = previous.catch(() => undefined).then(() => {
-      if (closed) {
-        throw new ChannelOperationError(
-          "temporarily_unavailable",
-          "ChannelRuntime is closed"
-        );
-      }
-      if (!isRegisteredRouteAllowed(registration, route)) {
-        throw new ChannelOperationError(
-          "invalid_target",
-          "Channel target is outside the allowed scope"
-        );
-      }
-      return operation();
-    });
+    const current = previous
+      .catch(() => undefined)
+      .then(() => {
+        if (closed) {
+          throw new ChannelOperationError(
+            "temporarily_unavailable",
+            "ChannelRuntime is closed",
+          );
+        }
+        if (!isRegisteredRouteAllowed(registration, route)) {
+          throw new ChannelOperationError(
+            "invalid_target",
+            "Channel target is outside the allowed scope",
+          );
+        }
+        return operation();
+      });
     const tail = current.then(
       () => undefined,
-      () => undefined
+      () => undefined,
     );
     egressTails.set(sessionId, tail);
     trackEgress(current);
@@ -464,11 +463,11 @@ export function createChannelRuntime(
 
   function runOperation<T>(
     channelId: string,
-    operation: () => Promise<T>
+    operation: () => Promise<T>,
   ): Promise<T> {
     if (!registrations.has(channelId)) {
       return Promise.reject(
-        new Error(`No Channel Adapter is registered for ${channelId}`)
+        new Error(`No Channel Adapter is registered for ${channelId}`),
       );
     }
     if (closed) {
@@ -492,21 +491,21 @@ export function createChannelRuntime(
     activeEgress.add(operation);
     void operation.then(
       () => activeEgress.delete(operation),
-      () => activeEgress.delete(operation)
+      () => activeEgress.delete(operation),
     );
   }
 
   function reportBackgroundError(
     error: Error,
-    context: ChannelRuntimeBackgroundErrorContext
+    context: ChannelRuntimeBackgroundErrorContext,
   ): void {
     logger.error("channel.runtime.background_failed", {
       ...context,
-      errorType: error.name
+      errorType: error.name,
     });
     try {
       void Promise.resolve(options.onBackgroundError?.(error, context)).catch(
-        () => undefined
+        () => undefined,
       );
     } catch {
       // Error observers must not break Channel message processing.
@@ -516,7 +515,7 @@ export function createChannelRuntime(
 
 function orderedAdapter(
   adapter: ChannelAdapterV1,
-  runOutbound: ChannelRuntime["runOutbound"]
+  runOutbound: ChannelRuntime["runOutbound"],
 ): ChannelAdapterV1 {
   return {
     descriptor: adapter.descriptor,
@@ -527,18 +526,18 @@ function orderedAdapter(
       runOutbound(command.route, () => {
         const capabilities = adapter.descriptor.capabilities;
         const unsupportedPart = command.parts.find(
-          (part) => !capabilities.outboundPartTypes.includes(part.type)
+          (part) => !capabilities.outboundPartTypes.includes(part.type),
         );
         if (unsupportedPart !== undefined) {
           throw new ChannelOperationError(
             "not_supported",
-            `Channel Adapter does not support outbound part ${unsupportedPart.type}`
+            `Channel Adapter does not support outbound part ${unsupportedPart.type}`,
           );
         }
         if (command.replyToMessageId !== undefined && !capabilities.reply) {
           throw new ChannelOperationError(
             "not_supported",
-            "Channel Adapter does not support replies"
+            "Channel Adapter does not support replies",
           );
         }
         return adapter.send(command);
@@ -548,17 +547,17 @@ function orderedAdapter(
         if (!adapter.descriptor.capabilities.retract) {
           throw new ChannelOperationError(
             "not_supported",
-            "Channel Adapter does not support message retraction"
+            "Channel Adapter does not support message retraction",
           );
         }
         return adapter.retract(command);
-      })
+      }),
   };
 }
 
 function isRegisteredRouteAllowed(
   registration: ChannelRuntimeRegistration,
-  route: ChannelConversationRouteV1
+  route: ChannelConversationRouteV1,
 ): boolean {
   const capabilities = registration.adapter.descriptor.capabilities;
   return (
@@ -579,9 +578,7 @@ function messageLogFields(message: InboundChannelMessageV1): RuntimeLogFields {
     contentBytes:
       message.contentOmitted?.originalSizeBytes ??
       Buffer.byteLength(message.content, "utf8"),
-    ...(message.trigger === undefined
-      ? {}
-      : { trigger: message.trigger.kind })
+    ...(message.trigger === undefined ? {} : { trigger: message.trigger.kind }),
   };
 }
 
@@ -589,7 +586,10 @@ function normalizeError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
 }
 
-function waitWithSignal<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
+function waitWithSignal<T>(
+  operation: Promise<T>,
+  signal: AbortSignal,
+): Promise<T> {
   if (signal.aborted) {
     void operation.catch(() => undefined);
     return Promise.reject(abortReason(signal));
@@ -609,7 +609,7 @@ function waitWithSignal<T>(operation: Promise<T>, signal: AbortSignal): Promise<
       (error) => {
         cleanup();
         reject(error);
-      }
+      },
     );
   });
 }

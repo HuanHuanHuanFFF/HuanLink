@@ -20,9 +20,9 @@ async function createRepository(branch: string): Promise<string> {
 
 afterEach(async () => {
   await Promise.all(
-    tempDirectories.splice(0).map((directory) =>
-      rm(directory, { recursive: true, force: true })
-    )
+    tempDirectories
+      .splice(0)
+      .map((directory) => rm(directory, { recursive: true, force: true })),
   );
 });
 
@@ -31,10 +31,10 @@ describe("validateDemoWorkspace", () => {
     const repository = await createRepository("spike/demo-v0");
 
     await expect(
-      validateDemoWorkspace(repository, "spike/demo-v0")
+      validateDemoWorkspace(repository, "spike/demo-v0"),
     ).resolves.toEqual({
       branch: "spike/demo-v0",
-      workspace: await realpath(repository)
+      workspace: await realpath(repository),
     });
   });
 
@@ -42,7 +42,7 @@ describe("validateDemoWorkspace", () => {
     const repository = await createRepository("main");
 
     await expect(
-      validateDemoWorkspace(repository, "spike/demo-v0")
+      validateDemoWorkspace(repository, "spike/demo-v0"),
     ).rejects.toThrow("Expected branch spike/demo-v0, found main");
   });
 });

@@ -2,7 +2,7 @@ import { NoopRuntimeLogger, type RuntimeLogger } from "@huanlink/core";
 
 import {
   copyChannelInboundAccessPolicy,
-  type ChannelInboundAccessPolicy
+  type ChannelInboundAccessPolicy,
 } from "./channel-access-policy.js";
 import { createBestEffortRuntimeLogger } from "./best-effort-runtime-logger.js";
 import type { ServerChannelRuntimeConfig } from "./local-user-config.js";
@@ -15,7 +15,7 @@ export type ChannelAccessPolicyWatcher = {
 export type ChannelAccessPolicyWatchFactory = (
   path: string,
   options: { readonly recursive: boolean },
-  listener: (eventType: string, filename: string | Buffer | null) => void
+  listener: (eventType: string, filename: string | Buffer | null) => void,
 ) => ChannelAccessPolicyWatcher;
 
 export type ChannelAccessPolicyReloader = {
@@ -27,7 +27,7 @@ export type CreateChannelAccessPolicyReloaderOptions = {
   readonly initialConfig: ServerChannelRuntimeConfig;
   readonly loadConfig: () => Promise<ServerChannelRuntimeConfig>;
   readonly applyPolicies: (
-    policies: ReadonlyMap<string, ChannelInboundAccessPolicy>
+    policies: ReadonlyMap<string, ChannelInboundAccessPolicy>,
   ) => void;
   readonly watchFactory: ChannelAccessPolicyWatchFactory;
   readonly logger?: RuntimeLogger;
@@ -41,11 +41,11 @@ export type CreateChannelAccessPolicyReloaderOptions = {
  * 以免连接地址、凭证或 Adapter 配置在运行中出现半更新状态。
  */
 export function createChannelAccessPolicyReloader(
-  options: CreateChannelAccessPolicyReloaderOptions
+  options: CreateChannelAccessPolicyReloaderOptions,
 ): ChannelAccessPolicyReloader {
   const initialConfig = snapshotConfig(options.initialConfig);
   const logger = createBestEffortRuntimeLogger(
-    options.logger ?? new NoopRuntimeLogger()
+    options.logger ?? new NoopRuntimeLogger(),
   );
   const debounceMs = options.debounceMs ?? 200;
   let closed = false;
@@ -56,7 +56,7 @@ export function createChannelAccessPolicyReloader(
   const watcher = options.watchFactory(
     options.configRoot,
     { recursive: true },
-    onWatchChange
+    onWatchChange,
   );
   watcher.on("error", onWatcherError);
 
@@ -64,7 +64,7 @@ export function createChannelAccessPolicyReloader(
 
   function onWatchChange(
     _eventType: string,
-    _filename: string | Buffer | null
+    _filename: string | Buffer | null,
   ): void {
     if (closed) {
       return;
@@ -85,7 +85,7 @@ export function createChannelAccessPolicyReloader(
   function onWatcherError(_error: Error): void {
     if (!closed) {
       logger.warn("channel.access_policy.watcher_failed", {
-        reason: "watcher_error"
+        reason: "watcher_error",
       });
     }
   }
@@ -121,7 +121,7 @@ export function createChannelAccessPolicyReloader(
     } catch {
       if (!closed && changeGeneration === generation) {
         logger.warn("channel.access_policy.reload_failed", {
-          reason: "invalid_configuration"
+          reason: "invalid_configuration",
         });
       }
       return;
@@ -133,7 +133,7 @@ export function createChannelAccessPolicyReloader(
 
     if (!matchesNonReloadableConfiguration(initialConfig, loadedConfig)) {
       logger.warn("channel.access_policy.reload_rejected", {
-        reason: "restart_required"
+        reason: "restart_required",
       });
       return;
     }
@@ -143,7 +143,7 @@ export function createChannelAccessPolicyReloader(
       policies = policiesFromConfig(loadedConfig);
     } catch {
       logger.warn("channel.access_policy.reload_failed", {
-        reason: "invalid_configuration"
+        reason: "invalid_configuration",
       });
       return;
     }
@@ -157,7 +157,7 @@ export function createChannelAccessPolicyReloader(
     } catch {
       if (!closed) {
         logger.warn("channel.access_policy.reload_failed", {
-          reason: "application_failed"
+          reason: "application_failed",
         });
       }
     }
@@ -176,14 +176,14 @@ export function createChannelAccessPolicyReloader(
       watcher.close();
     } catch {
       logger.warn("channel.access_policy.watcher_close_failed", {
-        reason: "watcher_close_failed"
+        reason: "watcher_close_failed",
       });
     }
   }
 }
 
 function snapshotConfig(
-  config: ServerChannelRuntimeConfig
+  config: ServerChannelRuntimeConfig,
 ): ServerChannelRuntimeConfig {
   return {
     ...(config.mainAgent === undefined
@@ -191,7 +191,7 @@ function snapshotConfig(
       : { mainAgent: { ...config.mainAgent } }),
     channels: config.channels.map((channel) => ({
       ...channel,
-      inboundPolicy: copyChannelInboundAccessPolicy(channel.inboundPolicy)
+      inboundPolicy: copyChannelInboundAccessPolicy(channel.inboundPolicy),
     })),
     agents: config.agents.map((agent) => ({ ...agent })),
     sources: {
@@ -199,22 +199,24 @@ function snapshotConfig(
         ? {}
         : { mainAgent: config.sources.mainAgent }),
       channels: [...config.sources.channels],
-      agents: [...config.sources.agents]
-    }
+      agents: [...config.sources.agents],
+    },
   };
 }
 
 function policiesFromConfig(
-  config: ServerChannelRuntimeConfig
+  config: ServerChannelRuntimeConfig,
 ): ReadonlyMap<string, ChannelInboundAccessPolicy> {
   const policies = new Map<string, ChannelInboundAccessPolicy>();
   for (const channel of config.channels) {
     if (policies.has(channel.channelId)) {
-      throw new TypeError("Channel configuration contains duplicate channel IDs");
+      throw new TypeError(
+        "Channel configuration contains duplicate channel IDs",
+      );
     }
     policies.set(
       channel.channelId,
-      copyChannelInboundAccessPolicy(channel.inboundPolicy)
+      copyChannelInboundAccessPolicy(channel.inboundPolicy),
     );
   }
   return policies;
@@ -222,20 +224,22 @@ function policiesFromConfig(
 
 function matchesNonReloadableConfiguration(
   initialConfig: ServerChannelRuntimeConfig,
-  candidateConfig: ServerChannelRuntimeConfig
+  candidateConfig: ServerChannelRuntimeConfig,
 ): boolean {
   return valuesEqual(
     withoutInboundPolicies(initialConfig),
-    withoutInboundPolicies(candidateConfig)
+    withoutInboundPolicies(candidateConfig),
   );
 }
 
 function withoutInboundPolicies(config: ServerChannelRuntimeConfig): unknown {
   return {
     mainAgent: config.mainAgent,
-    channels: config.channels.map(({ inboundPolicy: _inboundPolicy, ...channel }) => channel),
+    channels: config.channels.map(
+      ({ inboundPolicy: _inboundPolicy, ...channel }) => channel,
+    ),
     agents: config.agents,
-    sources: config.sources
+    sources: config.sources,
   };
 }
 
@@ -243,7 +247,12 @@ function valuesEqual(left: unknown, right: unknown): boolean {
   if (Object.is(left, right)) {
     return true;
   }
-  if (left === null || right === null || typeof left !== "object" || typeof right !== "object") {
+  if (
+    left === null ||
+    right === null ||
+    typeof left !== "object" ||
+    typeof right !== "object"
+  ) {
     return false;
   }
   if (Array.isArray(left) || Array.isArray(right)) {
@@ -264,7 +273,7 @@ function valuesEqual(left: unknown, right: unknown): boolean {
     leftKeys.every(
       (key) =>
         Object.prototype.hasOwnProperty.call(rightRecord, key) &&
-        valuesEqual(leftRecord[key], rightRecord[key])
+        valuesEqual(leftRecord[key], rightRecord[key]),
     )
   );
 }

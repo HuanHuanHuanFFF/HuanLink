@@ -3,7 +3,7 @@ import { posix, win32 } from "node:path";
 
 import type {
   RetractChannelMessageCommandV1,
-  SendChannelMessageCommandV1
+  SendChannelMessageCommandV1,
 } from "./channel-adapter-v1.js";
 import type { ChannelConversationRouteV1 } from "./channel-instance-v1.js";
 import {
@@ -12,12 +12,12 @@ import {
   type ChannelOutboundAttachmentLinkPartV1,
   type ChannelOutboundAttachmentLocalPathPartV1,
   type ChannelOutboundMessagePartV1,
-  type InboundChannelMessageV1
+  type InboundChannelMessageV1,
 } from "./channel-message-v1.js";
 
 /** 在生成 session key 或调用 Adapter 前校验规范会话路由。 */
 export function assertValidChannelConversationRoute(
-  value: unknown
+  value: unknown,
 ): asserts value is ChannelConversationRouteV1 {
   if (typeof value !== "object" || value === null) {
     throw new Error("Channel route must be an object");
@@ -27,7 +27,7 @@ export function assertValidChannelConversationRoute(
   assertOnlyKeys(
     route,
     ["channelId", "conversationKind", "conversationId", "threadId"],
-    "Channel route"
+    "Channel route",
   );
   requireNonEmptyString(route.channelId, "Channel route channelId");
   if (
@@ -36,40 +36,30 @@ export function assertValidChannelConversationRoute(
     route.conversationKind !== "channel"
   ) {
     throw new Error(
-      "Channel route conversationKind must be direct, group, or channel"
+      "Channel route conversationKind must be direct, group, or channel",
     );
   }
-  requireNonEmptyString(
-    route.conversationId,
-    "Channel route conversationId"
-  );
+  requireNonEmptyString(route.conversationId, "Channel route conversationId");
   validateOptionalString(route.threadId, "Channel route threadId");
 }
 
 /** 在调用平台前拒绝缺失或非法的撤回消息 ID。 */
 export function assertValidRetractChannelMessageCommand(
-  command: RetractChannelMessageCommandV1
+  command: RetractChannelMessageCommandV1,
 ): void {
   if (typeof command !== "object" || command === null) {
     throw new Error("Channel retract command must be an object");
   }
 
   const rawCommand = command as unknown as Record<string, unknown>;
-  assertOnlyKeys(
-    rawCommand,
-    ["route", "messageId"],
-    "Channel retract command"
-  );
+  assertOnlyKeys(rawCommand, ["route", "messageId"], "Channel retract command");
   assertValidChannelConversationRoute(rawCommand.route);
-  requireNonEmptyString(
-    rawCommand.messageId,
-    "Channel retract messageId"
-  );
+  requireNonEmptyString(rawCommand.messageId, "Channel retract messageId");
 }
 
 /** 在调用 Adapter 前校验发送命令、目标路由和消息内容。 */
 export function assertValidSendChannelMessageCommand(
-  command: SendChannelMessageCommandV1
+  command: SendChannelMessageCommandV1,
 ): void {
   if (typeof command !== "object" || command === null) {
     throw new Error("Channel send command must be an object");
@@ -79,21 +69,21 @@ export function assertValidSendChannelMessageCommand(
   assertOnlyKeys(
     rawCommand,
     ["route", "parts", "replyToMessageId"],
-    "Channel send command"
+    "Channel send command",
   );
   assertValidChannelConversationRoute(rawCommand.route);
   assertValidOutboundChannelMessageParts(
-    rawCommand.parts as readonly ChannelOutboundMessagePartV1[]
+    rawCommand.parts as readonly ChannelOutboundMessagePartV1[],
   );
   validateOptionalString(
     rawCommand.replyToMessageId,
-    "Channel send replyToMessageId"
+    "Channel send replyToMessageId",
   );
 }
 
 /** 在入站消息离开 Adapter 边界前校验字符串边界和基础元数据。 */
 export function assertValidInboundChannelMessage(
-  message: InboundChannelMessageV1
+  message: InboundChannelMessageV1,
 ): void {
   if (typeof message !== "object" || message === null) {
     throw new Error("Inbound Channel message must be an object");
@@ -111,34 +101,31 @@ export function assertValidInboundChannelMessage(
       "contentFormat",
       "contentOmitted",
       "replyToMessageId",
-      "trigger"
+      "trigger",
     ],
-    "Inbound Channel message"
+    "Inbound Channel message",
   );
   requireNonEmptyString(rawMessage.messageId, "Inbound Channel messageId");
   assertValidChannelConversationRoute(rawMessage.route);
   requireUtcIsoTimestamp(rawMessage.receivedAt, "Inbound Channel receivedAt");
   requireNonEmptyString(
     rawMessage.contentFormat,
-    "Inbound Channel contentFormat"
+    "Inbound Channel contentFormat",
   );
 
   validateSender(rawMessage.sender);
   validateOptionalString(
     rawMessage.replyToMessageId,
-    "Inbound Channel replyToMessageId"
+    "Inbound Channel replyToMessageId",
   );
   validateTrigger(rawMessage.trigger);
 
   if (rawMessage.contentOmitted === undefined) {
-    requireNonEmptyContentString(
-      rawMessage.content,
-      "Inbound Channel content"
-    );
+    requireNonEmptyContentString(rawMessage.content, "Inbound Channel content");
     const sizeBytes = Buffer.byteLength(rawMessage.content, "utf8");
     if (sizeBytes > CHANNEL_INBOUND_CONTENT_MAX_BYTES_V1) {
       throw new Error(
-        `Inbound Channel content must not exceed ${CHANNEL_INBOUND_CONTENT_MAX_BYTES_V1} UTF-8 bytes`
+        `Inbound Channel content must not exceed ${CHANNEL_INBOUND_CONTENT_MAX_BYTES_V1} UTF-8 bytes`,
       );
     }
     return;
@@ -152,7 +139,7 @@ export function assertValidInboundChannelMessage(
  * 该函数只检查结构、URL 和路径边界，不发起网络或文件访问。
  */
 export function assertValidOutboundChannelMessageParts(
-  parts: readonly ChannelOutboundMessagePartV1[]
+  parts: readonly ChannelOutboundMessagePartV1[],
 ): void {
   if (!Array.isArray(parts) || parts.length === 0) {
     throw new Error("Outbound Channel message parts must be a non-empty array");
@@ -168,7 +155,7 @@ export function assertValidOutboundChannelMessageParts(
         assertOnlyKeys(
           part as unknown as Record<string, unknown>,
           ["type", "text"],
-          "Outbound Channel text part"
+          "Outbound Channel text part",
         );
         requireNonEmptyString(part.text, "Outbound Channel text part text");
         break;
@@ -176,15 +163,15 @@ export function assertValidOutboundChannelMessageParts(
         assertOnlyKeys(
           part as unknown as Record<string, unknown>,
           ["type", "targetId", "displayName"],
-          "Outbound Channel mention part"
+          "Outbound Channel mention part",
         );
         requireNonEmptyString(
           part.targetId,
-          "Outbound Channel mention targetId"
+          "Outbound Channel mention targetId",
         );
         validateOptionalString(
           part.displayName,
-          "Outbound Channel mention displayName"
+          "Outbound Channel mention displayName",
         );
         break;
       case "attachmentLink":
@@ -208,13 +195,13 @@ function validateSender(value: unknown): void {
   assertOnlyKeys(
     sender,
     ["id", "username", "displayName", "isSelf"],
-    "Inbound Channel sender"
+    "Inbound Channel sender",
   );
   requireNonEmptyString(sender.id, "Inbound Channel sender id");
   requireNonEmptyString(sender.username, "Inbound Channel sender username");
   validateOptionalString(
     sender.displayName,
-    "Inbound Channel sender displayName"
+    "Inbound Channel sender displayName",
   );
   if (typeof sender.isSelf !== "boolean") {
     throw new Error("Inbound Channel sender isSelf must be a boolean");
@@ -242,14 +229,16 @@ function validateOmittedContent(content: unknown, value: unknown): void {
     typeof value !== "object" ||
     value === null
   ) {
-    throw new Error("Inbound Channel omitted content must use the fixed placeholder");
+    throw new Error(
+      "Inbound Channel omitted content must use the fixed placeholder",
+    );
   }
 
   const omitted = value as Record<string, unknown>;
   assertOnlyKeys(
     omitted,
     ["reason", "originalSizeBytes"],
-    "Inbound Channel omitted content"
+    "Inbound Channel omitted content",
   );
   if (omitted.reason !== "too_large") {
     throw new Error("Inbound Channel omitted content reason must be too_large");
@@ -260,19 +249,19 @@ function validateOmittedContent(content: unknown, value: unknown): void {
       CHANNEL_INBOUND_CONTENT_MAX_BYTES_V1
   ) {
     throw new Error(
-      `Inbound Channel omitted content originalSizeBytes must exceed ${CHANNEL_INBOUND_CONTENT_MAX_BYTES_V1}`
+      `Inbound Channel omitted content originalSizeBytes must exceed ${CHANNEL_INBOUND_CONTENT_MAX_BYTES_V1}`,
     );
   }
 }
 
 function validateAttachmentLink(
-  part: ChannelOutboundAttachmentLinkPartV1
+  part: ChannelOutboundAttachmentLinkPartV1,
 ): void {
   const rawPart = part as unknown as Record<string, unknown>;
   assertOnlyKeys(
     rawPart,
     ["type", "kind", "url", "name", "mimeType"],
-    "Outbound Channel attachment link"
+    "Outbound Channel attachment link",
   );
 
   if (!["image", "audio", "video", "file"].includes(part.kind)) {
@@ -298,13 +287,13 @@ function validateAttachmentLink(
 }
 
 function validateAttachmentLocalPath(
-  part: ChannelOutboundAttachmentLocalPathPartV1
+  part: ChannelOutboundAttachmentLocalPathPartV1,
 ): void {
   const rawPart = part as unknown as Record<string, unknown>;
   assertOnlyKeys(
     rawPart,
     ["type", "kind", "path", "name", "mimeType"],
-    "Outbound Channel local attachment"
+    "Outbound Channel local attachment",
   );
 
   if (!["image", "audio", "video", "file"].includes(part.kind)) {
@@ -322,7 +311,7 @@ function validateAttachmentLocalPath(
 function assertOnlyKeys(
   value: Record<string, unknown>,
   allowedKeys: readonly string[],
-  label: string
+  label: string,
 ): void {
   const allowed = new Set(allowedKeys);
   for (const key of Object.keys(value)) {
@@ -340,7 +329,7 @@ function validateOptionalString(value: unknown, label: string): void {
 
 function requireUtcIsoTimestamp(
   value: unknown,
-  label: string
+  label: string,
 ): asserts value is string {
   if (typeof value !== "string") {
     throw new Error(`${label} must be a UTC ISO-8601 timestamp`);
@@ -348,7 +337,7 @@ function requireUtcIsoTimestamp(
 
   const match =
     /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,3})?Z$/.exec(
-      value
+      value,
     );
   if (match === null) {
     throw new Error(`${label} must be a UTC ISO-8601 timestamp`);
@@ -370,7 +359,7 @@ function requireUtcIsoTimestamp(
 
 function requireNonEmptyContentString(
   value: unknown,
-  label: string
+  label: string,
 ): asserts value is string {
   if (typeof value !== "string" || value.length === 0) {
     throw new Error(`${label} must be a non-empty string`);
@@ -379,7 +368,7 @@ function requireNonEmptyContentString(
 
 function requireNonEmptyString(
   value: unknown,
-  label: string
+  label: string,
 ): asserts value is string {
   if (typeof value !== "string" || value.trim().length === 0) {
     throw new Error(`${label} must be a non-empty string`);

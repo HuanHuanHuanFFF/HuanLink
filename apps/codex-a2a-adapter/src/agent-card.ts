@@ -1,7 +1,7 @@
 import {
   A2A_PROTOCOL_VERSION,
   AgentCard,
-  type AgentCard as AgentCardValue
+  type AgentCard as AgentCardValue,
 } from "@a2a-js/sdk";
 
 export function createAgentCard(origin: string): AgentCardValue {
@@ -14,12 +14,12 @@ export function createAgentCard(origin: string): AgentCardValue {
       {
         url: `${origin}/a2a/jsonrpc`,
         protocolBinding: "JSONRPC",
-        protocolVersion: A2A_PROTOCOL_VERSION
-      }
+        protocolVersion: A2A_PROTOCOL_VERSION,
+      },
     ],
     capabilities: {
       streaming: true,
-      pushNotifications: false
+      pushNotifications: false,
     },
     defaultInputModes: ["text/plain"],
     defaultOutputModes: ["text/plain"],
@@ -32,8 +32,8 @@ export function createAgentCard(origin: string): AgentCardValue {
         tags: ["a2a", "codex", "coding"],
         examples: ["Add a focused validation rule and run its tests"],
         inputModes: ["text/plain"],
-        outputModes: ["text/plain"]
-      }
-    ]
+        outputModes: ["text/plain"],
+      },
+    ],
   });
 }

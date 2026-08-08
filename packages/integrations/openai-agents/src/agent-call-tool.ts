@@ -1,7 +1,7 @@
 import {
   TASK_EXECUTION_MODES,
   type AgentCallInvoker,
-  type RuntimeLogger
+  type RuntimeLogger,
 } from "@huanlink/core";
 import { tool } from "@openai/agents";
 import { z } from "zod";
@@ -9,7 +9,7 @@ import { z } from "zod";
 import { combineAbortSignals } from "./abort-signals.js";
 import {
   bestEffortRuntimeLogger,
-  safeRuntimeErrorType
+  safeRuntimeErrorType,
 } from "./best-effort-runtime-logger.js";
 import type { OpenAiAgentsRunContext } from "./openai-agents-runtime.js";
 
@@ -25,7 +25,9 @@ const parameters = z.object({
   executionMode: z
     .enum(TASK_EXECUTION_MODES)
     .optional()
-    .describe("Use async unless the user explicitly asks to block until completion.")
+    .describe(
+      "Use async unless the user explicitly asks to block until completion.",
+    ),
 });
 
 export type CreateCodexAgentCallToolOptions = {
@@ -35,7 +37,7 @@ export type CreateCodexAgentCallToolOptions = {
 };
 
 export function createCodexAgentCallTool(
-  options: CreateCodexAgentCallToolOptions
+  options: CreateCodexAgentCallToolOptions,
 ) {
   const logger = bestEffortRuntimeLogger(options.logger);
   const skillId = options.skillId ?? "codex-code-task";
@@ -48,11 +50,7 @@ export function createCodexAgentCallTool(
     isEnabled: ({ runContext }) =>
       runContext.context.trigger === "user" ||
       runContext.context.trigger === "agent_call_terminal",
-    execute: async (
-      { task, executionMode = "async" },
-      runContext,
-      details
-    ) => {
+    execute: async ({ task, executionMode = "async" }, runContext, details) => {
       if (!runContext) {
         throw new Error("Codex AgentCall tool requires a HuanLink RunContext");
       }
@@ -65,21 +63,21 @@ export function createCodexAgentCallTool(
       const toolLogger = logger.child({
         runId: runContext.context.runId,
         sessionId: runContext.context.sessionId,
-        toolName: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME
+        toolName: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
       });
       const inputFields = {
         executionMode: effectiveExecutionMode,
-        inputLength: task.length
+        inputLength: task.length,
       };
       toolLogger.info("main_agent.tool.started", inputFields);
       toolLogger.debug("main_agent.tool.started", {
         ...inputFields,
-        task
+        task,
       });
 
       const signal = combineAbortSignals(
         runContext.context.signal,
-        details?.signal
+        details?.signal,
       );
 
       try {
@@ -90,23 +88,23 @@ export function createCodexAgentCallTool(
           skillId,
           input: task,
           executionMode: effectiveExecutionMode,
-          ...(signal === undefined ? {} : { signal })
+          ...(signal === undefined ? {} : { signal }),
         });
         toolLogger.info("main_agent.tool.completed", {
           status: result.status,
           executionMode: result.executionMode,
           agentCallId: result.agentCallId,
           a2aTaskId: result.taskId,
-          state: result.state
+          state: result.state,
         });
         return JSON.stringify(result);
       } catch (error) {
         toolLogger.error("main_agent.tool.failed", {
           ...inputFields,
-          errorType: safeRuntimeErrorType(error)
+          errorType: safeRuntimeErrorType(error),
         });
         throw error;
       }
-    }
+    },
   });
 }

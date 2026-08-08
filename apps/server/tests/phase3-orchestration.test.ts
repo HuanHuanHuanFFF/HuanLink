@@ -7,13 +7,13 @@ import {
   type ModelProvider,
   type ModelRequest,
   type ModelResponse,
-  type StreamEvent
+  type StreamEvent,
 } from "@openai/agents";
 import {
   CONTINUE_TASK_TOOL_NAME,
   GET_TASK_STATUS_TOOL_NAME,
   SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
-  type OpenAiAgentsRunner
+  type OpenAiAgentsRunner,
 } from "@huanlink/integration-openai-agents";
 import type {
   AgentCallBackgroundErrorListener,
@@ -21,21 +21,21 @@ import type {
   AgentCallReceipt,
   AgentCallTaskState,
   AgentCallTransport,
-  AgentCallTransportContinueRequest
+  AgentCallTransportContinueRequest,
 } from "@huanlink/core";
 
 import {
   startAdapterServer,
-  type RunningAdapterServer
+  type RunningAdapterServer,
 } from "../../codex-a2a-adapter/src/server.js";
 import {
   CONTROLLED_RESPONSE,
-  ControlledTaskExecutor
+  ControlledTaskExecutor,
 } from "../../codex-a2a-adapter/tests/support/controlled-task-executor.js";
 import {
   createPhase3HuanLinkRuntime,
   type Phase3HuanLinkRuntime,
-  type Phase3ReentryResult
+  type Phase3ReentryResult,
 } from "../src/index.js";
 import { RecordingRuntimeLogger } from "./support/recording-runtime-logger.js";
 
@@ -64,21 +64,21 @@ function assistantMessage(text: string): ModelResponse["output"][number] {
       {
         type: "output_text",
         text,
-        providerData: { annotations: [] }
-      }
-    ]
+        providerData: { annotations: [] },
+      },
+    ],
   };
 }
 
 function agentCallInvocationResult(
-  request: ModelRequest | undefined
+  request: ModelRequest | undefined,
 ): AgentCallInvocationResult {
   if (request === undefined || typeof request.input === "string") {
     throw new Error("Expected an AgentCall tool continuation request");
   }
 
   const resultItem = request.input.find(
-    (item) => item.type === "function_call_result"
+    (item) => item.type === "function_call_result",
   );
   if (
     resultItem === undefined ||
@@ -101,10 +101,14 @@ function agentCallInvocationResult(
   return JSON.parse(text) as AgentCallInvocationResult;
 }
 
-function acceptedAgentCall(request: ModelRequest | undefined): AgentCallReceipt {
+function acceptedAgentCall(
+  request: ModelRequest | undefined,
+): AgentCallReceipt {
   const result = agentCallInvocationResult(request);
   if (result.status !== "accepted") {
-    throw new Error(`Expected an accepted AgentCall, received ${result.status}`);
+    throw new Error(
+      `Expected an accepted AgentCall, received ${result.status}`,
+    );
   }
   return result;
 }
@@ -115,7 +119,7 @@ function taskStatusResult(request: ModelRequest | undefined): unknown {
   }
 
   const resultItem = request.input.find(
-    (item) => item.type === "function_call_result"
+    (item) => item.type === "function_call_result",
   );
   if (
     resultItem === undefined ||
@@ -141,7 +145,8 @@ class DelegateThenSummarizeModel implements Model {
   readonly requests: ModelRequest[] = [];
 
   constructor(
-    private readonly beforeSummary: () => Promise<void> | void = () => undefined
+    private readonly beforeSummary: () => Promise<void> | void = () =>
+      undefined,
   ) {}
 
   async getResponse(request: ModelRequest): Promise<ModelResponse> {
@@ -155,29 +160,29 @@ class DelegateThenSummarizeModel implements Model {
             callId: "phase3-tool-call",
             name: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
             arguments: JSON.stringify({
-              task: "make a controlled Phase 3 code change"
-            })
-          }
-        ]
+              task: "make a controlled Phase 3 code change",
+            }),
+          },
+        ],
       };
     }
 
     if (this.requests.length === 2) {
       return {
         usage: new Usage(),
-        output: [assistantMessage("Codex task was accepted.")]
+        output: [assistantMessage("Codex task was accepted.")],
       };
     }
 
     await this.beforeSummary();
     return {
       usage: new Usage(),
-      output: [assistantMessage("Codex task finished and is ready to report.")]
+      output: [assistantMessage("Codex task finished and is ready to report.")],
     };
   }
 
   async *getStreamedResponse(
-    _request: ModelRequest
+    _request: ModelRequest,
   ): AsyncIterable<StreamEvent> {
     throw new Error("Streaming is not used in this test");
   }
@@ -198,21 +203,21 @@ class BlockingThenReplyModel implements Model {
             name: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
             arguments: JSON.stringify({
               task: "make a controlled Phase 3 code change",
-              executionMode: "blocking"
-            })
-          }
-        ]
+              executionMode: "blocking",
+            }),
+          },
+        ],
       };
     }
 
     return {
       usage: new Usage(),
-      output: [assistantMessage("Codex task completed in the current turn.")]
+      output: [assistantMessage("Codex task completed in the current turn.")],
     };
   }
 
   async *getStreamedResponse(
-    _request: ModelRequest
+    _request: ModelRequest,
   ): AsyncIterable<StreamEvent> {
     throw new Error("Streaming is not used in this test");
   }
@@ -231,15 +236,15 @@ class SubmitThenQueryStatusModel implements Model {
             type: "function_call",
             callId: "phase3-submit-before-status",
             name: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
-            arguments: JSON.stringify({ task: "start one status-test task" })
-          }
-        ]
+            arguments: JSON.stringify({ task: "start one status-test task" }),
+          },
+        ],
       };
     }
     if (this.requests.length === 2) {
       return {
         usage: new Usage(),
-        output: [assistantMessage("Task accepted for later status lookup.")]
+        output: [assistantMessage("Task accepted for later status lookup.")],
       };
     }
     if (this.requests.length === 3) {
@@ -251,20 +256,20 @@ class SubmitThenQueryStatusModel implements Model {
             type: "function_call",
             callId: "phase3-status-query",
             name: GET_TASK_STATUS_TOOL_NAME,
-            arguments: JSON.stringify({ taskId: accepted.agentCallId })
-          }
-        ]
+            arguments: JSON.stringify({ taskId: accepted.agentCallId }),
+          },
+        ],
       };
     }
 
     return {
       usage: new Usage(),
-      output: [assistantMessage("The existing task is still working.")]
+      output: [assistantMessage("The existing task is still working.")],
     };
   }
 
   async *getStreamedResponse(
-    _request: ModelRequest
+    _request: ModelRequest,
   ): AsyncIterable<StreamEvent> {
     throw new Error("Streaming is not used in this test");
   }
@@ -283,15 +288,15 @@ class DelegateContinueThenSummarizeModel implements Model {
             type: "function_call",
             callId: "phase3-submit-before-input",
             name: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
-            arguments: JSON.stringify({ task: "start one resumable task" })
-          }
-        ]
+            arguments: JSON.stringify({ task: "start one resumable task" }),
+          },
+        ],
       };
     }
     if (this.requests.length === 2) {
       return {
         usage: new Usage(),
-        output: [assistantMessage("Task accepted before input is required.")]
+        output: [assistantMessage("Task accepted before input is required.")],
       };
     }
     if (this.requests.length === 3) {
@@ -305,26 +310,26 @@ class DelegateContinueThenSummarizeModel implements Model {
             name: CONTINUE_TASK_TOOL_NAME,
             arguments: JSON.stringify({
               taskId: accepted.agentCallId,
-              answers: [{ questionId: "approach", answers: ["Safe"] }]
-            })
-          }
-        ]
+              answers: [{ questionId: "approach", answers: ["Safe"] }],
+            }),
+          },
+        ],
       };
     }
     if (this.requests.length === 4) {
       return {
         usage: new Usage(),
-        output: [assistantMessage("The original paused task was continued.")]
+        output: [assistantMessage("The original paused task was continued.")],
       };
     }
     return {
       usage: new Usage(),
-      output: [assistantMessage("The continued task completed.")]
+      output: [assistantMessage("The continued task completed.")],
     };
   }
 
   async *getStreamedResponse(
-    _request: ModelRequest
+    _request: ModelRequest,
   ): AsyncIterable<StreamEvent> {
     throw new Error("Streaming is not used in this test");
   }
@@ -343,15 +348,15 @@ class DelegateFollowUpAfterTerminalModel implements Model {
             type: "function_call",
             callId: "phase3-sequence-first",
             name: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
-            arguments: JSON.stringify({ task: "run the first sequence step" })
-          }
-        ]
+            arguments: JSON.stringify({ task: "run the first sequence step" }),
+          },
+        ],
       };
     }
     if (this.requests.length === 2) {
       return {
         usage: new Usage(),
-        output: [assistantMessage("The first sequence step was accepted.")]
+        output: [assistantMessage("The first sequence step was accepted.")],
       };
     }
     if (this.requests.length === 3) {
@@ -363,10 +368,10 @@ class DelegateFollowUpAfterTerminalModel implements Model {
             callId: "phase3-sequence-follow-up",
             name: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
             arguments: JSON.stringify({
-              task: "run the pre-authorized second sequence step"
-            })
-          }
-        ]
+              task: "run the pre-authorized second sequence step",
+            }),
+          },
+        ],
       };
     }
     if (this.requests.length === 4) {
@@ -374,20 +379,20 @@ class DelegateFollowUpAfterTerminalModel implements Model {
         usage: new Usage(),
         output: [
           assistantMessage(
-            "The first step completed and the second step was accepted."
-          )
-        ]
+            "The first step completed and the second step was accepted.",
+          ),
+        ],
       };
     }
 
     return {
       usage: new Usage(),
-      output: [assistantMessage("The second sequence step completed.")]
+      output: [assistantMessage("The second sequence step completed.")],
     };
   }
 
   async *getStreamedResponse(
-    _request: ModelRequest
+    _request: ModelRequest,
   ): AsyncIterable<StreamEvent> {
     throw new Error("Streaming is not used in this test");
   }
@@ -405,20 +410,20 @@ function terminalTransport(state: AgentCallTaskState): AgentCallTransport {
   return {
     discoverCapability: async (skillId) => ({
       id: skillId,
-      name: "Codex code task"
+      name: "Codex code task",
     }),
     submitTask: async () => ({
       taskId: `task-${state}`,
       contextId: "session-phase3",
       state: "submitted",
-      artifacts: []
+      artifacts: [],
     }),
     async *watchTask() {
       yield {
         taskId: `task-${state}`,
         contextId: "session-phase3",
         state,
-        artifacts: [{ id: `artifact-${state}`, text: `${state} result` }]
+        artifacts: [{ id: `artifact-${state}`, text: `${state} result` }],
       };
     },
     continueTask: rejectUnexpectedContinuation,
@@ -426,8 +431,8 @@ function terminalTransport(state: AgentCallTaskState): AgentCallTransport {
       taskId,
       contextId: "session-phase3",
       state: "canceled",
-      artifacts: []
-    })
+      artifacts: [],
+    }),
   };
 }
 
@@ -441,14 +446,14 @@ function sequentialTerminalTransport() {
         taskId: `a2a-task-sequence-${submissionCount}`,
         contextId: request.contextId,
         state: "working",
-        artifacts: []
+        artifacts: [],
       };
-    }
+    },
   );
   const transport: AgentCallTransport = {
     discoverCapability: async (skillId) => ({
       id: skillId,
-      name: "Codex code task"
+      name: "Codex code task",
     }),
     submitTask,
     async *watchTask(taskId) {
@@ -461,24 +466,22 @@ function sequentialTerminalTransport() {
         taskId,
         contextId: "session-phase3-sequence",
         state: "working",
-        artifacts: []
+        artifacts: [],
       };
       await completion.promise;
       yield {
         taskId,
         contextId: "session-phase3-sequence",
         state: "completed",
-        artifacts: [
-          { id: `artifact-${taskId}`, text: `${taskId} completed` }
-        ]
+        artifacts: [{ id: `artifact-${taskId}`, text: `${taskId} completed` }],
       };
     },
     continueTask: rejectUnexpectedContinuation,
     cancelTask: async (taskId) => ({
       taskId,
       state: "canceled",
-      artifacts: []
-    })
+      artifacts: [],
+    }),
   };
 
   return { transport, submitTask, completions };
@@ -491,13 +494,13 @@ function pendingTransport() {
       contextId: request.contextId,
       state: "working",
       artifacts: [],
-      statusMessage: "Codex is working"
-    })
+      statusMessage: "Codex is working",
+    }),
   );
   const transport: AgentCallTransport = {
     discoverCapability: async (skillId) => ({
       id: skillId,
-      name: "Codex code task"
+      name: "Codex code task",
     }),
     submitTask,
     async *watchTask(_taskId, { signal }) {
@@ -507,8 +510,8 @@ function pendingTransport() {
     cancelTask: async (taskId) => ({
       taskId,
       state: "canceled",
-      artifacts: []
-    })
+      artifacts: [],
+    }),
   };
   return { transport, submitTask };
 }
@@ -519,13 +522,13 @@ function pausedTransport() {
       taskId: "a2a-task-input-required",
       contextId: request.contextId,
       state: "working",
-      artifacts: []
-    })
+      artifacts: [],
+    }),
   );
   const transport: AgentCallTransport = {
     discoverCapability: async (skillId) => ({
       id: skillId,
-      name: "Codex code task"
+      name: "Codex code task",
     }),
     submitTask,
     async *watchTask(taskId) {
@@ -543,28 +546,28 @@ function pausedTransport() {
             options: [
               {
                 label: "Safe",
-                description: "Preserve the existing public contract."
-              }
+                description: "Preserve the existing public contract.",
+              },
             ],
-            question: "Which approach should Codex use?"
-          }
+            question: "Which approach should Codex use?",
+          },
         ],
         artifacts: [
           {
             id: "artifact-before-choice",
             name: "Current analysis",
             description: "What Codex learned before pausing.",
-            text: "The safer approach keeps compatibility."
-          }
-        ]
+            text: "The safer approach keeps compatibility.",
+          },
+        ],
       };
     },
     continueTask: rejectUnexpectedContinuation,
     cancelTask: async (taskId) => ({
       taskId,
       state: "canceled",
-      artifacts: []
-    })
+      artifacts: [],
+    }),
   };
   return { transport, submitTask };
 }
@@ -576,22 +579,22 @@ function resumablePausedTransport() {
       taskId,
       contextId: request.contextId,
       state: "working",
-      artifacts: []
-    })
+      artifacts: [],
+    }),
   );
   const continueTask = vi.fn<AgentCallTransport["continueTask"]>(
     async (request: AgentCallTransportContinueRequest) => ({
       taskId: request.taskId,
       contextId: request.contextId,
       state: "working",
-      artifacts: []
-    })
+      artifacts: [],
+    }),
   );
   let watchCount = 0;
   const transport: AgentCallTransport = {
     discoverCapability: async (skillId) => ({
       id: skillId,
-      name: "Codex code task"
+      name: "Codex code task",
     }),
     submitTask,
     async *watchTask(currentTaskId) {
@@ -611,13 +614,13 @@ function resumablePausedTransport() {
               options: [
                 {
                   label: "Safe",
-                  description: "Preserve the current contract."
-                }
+                  description: "Preserve the current contract.",
+                },
               ],
-              question: "Which approach should Codex use?"
-            }
+              question: "Which approach should Codex use?",
+            },
           ],
-          artifacts: []
+          artifacts: [],
         };
         return;
       }
@@ -629,17 +632,17 @@ function resumablePausedTransport() {
         artifacts: [
           {
             id: "artifact-resumed",
-            text: "The safe approach was completed."
-          }
-        ]
+            text: "The safe approach was completed.",
+          },
+        ],
       };
     },
     continueTask,
     cancelTask: async (currentTaskId) => ({
       taskId: currentTaskId,
       state: "canceled",
-      artifacts: []
-    })
+      artifacts: [],
+    }),
   };
   return { transport, submitTask, continueTask, taskId };
 }
@@ -667,9 +670,9 @@ describe("Phase 3 HuanLink orchestration", () => {
       codexA2aOrigin: "http://127.0.0.1:1",
       transport: terminalTransport("completed"),
       runner: {
-        run: async () => ({ finalOutput: secretOutput })
+        run: async () => ({ finalOutput: secretOutput }),
       },
-      logger
+      logger,
     });
     runtimes.push(runtime);
 
@@ -677,17 +680,17 @@ describe("Phase 3 HuanLink orchestration", () => {
       runtime.runMainAgent({
         runId: "run-safe-log",
         sessionId: "session-safe-log",
-        input: secretInput
-      })
+        input: secretInput,
+      }),
     ).resolves.toEqual({ output: secretOutput });
 
     expect(JSON.stringify(logger.entries)).not.toContain(secretInput);
     expect(JSON.stringify(logger.entries)).not.toContain(secretOutput);
     expect(logger.find("main_agent.run.input")?.fields).toMatchObject({
-      inputChars: secretInput.length
+      inputChars: secretInput.length,
     });
     expect(logger.find("main_agent.run.output")?.fields).toMatchObject({
-      outputChars: secretOutput.length
+      outputChars: secretOutput.length,
     });
   });
 
@@ -698,25 +701,25 @@ describe("Phase 3 HuanLink orchestration", () => {
     const latestContext = [
       "Alice: please update the parser",
       "HuanLink: Codex task accepted.",
-      "Bob: preserve compatibility"
+      "Bob: preserve compatibility",
     ].join("\n");
     const runtime = createPhase3HuanLinkRuntime({
       codexA2aOrigin: "http://127.0.0.1:1",
       transport,
       runner: new Runner({
         modelProvider: new SingleModelProvider(model),
-        tracingDisabled: true
+        tracingDisabled: true,
       }),
       createRunId: () => "run-phase3-input-required",
       getLatestContext: () => latestContext,
-      onReentry
+      onReentry,
     });
     runtimes.push(runtime);
 
     await runtime.runMainAgent({
       runId: "run-phase3-input-required-initial",
       sessionId: "session-phase3-input-required",
-      input: "delegate a task that needs one material choice"
+      input: "delegate a task that needs one material choice",
     });
     const accepted = acceptedAgentCall(model.requests[1]);
     await runtime.agentCalls.waitForIdle();
@@ -733,7 +736,7 @@ describe("Phase 3 HuanLink orchestration", () => {
         agentCallId: accepted.agentCallId,
         taskId: accepted.taskId,
         contextId: "a2a-context-input-required",
-        state: "input-required"
+        state: "input-required",
       },
       paused: {
         taskId: accepted.agentCallId,
@@ -747,19 +750,19 @@ describe("Phase 3 HuanLink orchestration", () => {
             options: [
               {
                 label: "Safe",
-                description: "Preserve the existing public contract."
-              }
-            ]
-          }
+                description: "Preserve the existing public contract.",
+              },
+            ],
+          },
         ],
         artifacts: [
           {
             id: "artifact-before-choice",
-            text: "The safer approach keeps compatibility."
-          }
+            text: "The safer approach keeps compatibility.",
+          },
         ],
-        latestContext
-      }
+        latestContext,
+      },
     });
     expect(result.input).toContain('"questions"');
     expect(result.input).toContain('"options"');
@@ -769,22 +772,20 @@ describe("Phase 3 HuanLink orchestration", () => {
     expect(model.requests[0]?.tools.map(({ name }) => name)).toEqual([
       SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
       GET_TASK_STATUS_TOOL_NAME,
-      CONTINUE_TASK_TOOL_NAME
+      CONTINUE_TASK_TOOL_NAME,
     ]);
     expect(model.requests[2]?.tools.map(({ name }) => name)).toEqual([
       GET_TASK_STATUS_TOOL_NAME,
-      CONTINUE_TASK_TOOL_NAME
+      CONTINUE_TASK_TOOL_NAME,
     ]);
     expect(model.requests[2]?.systemInstructions).toContain(
-      "continue_task for this same task"
+      "continue_task for this same task",
     );
-    expect(model.requests[2]?.systemInstructions).toContain(
-      "ask the QQ user"
-    );
+    expect(model.requests[2]?.systemInstructions).toContain("ask the QQ user");
     expect(model.requests[2]?.systemInstructions).toContain("/huanlink");
     expect(model.requests[2]?.systemInstructions).toContain("@HuanLink");
     expect(model.requests[2]?.systemInstructions).toContain(
-      "never submit a replacement AgentCall"
+      "never submit a replacement AgentCall",
     );
   });
 
@@ -796,14 +797,14 @@ describe("Phase 3 HuanLink orchestration", () => {
     const bothReentries = deferred();
     const reentryRunIds = [
       "run-phase3-auto-continue",
-      "run-phase3-auto-continue-terminal"
+      "run-phase3-auto-continue-terminal",
     ];
     const runtime = createPhase3HuanLinkRuntime({
       codexA2aOrigin: "http://127.0.0.1:1",
       transport,
       runner: new Runner({
         modelProvider: new SingleModelProvider(model),
-        tracingDisabled: true
+        tracingDisabled: true,
       }),
       createRunId: () => reentryRunIds.shift() ?? "run-phase3-extra",
       getLatestContext: () =>
@@ -813,14 +814,14 @@ describe("Phase 3 HuanLink orchestration", () => {
         if (reentries.length === 2) {
           bothReentries.resolve();
         }
-      }
+      },
     });
     runtimes.push(runtime);
 
     await runtime.runMainAgent({
       runId: "run-phase3-auto-continue-initial",
       sessionId: "session-phase3-auto-continue",
-      input: "delegate a task whose answer is already authorized"
+      input: "delegate a task whose answer is already authorized",
     });
     const accepted = acceptedAgentCall(model.requests[1]);
     await bothReentries.promise;
@@ -832,26 +833,27 @@ describe("Phase 3 HuanLink orchestration", () => {
       expect.objectContaining({
         taskId,
         contextId: "a2a-context-resumable",
-        answers: { approach: ["Safe"] }
-      })
+        answers: { approach: ["Safe"] },
+      }),
     );
     expect(reentries.map(({ reason }) => reason)).toEqual([
       "input-required",
-      "terminal"
+      "terminal",
     ]);
     expect(
       reentries.map(({ agentCall }) => ({
         taskId: agentCall.agentCallId,
-        a2aTaskId: agentCall.taskId
-      }))
+        a2aTaskId: agentCall.taskId,
+      })),
     ).toEqual([
       { taskId: accepted.agentCallId, a2aTaskId: accepted.taskId },
-      { taskId: accepted.agentCallId, a2aTaskId: accepted.taskId }
+      { taskId: accepted.agentCallId, a2aTaskId: accepted.taskId },
     ]);
-    expect(runtime.agentCalls.listByRunId("run-phase3-auto-continue-initial"))
-      .toHaveLength(1);
+    expect(
+      runtime.agentCalls.listByRunId("run-phase3-auto-continue-initial"),
+    ).toHaveLength(1);
     expect(runtime.agentCalls.listByRunId("run-phase3-auto-continue")).toEqual(
-      []
+      [],
     );
     expect(model.requests).toHaveLength(5);
   });
@@ -865,16 +867,16 @@ describe("Phase 3 HuanLink orchestration", () => {
       transport,
       runner: new Runner({
         modelProvider: new SingleModelProvider(model),
-        tracingDisabled: true
+        tracingDisabled: true,
       }),
-      onReentry
+      onReentry,
     });
     runtimes.push(runtime);
 
     await runtime.runMainAgent({
       runId: "run-phase3-blocking-input-required",
       sessionId: "session-phase3-blocking-input-required",
-      input: "delegate and wait for the first material choice"
+      input: "delegate and wait for the first material choice",
     });
     await runtime.agentCalls.waitForIdle();
 
@@ -882,7 +884,7 @@ describe("Phase 3 HuanLink orchestration", () => {
     expect(onReentry).not.toHaveBeenCalled();
     expect(model.requests).toHaveLength(2);
     expect(JSON.stringify(model.requests[1]?.input)).toContain(
-      "input-required"
+      "input-required",
     );
   });
 
@@ -894,15 +896,15 @@ describe("Phase 3 HuanLink orchestration", () => {
       transport,
       runner: new Runner({
         modelProvider: new SingleModelProvider(model),
-        tracingDisabled: true
-      })
+        tracingDisabled: true,
+      }),
     });
     runtimes.push(runtime);
 
     await runtime.runMainAgent({
       runId: "run-phase3-status-submission",
       sessionId: "session-phase3-status",
-      input: "start a task"
+      input: "start a task",
     });
     const accepted = acceptedAgentCall(model.requests[1]);
 
@@ -910,8 +912,8 @@ describe("Phase 3 HuanLink orchestration", () => {
       runtime.runMainAgent({
         runId: "run-phase3-status-query",
         sessionId: "session-phase3-status",
-        input: `report task ${accepted.agentCallId}`
-      })
+        input: `report task ${accepted.agentCallId}`,
+      }),
     ).resolves.toEqual({ output: "The existing task is still working." });
 
     expect(taskStatusResult(model.requests[3])).toMatchObject({
@@ -922,16 +924,18 @@ describe("Phase 3 HuanLink orchestration", () => {
         state: "working",
         executionMode: "async",
         statusMessage: "Codex is working",
-        artifacts: []
-      }
+        artifacts: [],
+      },
     });
     expect(submitTask).toHaveBeenCalledTimes(1);
-    expect(runtime.agentCalls.listByRunId("run-phase3-status-query")).toEqual([]);
-    expect(model.requests[2]?.systemInstructions).toContain(
-      "use get_task_status"
+    expect(runtime.agentCalls.listByRunId("run-phase3-status-query")).toEqual(
+      [],
     );
     expect(model.requests[2]?.systemInstructions).toContain(
-      "never use submit_codex_agent_call"
+      "use get_task_status",
+    );
+    expect(model.requests[2]?.systemInstructions).toContain(
+      "never use submit_codex_agent_call",
     );
   });
 
@@ -942,7 +946,7 @@ describe("Phase 3 HuanLink orchestration", () => {
       waitBeforeComplete: async () => {
         remoteStarted.resolve();
         await remoteCompletion.promise;
-      }
+      },
     });
     const server = await startAdapterServer({ executor, port: 0 });
     servers.push(server);
@@ -953,9 +957,9 @@ describe("Phase 3 HuanLink orchestration", () => {
       codexA2aOrigin: server.origin,
       runner: new Runner({
         modelProvider: new SingleModelProvider(model),
-        tracingDisabled: true
+        tracingDisabled: true,
       }),
-      onReentry
+      onReentry,
     });
     runtimes.push(runtime);
     let initialRunSettled = false;
@@ -963,7 +967,7 @@ describe("Phase 3 HuanLink orchestration", () => {
       .runMainAgent({
         runId: "run-phase3-blocking",
         sessionId: "session-phase3",
-        input: "delegate this task and block until completion"
+        input: "delegate this task and block until completion",
       })
       .finally(() => {
         initialRunSettled = true;
@@ -971,14 +975,14 @@ describe("Phase 3 HuanLink orchestration", () => {
 
     const firstSignal = await Promise.race([
       remoteStarted.promise.then(() => "remote-started" as const),
-      initialRun.then(() => "initial-run-settled" as const)
+      initialRun.then(() => "initial-run-settled" as const),
     ]);
     expect(firstSignal).toBe("remote-started");
     expect(initialRunSettled).toBe(false);
 
     remoteCompletion.resolve();
     await expect(initialRun).resolves.toMatchObject({
-      output: "Codex task completed in the current turn."
+      output: "Codex task completed in the current turn.",
     });
     await runtime.agentCalls.waitForIdle();
 
@@ -992,7 +996,7 @@ describe("Phase 3 HuanLink orchestration", () => {
   test("accepts an async A2A AgentCall immediately and starts one fresh MainAgent turn on completion", async () => {
     const remoteCompletion = deferred();
     const executor = new ControlledTaskExecutor({
-      waitBeforeComplete: async () => remoteCompletion.promise
+      waitBeforeComplete: async () => remoteCompletion.promise,
     });
     const server = await startAdapterServer({ executor, port: 0 });
     servers.push(server);
@@ -1004,30 +1008,32 @@ describe("Phase 3 HuanLink orchestration", () => {
       codexA2aOrigin: server.origin,
       runner: new Runner({
         modelProvider: new SingleModelProvider(model),
-        tracingDisabled: true
+        tracingDisabled: true,
       }),
       createRunId: () => "run-phase3-reentry",
       getLatestContext: async () => latestContext,
-      onReentry: (result) => reentry.resolve(result)
+      onReentry: (result) => reentry.resolve(result),
     });
     runtimes.push(runtime);
 
     const first = await runtime.runMainAgent({
       runId: "run-phase3-initial",
       sessionId: "session-phase3",
-      input: "delegate this code task to Codex"
+      input: "delegate this code task to Codex",
     });
     const accepted = acceptedAgentCall(model.requests[1]);
 
     expect(first.output).toBe("Codex task was accepted.");
     expect(accepted).toMatchObject({
       status: "accepted",
-      executionMode: "async"
+      executionMode: "async",
     });
-    expect(runtime.agentCalls.getByAgentCallId(accepted.agentCallId)).toMatchObject({
+    expect(
+      runtime.agentCalls.getByAgentCallId(accepted.agentCallId),
+    ).toMatchObject({
       taskId: accepted.taskId,
       sessionId: "session-phase3",
-      state: expect.stringMatching(/submitted|working/)
+      state: expect.stringMatching(/submitted|working/),
     });
     expect(model.requests).toHaveLength(2);
 
@@ -1045,12 +1051,12 @@ describe("Phase 3 HuanLink orchestration", () => {
       agentCall: {
         agentCallId: accepted.agentCallId,
         taskId: accepted.taskId,
-        state: "completed"
-      }
+        state: "completed",
+      },
     });
     expect(model.requests).toHaveLength(3);
     expect(model.requests[2]?.tools.map(({ name }) => name)).toEqual([
-      SUBMIT_CODEX_AGENT_CALL_TOOL_NAME
+      SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
     ]);
     const reentryModelInput = JSON.stringify(model.requests[2]?.input);
     expect(reentryModelInput).toContain(latestContext);
@@ -1061,20 +1067,21 @@ describe("Phase 3 HuanLink orchestration", () => {
 
   test("submits a pre-authorized follow-up from terminal re-entry and reports both terminal steps", async () => {
     const model = new DelegateFollowUpAfterTerminalModel();
-    const { transport, submitTask, completions } = sequentialTerminalTransport();
+    const { transport, submitTask, completions } =
+      sequentialTerminalTransport();
     const reentries: Phase3ReentryResult[] = [];
     const firstReentry = deferred<Phase3ReentryResult>();
     const secondReentry = deferred<Phase3ReentryResult>();
     const runIds = [
       "run-phase3-sequence-follow-up",
-      "run-phase3-sequence-finished"
+      "run-phase3-sequence-finished",
     ];
     const runtime = createPhase3HuanLinkRuntime({
       codexA2aOrigin: "http://127.0.0.1:1",
       transport,
       runner: new Runner({
         modelProvider: new SingleModelProvider(model),
-        tracingDisabled: true
+        tracingDisabled: true,
       }),
       createRunId: () => runIds.shift() ?? "run-phase3-sequence-extra",
       getLatestContext: () =>
@@ -1086,28 +1093,28 @@ describe("Phase 3 HuanLink orchestration", () => {
         } else if (reentries.length === 2) {
           secondReentry.resolve(result);
         }
-      }
+      },
     });
     runtimes.push(runtime);
 
     await runtime.runMainAgent({
       runId: "run-phase3-sequence-initial",
       sessionId: "session-phase3-sequence",
-      input: "run two authorized Codex steps without asking between them"
+      input: "run two authorized Codex steps without asking between them",
     });
 
     completions[0]!.resolve();
     await firstReentry.promise;
     expect(submitTask).toHaveBeenCalledTimes(2);
     expect(model.requests[2]?.tools.map(({ name }) => name)).toEqual([
-      SUBMIT_CODEX_AGENT_CALL_TOOL_NAME
+      SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
     ]);
     expect(acceptedAgentCall(model.requests[3])).toMatchObject({
       taskId: "a2a-task-sequence-2",
-      executionMode: "async"
+      executionMode: "async",
     });
     expect(reentries[0]?.output).toBe(
-      "The first step completed and the second step was accepted."
+      "The first step completed and the second step was accepted.",
     );
 
     completions[1]!.resolve();
@@ -1116,16 +1123,17 @@ describe("Phase 3 HuanLink orchestration", () => {
 
     expect(reentries.map(({ output }) => output)).toEqual([
       "The first step completed and the second step was accepted.",
-      "The second sequence step completed."
+      "The second sequence step completed.",
     ]);
-    expect(submitTask.mock.calls.map(([request]) => request.contextId)).toEqual([
-      "session-phase3-sequence",
-      "session-phase3-sequence"
-    ]);
-    expect(runtime.agentCalls.listByRunId("run-phase3-sequence-initial"))
-      .toHaveLength(1);
-    expect(runtime.agentCalls.listByRunId("run-phase3-sequence-follow-up"))
-      .toHaveLength(1);
+    expect(submitTask.mock.calls.map(([request]) => request.contextId)).toEqual(
+      ["session-phase3-sequence", "session-phase3-sequence"],
+    );
+    expect(
+      runtime.agentCalls.listByRunId("run-phase3-sequence-initial"),
+    ).toHaveLength(1);
+    expect(
+      runtime.agentCalls.listByRunId("run-phase3-sequence-follow-up"),
+    ).toHaveLength(1);
   });
 
   test.each(["failed", "canceled", "rejected"] as const)(
@@ -1138,18 +1146,18 @@ describe("Phase 3 HuanLink orchestration", () => {
         transport: terminalTransport(state),
         runner: new Runner({
           modelProvider: new SingleModelProvider(model),
-          tracingDisabled: true
+          tracingDisabled: true,
         }),
         createRunId: () => `run-phase3-${state}`,
         getLatestContext: () => `latest context for ${state}`,
-        onReentry: (result) => reentry.resolve(result)
+        onReentry: (result) => reentry.resolve(result),
       });
       runtimes.push(runtime);
 
       const first = await runtime.runMainAgent({
         runId: `run-phase3-initial-${state}`,
         sessionId: "session-phase3",
-        input: `delegate a task that becomes ${state}`
+        input: `delegate a task that becomes ${state}`,
       });
       const accepted = acceptedAgentCall(model.requests[1]);
       const result = await reentry.promise;
@@ -1164,14 +1172,14 @@ describe("Phase 3 HuanLink orchestration", () => {
         agentCall: {
           agentCallId: accepted.agentCallId,
           state,
-          artifacts: [{ text: `${state} result` }]
-        }
+          artifacts: [{ text: `${state} result` }],
+        },
       });
       expect(model.requests).toHaveLength(3);
       expect(model.requests[2]?.tools.map(({ name }) => name)).toEqual([
-        SUBMIT_CODEX_AGENT_CALL_TOOL_NAME
+        SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
       ]);
-    }
+    },
   );
 
   test("starts only one re-entry when competing terminal updates arrive for the same task", async () => {
@@ -1183,23 +1191,23 @@ describe("Phase 3 HuanLink orchestration", () => {
     });
     const reentry = deferred<Phase3ReentryResult>();
     const onReentry = vi.fn((result: Phase3ReentryResult) =>
-      reentry.resolve(result)
+      reentry.resolve(result),
     );
     const runtime = createPhase3HuanLinkRuntime({
       codexA2aOrigin: "http://127.0.0.1:1",
       transport: terminalTransport("completed"),
       runner: new Runner({
         modelProvider: new SingleModelProvider(model),
-        tracingDisabled: true
+        tracingDisabled: true,
       }),
-      onReentry
+      onReentry,
     });
     runtimes.push(runtime);
 
     await runtime.runMainAgent({
       runId: "run-phase3-competing-terminal",
       sessionId: "session-phase3",
-      input: "delegate and accept only the first terminal update"
+      input: "delegate and accept only the first terminal update",
     });
     const accepted = acceptedAgentCall(model.requests[1]);
     await summaryStarted.promise;
@@ -1209,9 +1217,9 @@ describe("Phase 3 HuanLink orchestration", () => {
     await reentry.promise;
     await runtime.agentCalls.waitForIdle();
 
-    expect(runtime.agentCalls.getByAgentCallId(accepted.agentCallId)?.state).toBe(
-      "completed"
-    );
+    expect(
+      runtime.agentCalls.getByAgentCallId(accepted.agentCallId)?.state,
+    ).toBe("completed");
     expect(onReentry).toHaveBeenCalledTimes(1);
     expect(model.requests).toHaveLength(3);
   });
@@ -1229,18 +1237,18 @@ describe("Phase 3 HuanLink orchestration", () => {
       transport: terminalTransport("completed"),
       runner: new Runner({
         modelProvider: new SingleModelProvider(model),
-        tracingDisabled: true
+        tracingDisabled: true,
       }),
       beforeReentry,
       onReentry,
-      onBackgroundError: (error) => observed.resolve(error)
+      onBackgroundError: (error) => observed.resolve(error),
     });
     runtimes.push(runtime);
 
     await runtime.runMainAgent({
       runId: "run-phase3-reentry-model-failure",
       sessionId: "session-phase3",
-      input: "delegate and release the re-entry reservation on failure"
+      input: "delegate and release the re-entry reservation on failure",
     });
     const failure = await observed.promise;
 
@@ -1252,14 +1260,14 @@ describe("Phase 3 HuanLink orchestration", () => {
 
   test.each([
     ["input-required", () => pausedTransport().transport],
-    ["terminal", () => terminalTransport("completed")]
+    ["terminal", () => terminalTransport("completed")],
   ] as const)(
     "aborts a hanging %s re-entry without reporting a shutdown error",
     async (_kind, createTransport) => {
       const model = new DelegateThenSummarizeModel();
       const initialRunner = new Runner({
         modelProvider: new SingleModelProvider(model),
-        tracingDisabled: true
+        tracingDisabled: true,
       });
       const reentryStarted = deferred<AbortSignal | undefined>();
       const manualRelease = deferred();
@@ -1273,21 +1281,21 @@ describe("Phase 3 HuanLink orchestration", () => {
           reentryStarted.resolve(options?.signal);
           await waitForReleaseOrAbort(manualRelease.promise, options?.signal);
           throw new Error("manually released hanging Phase 3 re-entry");
-        }
+        },
       };
       const onBackgroundError = vi.fn<AgentCallBackgroundErrorListener>();
       const runtime = createPhase3HuanLinkRuntime({
         codexA2aOrigin: "http://127.0.0.1:1",
         transport: createTransport(),
         runner: hangingRunner,
-        onBackgroundError
+        onBackgroundError,
       });
       runtimes.push(runtime);
 
       await runtime.runMainAgent({
         runId: `run-phase3-hanging-${_kind}`,
         sessionId: "session-phase3-hanging-close",
-        input: `delegate one ${_kind} task`
+        input: `delegate one ${_kind} task`,
       });
       const reentrySignal = await reentryStarted.promise;
 
@@ -1301,7 +1309,7 @@ describe("Phase 3 HuanLink orchestration", () => {
 
       expect(reentrySignal?.aborted).toBe(true);
       expect(onBackgroundError).not.toHaveBeenCalled();
-    }
+    },
   );
 
   test("reports a MainAgent re-entry failure through the background error callback", async () => {
@@ -1316,7 +1324,7 @@ describe("Phase 3 HuanLink orchestration", () => {
       transport: terminalTransport("completed"),
       runner: new Runner({
         modelProvider: new SingleModelProvider(model),
-        tracingDisabled: true
+        tracingDisabled: true,
       }),
       onReentry: () => {
         throw new Error("QQ egress is unavailable");
@@ -1325,15 +1333,15 @@ describe("Phase 3 HuanLink orchestration", () => {
         observed.resolve({
           error,
           recordState: record?.state,
-          notificationError: record?.terminalNotificationError
-        })
+          notificationError: record?.terminalNotificationError,
+        }),
     });
     runtimes.push(runtime);
 
     await runtime.runMainAgent({
       runId: "run-phase3-reentry-error",
       sessionId: "session-phase3",
-      input: "delegate and surface any re-entry failure"
+      input: "delegate and surface any re-entry failure",
     });
     const failure = await observed.promise;
 
@@ -1345,7 +1353,7 @@ describe("Phase 3 HuanLink orchestration", () => {
 
 async function settlesWithin(
   operation: Promise<unknown>,
-  timeoutMs: number
+  timeoutMs: number,
 ): Promise<boolean> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -1353,7 +1361,7 @@ async function settlesWithin(
       operation.then(() => true),
       new Promise<false>((resolve) => {
         timer = setTimeout(() => resolve(false), timeoutMs);
-      })
+      }),
     ]);
   } finally {
     if (timer !== undefined) {
@@ -1364,7 +1372,7 @@ async function settlesWithin(
 
 function waitForReleaseOrAbort(
   release: Promise<void>,
-  signal: AbortSignal | undefined
+  signal: AbortSignal | undefined,
 ): Promise<void> {
   if (signal === undefined) {
     return release;

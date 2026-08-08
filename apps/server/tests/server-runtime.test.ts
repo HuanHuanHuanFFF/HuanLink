@@ -5,7 +5,7 @@ import type {
   DeliveryReceiptV1,
   InboundChannelMessageV1,
   RetractChannelMessageCommandV1,
-  SendChannelMessageCommandV1
+  SendChannelMessageCommandV1,
 } from "@huanlink/core";
 import { describe, expect, test, vi } from "vitest";
 
@@ -30,15 +30,15 @@ class FakeChannelAdapter implements ChannelAdapterV1 {
           "text",
           "mention",
           "attachmentLink",
-          "attachmentLocalPath"
+          "attachmentLocalPath",
         ],
         reply: true,
         edit: false,
         retract: true,
         reaction: false,
         typing: false,
-        streaming: false
-      }
+        streaming: false,
+      },
     };
   }
 
@@ -48,7 +48,7 @@ class FakeChannelAdapter implements ChannelAdapterV1 {
   }
 
   async send(
-    _command: SendChannelMessageCommandV1
+    _command: SendChannelMessageCommandV1,
   ): Promise<DeliveryReceiptV1> {
     return { channelId: this.descriptor.channelId, messageId: "sent" };
   }
@@ -67,14 +67,16 @@ describe("ServerRuntime", () => {
     const config = serverConfig();
     const adapters = new Map<string, FakeChannelAdapter>();
     const closeOrder: string[] = [];
-    const createChannelAdapter = vi.fn((channel: ServerChannelRuntimeConfig["channels"][number]) => {
-      const adapter = new FakeChannelAdapter(channel.channelId);
-      adapter.close.mockImplementation(async () => {
-        closeOrder.push(channel.channelId);
-      });
-      adapters.set(channel.channelId, adapter);
-      return adapter;
-    });
+    const createChannelAdapter = vi.fn(
+      (channel: ServerChannelRuntimeConfig["channels"][number]) => {
+        const adapter = new FakeChannelAdapter(channel.channelId);
+        adapter.close.mockImplementation(async () => {
+          closeOrder.push(channel.channelId);
+        });
+        adapters.set(channel.channelId, adapter);
+        return adapter;
+      },
+    );
     const onChannelMessage = vi.fn();
     const watcherClose = vi.fn(() => {
       closeOrder.push("watcher");
@@ -87,42 +89,46 @@ describe("ServerRuntime", () => {
       onChannelMessage,
       watchFactory: () => ({
         close: watcherClose,
-        on: () => undefined
-      })
+        on: () => undefined,
+      }),
     });
 
     expect(createChannelAdapter).toHaveBeenCalledTimes(2);
     await runtime.start();
 
-    adapters.get("qq-main")!.emit(inbound({
-      channelId: "qq-main",
-      messageId: "self-message",
-      isSelf: true
-    }));
-    adapters.get("qq-secondary")!.emit(inbound({
-      channelId: "qq-secondary",
-      messageId: "user-message",
-      isSelf: false
-    }));
+    adapters.get("qq-main")!.emit(
+      inbound({
+        channelId: "qq-main",
+        messageId: "self-message",
+        isSelf: true,
+      }),
+    );
+    adapters.get("qq-secondary")!.emit(
+      inbound({
+        channelId: "qq-secondary",
+        messageId: "user-message",
+        isSelf: false,
+      }),
+    );
 
     await vi.waitFor(() => expect(onChannelMessage).toHaveBeenCalledTimes(2));
     expect(
       onChannelMessage.mock.calls.map(([input]) => ({
         sessionId: input.sessionId,
         messageId: input.message.messageId,
-        isSelf: input.message.sender.isSelf
-      }))
+        isSelf: input.message.sender.isSelf,
+      })),
     ).toEqual([
       {
         sessionId: "channel:qq-main:group:10001",
         messageId: "self-message",
-        isSelf: true
+        isSelf: true,
       },
       {
         sessionId: "channel:qq-secondary:group:10001",
         messageId: "user-message",
-        isSelf: false
-      }
+        isSelf: false,
+      },
     ]);
     expect("sessions" in runtime).toBe(false);
     expect("runMainAgent" in runtime).toBe(false);
@@ -150,7 +156,7 @@ describe("ServerRuntime", () => {
         adapters.push(adapter);
         return adapter;
       },
-      watchFactory: () => ({ close: vi.fn(), on: () => undefined })
+      watchFactory: () => ({ close: vi.fn(), on: () => undefined }),
     });
 
     await expect(runtime.start()).rejects.toThrow("connect failed");
@@ -175,7 +181,7 @@ describe("ServerRuntime", () => {
         adapters.push(adapter);
         return adapter;
       },
-      watchFactory: () => ({ close: vi.fn(), on: () => undefined })
+      watchFactory: () => ({ close: vi.fn(), on: () => undefined }),
     });
 
     await expect(runtime.start()).resolves.toBeUndefined();
@@ -187,12 +193,12 @@ describe("ServerRuntime", () => {
     const initialConfig = serverConfig();
     initialConfig.channels[0]!.inboundPolicy = {
       groups: { mode: "allowlist", ids: ["10001"] },
-      directs: { mode: "denylist", ids: [] }
+      directs: { mode: "denylist", ids: [] },
     };
     const nextConfig = structuredClone(initialConfig);
     nextConfig.channels[0]!.inboundPolicy = {
       groups: { mode: "allowlist", ids: ["20002"] },
-      directs: { mode: "denylist", ids: [] }
+      directs: { mode: "denylist", ids: [] },
     };
     const adapters = new Map<string, FakeChannelAdapter>();
     const onChannelMessage = vi.fn();
@@ -212,16 +218,18 @@ describe("ServerRuntime", () => {
       watchFactory: (_path, _options, listener) => {
         notifyConfigChange = listener;
         return { close: vi.fn(), on: () => undefined };
-      }
+      },
     });
     await runtime.start();
 
-    adapters.get("qq-main")!.emit(inbound({
-      channelId: "qq-main",
-      messageId: "before",
-      isSelf: false,
-      conversationId: "10001"
-    }));
+    adapters.get("qq-main")!.emit(
+      inbound({
+        channelId: "qq-main",
+        messageId: "before",
+        isSelf: false,
+        conversationId: "10001",
+      }),
+    );
     await vi.waitFor(() => expect(onChannelMessage).toHaveBeenCalledOnce());
 
     notifyConfigChange?.("rename", null);
@@ -230,26 +238,30 @@ describe("ServerRuntime", () => {
         runtime.channels.isRouteAllowed({
           channelId: "qq-main",
           conversationKind: "group",
-          conversationId: "20002"
-        })
-      ).toBe(true)
+          conversationId: "20002",
+        }),
+      ).toBe(true),
     );
-    adapters.get("qq-main")!.emit(inbound({
-      channelId: "qq-main",
-      messageId: "now-blocked",
-      isSelf: false,
-      conversationId: "10001"
-    }));
-    adapters.get("qq-main")!.emit(inbound({
-      channelId: "qq-main",
-      messageId: "now-allowed",
-      isSelf: false,
-      conversationId: "20002"
-    }));
+    adapters.get("qq-main")!.emit(
+      inbound({
+        channelId: "qq-main",
+        messageId: "now-blocked",
+        isSelf: false,
+        conversationId: "10001",
+      }),
+    );
+    adapters.get("qq-main")!.emit(
+      inbound({
+        channelId: "qq-main",
+        messageId: "now-allowed",
+        isSelf: false,
+        conversationId: "20002",
+      }),
+    );
 
     await vi.waitFor(() => expect(onChannelMessage).toHaveBeenCalledTimes(2));
     expect(onChannelMessage.mock.calls[1]?.[0].message.messageId).toBe(
-      "now-allowed"
+      "now-allowed",
     );
     await runtime.close();
   });
@@ -261,7 +273,7 @@ function serverConfig(): ServerChannelRuntimeConfig {
       provider: "deepseek",
       modelId: "deepseek-v4-flash",
       baseURL: "https://api.deepseek.com/beta",
-      apiKeyEnv: "DEEPSEEK_API_KEY"
+      apiKeyEnv: "DEEPSEEK_API_KEY",
     },
     channels: ["qq-main", "qq-secondary"].map((channelId) => ({
       channelId,
@@ -269,10 +281,10 @@ function serverConfig(): ServerChannelRuntimeConfig {
       url: "ws://127.0.0.1:3001/",
       inboundPolicy: {
         groups: { mode: "denylist" as const, ids: [] },
-        directs: { mode: "denylist" as const, ids: [] }
+        directs: { mode: "denylist" as const, ids: [] },
       },
       enableUnsafePrivilegedOperations: false,
-      accessToken: "onebot-secret"
+      accessToken: "onebot-secret",
     })),
     agents: [
       {
@@ -281,7 +293,7 @@ function serverConfig(): ServerChannelRuntimeConfig {
         transport: "a2a",
         origin: "http://127.0.0.1:4000",
         skillId: "codex-code-task",
-        enabled: true
+        enabled: true,
       },
       {
         agentId: "future-agent",
@@ -289,20 +301,20 @@ function serverConfig(): ServerChannelRuntimeConfig {
         transport: "a2a",
         origin: "http://127.0.0.1:4001",
         skillId: "future-skill",
-        enabled: true
-      }
+        enabled: true,
+      },
     ],
     sources: {
       mainAgent: "server/main-agent.json",
       channels: [
         "server/channels/onebot11.json",
-        "server/channels/onebot11-secondary.json"
+        "server/channels/onebot11-secondary.json",
       ],
       agents: [
         "server/agents/codex-local.json",
-        "server/agents/future-agent.json"
-      ]
-    }
+        "server/agents/future-agent.json",
+      ],
+    },
   };
 }
 
@@ -317,15 +329,15 @@ function inbound(input: {
     route: {
       channelId: input.channelId,
       conversationKind: "group",
-      conversationId: input.conversationId ?? "10001"
+      conversationId: input.conversationId ?? "10001",
     },
     sender: {
       id: input.isSelf ? "bot" : "user",
       username: input.isSelf ? "HuanLink" : "Alice",
-      isSelf: input.isSelf
+      isSelf: input.isSelf,
     },
     receivedAt: "2026-08-07T00:00:00.000Z",
     content: "hello",
-    contentFormat: "onebot11.cq"
+    contentFormat: "onebot11.cq",
   };
 }

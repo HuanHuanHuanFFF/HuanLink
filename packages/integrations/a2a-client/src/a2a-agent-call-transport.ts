@@ -5,7 +5,7 @@ import {
   SendMessageRequest,
   SubscribeToTaskRequest,
   type SendMessageResult,
-  type Task
+  type Task,
 } from "@a2a-js/sdk";
 import { ClientFactory, type Client } from "@a2a-js/sdk/client";
 import {
@@ -17,21 +17,21 @@ import {
   type AgentCallTaskSnapshot,
   type AgentCallTransport,
   type AgentCallTransportContinueRequest,
-  type AgentCallTransportSubmitRequest
+  type AgentCallTransportSubmitRequest,
 } from "@huanlink/core";
 import {
   isPaused,
   isTerminal,
   messageFields,
   snapshotFromTask,
-  stateFromTaskState
+  stateFromTaskState,
 } from "./a2a-task-snapshot.js";
 import {
   A2aProtocolError,
   errorLogFields,
   isRetryableObservationError,
   isTaskNotCancelable,
-  isUnsupportedOperation
+  isUnsupportedOperation,
 } from "./a2a-transport-errors.js";
 export type A2aAgentCallTransportOptions = {
   origin: string;
@@ -57,7 +57,7 @@ export class A2aAgentCallTransport implements AgentCallTransport {
 
   async discoverCapability(
     skillId: string,
-    options: { signal?: AbortSignal } = {}
+    options: { signal?: AbortSignal } = {},
   ): Promise<AgentCallCapability> {
     const fields = { skillId };
     this.writeLog("info", "a2a.discover.started", fields);
@@ -65,55 +65,57 @@ export class A2aAgentCallTransport implements AgentCallTransport {
       const client = await this.getClient();
       if (client.protocolVersion !== A2A_PROTOCOL_VERSION) {
         throw new A2aProtocolError(
-          `A2A agent negotiated protocol ${client.protocolVersion}; expected ${A2A_PROTOCOL_VERSION}`
+          `A2A agent negotiated protocol ${client.protocolVersion}; expected ${A2A_PROTOCOL_VERSION}`,
         );
       }
 
       const card = await client.getAgentCard(
-        options.signal === undefined ? undefined : { signal: options.signal }
+        options.signal === undefined ? undefined : { signal: options.signal },
       );
       if (!card.capabilities?.streaming) {
         throw new A2aProtocolError(
-          "A2A agent does not advertise task streaming"
+          "A2A agent does not advertise task streaming",
         );
       }
 
       const skill = card.skills.find((candidate) => candidate.id === skillId);
       if (!skill) {
         throw new A2aProtocolError(
-          `A2A Agent Card does not declare skill ${skillId}`
+          `A2A Agent Card does not declare skill ${skillId}`,
         );
       }
 
       const capability = {
         id: skill.id,
         name: skill.name,
-        ...(skill.description === "" ? {} : { description: skill.description })
+        ...(skill.description === "" ? {} : { description: skill.description }),
       };
       this.writeLog("info", "a2a.discover.completed", fields);
       return capability;
     } catch (error) {
       this.writeLog("error", "a2a.discover.failed", {
         ...fields,
-        ...errorLogFields(error)
+        ...errorLogFields(error),
       });
       throw error;
     }
   }
 
   async submitTask(
-    request: AgentCallTransportSubmitRequest
+    request: AgentCallTransportSubmitRequest,
   ): Promise<AgentCallTaskSnapshot> {
     const fields: RuntimeLogFields = {
       messageId: request.messageId,
       skillId: request.skillId,
       ...(request.contextId === undefined
         ? {}
-        : { contextId: request.contextId })
+        : { contextId: request.contextId }),
     };
     this.writeLog("info", "a2a.submit.started", fields);
     try {
-      await this.discoverCapability(request.skillId, { signal: request.signal });
+      await this.discoverCapability(request.skillId, {
+        signal: request.signal,
+      });
       const client = await this.getClient();
       const result = await client.sendMessage(
         SendMessageRequest.fromJSON({
@@ -123,30 +125,30 @@ export class A2aAgentCallTransport implements AgentCallTransport {
               ? {}
               : { contextId: request.contextId }),
             role: "ROLE_USER",
-            parts: [{ text: request.input }]
+            parts: [{ text: request.input }],
           },
-          configuration: { returnImmediately: true }
+          configuration: { returnImmediately: true },
         }),
-        request.signal === undefined ? undefined : { signal: request.signal }
+        request.signal === undefined ? undefined : { signal: request.signal },
       );
 
       const snapshot = snapshotFromTask(requireTask(result));
       this.writeLog("info", "a2a.submit.completed", {
         ...fields,
-        ...snapshotLogFields(snapshot)
+        ...snapshotLogFields(snapshot),
       });
       return snapshot;
     } catch (error) {
       this.writeLog("error", "a2a.submit.failed", {
         ...fields,
-        ...errorLogFields(error)
+        ...errorLogFields(error),
       });
       throw error;
     }
   }
 
   async continueTask(
-    request: AgentCallTransportContinueRequest
+    request: AgentCallTransportContinueRequest,
   ): Promise<AgentCallTaskSnapshot> {
     const questionIds = Object.keys(request.answers);
     const fields: RuntimeLogFields = {
@@ -156,7 +158,7 @@ export class A2aAgentCallTransport implements AgentCallTransport {
         ? {}
         : { contextId: request.contextId }),
       questionIds,
-      count: questionIds.length
+      count: questionIds.length,
     };
     this.writeLog("info", "a2a.continue.started", fields);
     try {
@@ -170,11 +172,11 @@ export class A2aAgentCallTransport implements AgentCallTransport {
               ? {}
               : { contextId: request.contextId }),
             role: "ROLE_USER",
-            parts: [{ data: { answers: request.answers } }]
+            parts: [{ data: { answers: request.answers } }],
           },
-          configuration: { returnImmediately: true }
+          configuration: { returnImmediately: true },
         }),
-        request.signal === undefined ? undefined : { signal: request.signal }
+        request.signal === undefined ? undefined : { signal: request.signal },
       );
       const task = requireTask(result);
       assertTaskId(request.taskId, task.id);
@@ -183,19 +185,19 @@ export class A2aAgentCallTransport implements AgentCallTransport {
         task.contextId !== request.contextId
       ) {
         throw new A2aProtocolError(
-          `A2A continuation returned context ${task.contextId}, expected ${request.contextId}`
+          `A2A continuation returned context ${task.contextId}, expected ${request.contextId}`,
         );
       }
       const snapshot = snapshotFromTask(task);
       this.writeLog("info", "a2a.continue.completed", {
         ...fields,
-        ...snapshotLogFields(snapshot)
+        ...snapshotLogFields(snapshot),
       });
       return snapshot;
     } catch (error) {
       this.writeLog("error", "a2a.continue.failed", {
         ...fields,
-        ...errorLogFields(error)
+        ...errorLogFields(error),
       });
       throw error;
     }
@@ -203,17 +205,21 @@ export class A2aAgentCallTransport implements AgentCallTransport {
 
   async *watchTask(
     taskId: string,
-    options: { signal: AbortSignal }
+    options: { signal: AbortSignal },
   ): AsyncIterable<AgentCallTaskSnapshot> {
     this.writeLog("info", "a2a.watch.started", {
       a2aTaskId: taskId,
-      attempt: 1
+      attempt: 1,
     });
     let failed = false;
     let aborted = false;
     try {
       for await (const snapshot of this.watchTaskSnapshots(taskId, options)) {
-        this.writeLog("debug", "a2a.watch.snapshot", snapshotLogFields(snapshot));
+        this.writeLog(
+          "debug",
+          "a2a.watch.snapshot",
+          snapshotLogFields(snapshot),
+        );
         yield snapshot;
       }
     } catch (error) {
@@ -221,13 +227,13 @@ export class A2aAgentCallTransport implements AgentCallTransport {
         aborted = true;
         this.writeLog("debug", "a2a.watch.aborted", {
           a2aTaskId: taskId,
-          ...errorLogFields(error, "abort")
+          ...errorLogFields(error, "abort"),
         });
       } else {
         failed = true;
         this.writeLog("error", "a2a.watch.failed", {
           a2aTaskId: taskId,
-          ...errorLogFields(error)
+          ...errorLogFields(error),
         });
       }
       throw error;
@@ -240,7 +246,7 @@ export class A2aAgentCallTransport implements AgentCallTransport {
 
   private async *watchTaskSnapshots(
     taskId: string,
-    options: { signal: AbortSignal }
+    options: { signal: AbortSignal },
   ): AsyncIterable<AgentCallTaskSnapshot> {
     const client = await this.getClient();
 
@@ -251,7 +257,7 @@ export class A2aAgentCallTransport implements AgentCallTransport {
       try {
         for await (const event of client.resubscribeTask(
           SubscribeToTaskRequest.fromJSON({ id: taskId }),
-          { signal: options.signal }
+          { signal: options.signal },
         )) {
           if (event.payload?.$case === "task") {
             assertTaskId(taskId, event.payload.value.id);
@@ -280,7 +286,7 @@ export class A2aAgentCallTransport implements AgentCallTransport {
               contextId: update.contextId,
               state,
               artifacts: [],
-              ...messageFields(update.status?.message)
+              ...messageFields(update.status?.message),
             };
             yield snapshot;
             if (isPaused(snapshot.state)) {
@@ -302,7 +308,7 @@ export class A2aAgentCallTransport implements AgentCallTransport {
           options.signal,
           terminalEventSeen || isUnsupportedOperation(streamError)
             ? TERMINAL_RECONCILIATION_ATTEMPTS
-            : 1
+            : 1,
         );
       } catch (error) {
         if (options.signal.aborted || !isRetryableObservationError(error)) {
@@ -311,14 +317,14 @@ export class A2aAgentCallTransport implements AgentCallTransport {
         this.writeLog("warn", "a2a.watch.reconcile_failed", {
           a2aTaskId: taskId,
           attempt,
-          ...errorLogFields(error, "network")
+          ...errorLogFields(error, "network"),
         });
         await abortableDelay(subscriptionRetryDelayMs(attempt), options.signal);
         continue;
       }
       this.writeLog("info", "a2a.watch.reconciled", {
         ...snapshotLogFields(reconciled),
-        attempt
+        attempt,
       });
       if (isTerminal(reconciled.state)) {
         yield reconciled;
@@ -333,13 +339,13 @@ export class A2aAgentCallTransport implements AgentCallTransport {
       if (isUnsupportedOperation(streamError)) {
         throw new A2aProtocolError(
           `A2A task ${taskId} cannot be subscribed and is not terminal`,
-          { cause: streamError }
+          { cause: streamError },
         );
       }
 
       this.writeLog("info", "a2a.watch.retry", {
         ...snapshotLogFields(reconciled),
-        attempt
+        attempt,
       });
       await abortableDelay(subscriptionRetryDelayMs(attempt), options.signal);
     }
@@ -353,7 +359,7 @@ export class A2aAgentCallTransport implements AgentCallTransport {
       let snapshot: AgentCallTaskSnapshot;
       try {
         const task = await client.cancelTask(
-          CancelTaskRequest.fromJSON({ id: taskId })
+          CancelTaskRequest.fromJSON({ id: taskId }),
         );
         snapshot = snapshotFromTask(task);
       } catch (error) {
@@ -364,13 +370,13 @@ export class A2aAgentCallTransport implements AgentCallTransport {
       }
       this.writeLog("info", "a2a.cancel.completed", {
         ...fields,
-        ...snapshotLogFields(snapshot)
+        ...snapshotLogFields(snapshot),
       });
       return snapshot;
     } catch (error) {
       this.writeLog("error", "a2a.cancel.failed", {
         ...fields,
-        ...errorLogFields(error)
+        ...errorLogFields(error),
       });
       throw error;
     }
@@ -385,7 +391,7 @@ export class A2aAgentCallTransport implements AgentCallTransport {
       void pending.catch((error: unknown) => {
         this.writeLog("error", "a2a.client.create_failed", {
           attempt,
-          ...errorLogFields(error, "network")
+          ...errorLogFields(error, "network"),
         });
         if (this.clientPromise === pending) {
           this.clientPromise = undefined;
@@ -398,7 +404,7 @@ export class A2aAgentCallTransport implements AgentCallTransport {
   private writeLog(
     level: RuntimeLogLevel,
     message: string,
-    fields: RuntimeLogFields
+    fields: RuntimeLogFields,
   ): void {
     try {
       this.logger[level](message, fields);
@@ -410,7 +416,7 @@ export class A2aAgentCallTransport implements AgentCallTransport {
   private async reconcileTask(
     taskId: string,
     signal: AbortSignal,
-    attempts: number
+    attempts: number,
   ): Promise<AgentCallTaskSnapshot> {
     let snapshot = await this.getTask(taskId, signal);
     for (let attempt = 1; attempt < attempts; attempt += 1) {
@@ -425,12 +431,12 @@ export class A2aAgentCallTransport implements AgentCallTransport {
 
   private async getTask(
     taskId: string,
-    signal?: AbortSignal
+    signal?: AbortSignal,
   ): Promise<AgentCallTaskSnapshot> {
     const client = await this.getClient();
     const task = await client.getTask(
       GetTaskRequest.fromJSON({ id: taskId }),
-      signal === undefined ? undefined : { signal }
+      signal === undefined ? undefined : { signal },
     );
     assertTaskId(taskId, task.id);
     return snapshotFromTask(task);
@@ -442,14 +448,14 @@ function snapshotLogFields(snapshot: AgentCallTaskSnapshot): RuntimeLogFields {
     a2aTaskId: snapshot.taskId,
     contextId: snapshot.contextId,
     state: snapshot.state,
-    count: snapshot.artifacts.length
+    count: snapshot.artifacts.length,
   };
 }
 
 function requireTask(result: SendMessageResult): Task {
   if (!("status" in result)) {
     throw new A2aProtocolError(
-      "A2A SendMessage returned a Message; AgentCall requires a Task"
+      "A2A SendMessage returned a Message; AgentCall requires a Task",
     );
   }
   return result;
@@ -463,7 +469,7 @@ function subscriptionRetryDelayMs(attempt: number): number {
 
 function abortableDelay(
   milliseconds: number,
-  signal: AbortSignal
+  signal: AbortSignal,
 ): Promise<void> {
   if (signal.aborted) {
     return Promise.reject(signal.reason);
@@ -485,7 +491,7 @@ function abortableDelay(
 function assertTaskId(expected: string, actual: string): void {
   if (actual !== expected) {
     throw new A2aProtocolError(
-      `A2A update belongs to task ${actual}, expected ${expected}`
+      `A2A update belongs to task ${actual}, expected ${expected}`,
     );
   }
 }

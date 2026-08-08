@@ -2,7 +2,7 @@ import { describe, expect, test, vi } from "vitest";
 
 import {
   startRuntimeWithSignalShutdown,
-  type ProcessSignalSource
+  type ProcessSignalSource,
 } from "../src/process-lifecycle.js";
 import { ThrowingMutatingRuntimeLogger } from "./support/hostile-runtime-logger.js";
 import { RecordingRuntimeLogger } from "./support/recording-runtime-logger.js";
@@ -66,8 +66,8 @@ describe("process lifecycle", () => {
         runtime: { start, close },
         signals,
         logger: new ThrowingMutatingRuntimeLogger(),
-        closeLogger
-      })
+        closeLogger,
+      }),
     ).resolves.toBe("started");
 
     signals.emit("SIGTERM");
@@ -93,12 +93,12 @@ describe("process lifecycle", () => {
           startEntered.resolve();
           await startResult.promise;
         },
-        close
+        close,
       },
       signals,
       onSignal,
       logger,
-      closeLogger
+      closeLogger,
     });
 
     await startEntered.promise;
@@ -108,7 +108,7 @@ describe("process lifecycle", () => {
     expect(onSignal).toHaveBeenCalledWith("SIGINT");
     expect(close).toHaveBeenCalledOnce();
     expect(logger.find("process.signal")).toMatchObject({
-      fields: { signal: "SIGINT" }
+      fields: { signal: "SIGINT" },
     });
     expect(logger.find("process.start_failed")).toBeUndefined();
     expect(logger.find("process.stopped")).toBeDefined();
@@ -127,19 +127,19 @@ describe("process lifecycle", () => {
           start: async () => {
             throw new Error("OneBot handshake failed");
           },
-          close
+          close,
         },
         signals,
         logger,
-        closeLogger
-      })
+        closeLogger,
+      }),
     ).rejects.toThrow("OneBot handshake failed");
     expect(close).toHaveBeenCalledOnce();
     expect(logger.entries.map((entry) => entry.message)).toEqual([
       "process.starting",
       "process.start_failed",
       "process.stopping",
-      "process.stopped"
+      "process.stopped",
     ]);
     expect(closeLogger).toHaveBeenCalledOnce();
   });
@@ -155,13 +155,13 @@ describe("process lifecycle", () => {
       startRuntimeWithSignalShutdown({
         runtime: {
           start: async () => undefined,
-          close
+          close,
         },
         signals,
         onSignal,
         logger,
-        closeLogger
-      })
+        closeLogger,
+      }),
     ).resolves.toBe("started");
 
     signals.emit("SIGTERM");
@@ -173,7 +173,7 @@ describe("process lifecycle", () => {
       "process.started",
       "process.signal",
       "process.stopping",
-      "process.stopped"
+      "process.stopped",
     ]);
   });
 
@@ -190,23 +190,23 @@ describe("process lifecycle", () => {
       startRuntimeWithSignalShutdown({
         runtime: {
           start: async () => undefined,
-          close
+          close,
         },
         signals,
         onShutdownError,
         logger,
-        closeLogger
-      })
+        closeLogger,
+      }),
     ).resolves.toBe("started");
 
     signals.emit("SIGTERM");
     await vi.waitFor(() => expect(closeLogger).toHaveBeenCalledOnce());
 
     expect(onShutdownError).toHaveBeenCalledWith(
-      expect.objectContaining({ message: "runtime close failed" })
+      expect.objectContaining({ message: "runtime close failed" }),
     );
     expect(logger.find("process.stop_failed")).toMatchObject({
-      level: "error"
+      level: "error",
     });
     expect(logger.find("process.stopped")).toBeUndefined();
   });

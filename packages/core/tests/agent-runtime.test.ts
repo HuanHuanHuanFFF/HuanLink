@@ -6,7 +6,7 @@ import type {
   AgentRuntimeInput,
   AgentRuntimeResult,
   RunId,
-  SessionId
+  SessionId,
 } from "../src/index.js";
 
 describe("agent runtime contract", () => {
@@ -20,20 +20,21 @@ describe("agent runtime contract", () => {
       // 用最小假实现验证合同形状即可被消费。
       async run(input: AgentRuntimeInput): Promise<AgentRuntimeResult> {
         return {
-          output: `${input.runId}:${input.sessionId}:${input.input}`
+          output: `${input.runId}:${input.sessionId}:${input.input}`,
         };
-      }
+      },
     };
 
     const result = await runtime.run({
       runId,
       sessionId,
       input: "hello local runtime",
-      signal: abortController.signal
+      signal: abortController.signal,
     });
 
     expect(result).toEqual({
-      output: "run_local_runtime_01:session_local_runtime_01:hello local runtime"
+      output:
+        "run_local_runtime_01:session_local_runtime_01:hello local runtime",
     });
   });
 });

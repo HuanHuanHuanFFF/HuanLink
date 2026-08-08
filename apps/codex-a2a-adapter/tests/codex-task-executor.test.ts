@@ -8,7 +8,7 @@ import {
   TaskState,
   type SendMessageResult,
   type StreamResponse,
-  type Task
+  type Task,
 } from "@a2a-js/sdk";
 import { ClientFactory, type Client } from "@a2a-js/sdk/client";
 import { afterEach, describe, expect, it } from "vitest";
@@ -19,12 +19,12 @@ import type {
   CodexRuntimeClient,
   InterruptCodexTurnOptions,
   StartCodexThreadOptions,
-  StartCodexTurnOptions
+  StartCodexTurnOptions,
 } from "../src/codex-app-server-client.js";
 import { CodexTaskExecutor } from "../src/codex-task-executor.js";
 import {
   startAdapterServer,
-  type RunningAdapterServer
+  type RunningAdapterServer,
 } from "../src/server.js";
 import { RecordingRuntimeLogger } from "./support/recording-runtime-logger.js";
 
@@ -65,14 +65,14 @@ class ControlledCodexRuntime implements CodexRuntimeClient {
   }
 
   onNotification(
-    listener: (notification: CodexAppServerNotification) => void
+    listener: (notification: CodexAppServerNotification) => void,
   ): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
 
   onServerRequest(
-    listener: (request: CodexAppServerRequest) => void
+    listener: (request: CodexAppServerRequest) => void,
   ): () => void {
     this.serverRequestListeners.add(listener);
     return () => this.serverRequestListeners.delete(listener);
@@ -80,7 +80,7 @@ class ControlledCodexRuntime implements CodexRuntimeClient {
 
   async respondToServerRequest(
     id: string | number,
-    result: unknown
+    result: unknown,
   ): Promise<void> {
     this.serverResponses.push({ id, result });
     this.onRespondToServerRequest?.();
@@ -90,7 +90,7 @@ class ControlledCodexRuntime implements CodexRuntimeClient {
   }
 
   async startThread(
-    options: StartCodexThreadOptions
+    options: StartCodexThreadOptions,
   ): Promise<{ threadId: string }> {
     this.startThreadCalls.push(options);
     return { threadId: "thread-1" };
@@ -134,15 +134,15 @@ function createSendRequest(text: string, returnImmediately: boolean) {
     message: {
       messageId: randomUUID(),
       role: "ROLE_USER",
-      parts: [{ text }]
+      parts: [{ text }],
     },
-    configuration: { returnImmediately }
+    configuration: { returnImmediately },
   });
 }
 
 function createContinuationRequest(
   task: Task,
-  answers: Record<string, string[]>
+  answers: Record<string, string[]>,
 ) {
   return SendMessageRequest.fromJSON({
     message: {
@@ -150,14 +150,14 @@ function createContinuationRequest(
       taskId: task.id,
       contextId: task.contextId,
       role: "ROLE_USER",
-      parts: [{ data: { answers } }]
+      parts: [{ data: { answers } }],
     },
-    configuration: { returnImmediately: true }
+    configuration: { returnImmediately: true },
   });
 }
 
 function userInputRequest(
-  overrides: Partial<{ id: string; threadId: string; turnId: string }> = {}
+  overrides: Partial<{ id: string; threadId: string; turnId: string }> = {},
 ): CodexAppServerRequest {
   return {
     id: overrides.id ?? randomUUID(),
@@ -176,19 +176,19 @@ function userInputRequest(
           options: [
             {
               label: "Adapter only",
-              description: "Limit changes to the Codex adapter."
-            }
-          ]
-        }
+              description: "Limit changes to the Codex adapter.",
+            },
+          ],
+        },
       ],
-      autoResolutionMs: null
-    }
+      autoResolutionMs: null,
+    },
   };
 }
 
 function scheduleInputRequest(
   runtime: ControlledCodexRuntime,
-  request: CodexAppServerRequest = userInputRequest()
+  request: CodexAppServerRequest = userInputRequest(),
 ): void {
   runtime.onStartTurn = () => {
     setTimeout(() => {
@@ -196,8 +196,8 @@ function scheduleInputRequest(
         method: "turn/started",
         params: {
           threadId: "thread-1",
-          turn: { id: "turn-1", status: "inProgress", items: [] }
-        }
+          turn: { id: "turn-1", status: "inProgress", items: [] },
+        },
       });
       runtime.emitServerRequest(request);
     }, 0);
@@ -230,7 +230,7 @@ async function startClient(
       branch: string;
       workspace: string;
     }>;
-  } = {}
+  } = {},
 ): Promise<{ client: Client; executor: CodexTaskExecutor }> {
   const executor = new CodexTaskExecutor({
     client: runtime,
@@ -243,25 +243,27 @@ async function startClient(
       options.validateWorkspace ??
       (async () => ({
         branch: "spike/demo-v0",
-        workspace: "D:/CodingProject/HuanLink"
-      }))
+        workspace: "D:/CodingProject/HuanLink",
+      })),
   });
   const server = await startAdapterServer({ executor, port: 0 });
   runningServers.push(server);
   return {
     client: await new ClientFactory().createFromUrl(server.origin),
-    executor
+    executor,
   };
 }
 
 async function waitForTaskState(
   client: Client,
   taskId: string,
-  expected: TaskState
+  expected: TaskState,
 ): Promise<Task> {
   await expect
     .poll(async () => {
-      const task = await client.getTask(GetTaskRequest.fromJSON({ id: taskId }));
+      const task = await client.getTask(
+        GetTaskRequest.fromJSON({ id: taskId }),
+      );
       return task.status?.state;
     })
     .toBe(expected);
@@ -271,7 +273,7 @@ async function waitForTaskState(
 function scheduleCompletedTurn(
   runtime: ControlledCodexRuntime,
   items: Record<string, unknown>[],
-  diff?: string
+  diff?: string,
 ): void {
   runtime.onStartTurn = () => {
     setTimeout(() => {
@@ -279,27 +281,27 @@ function scheduleCompletedTurn(
         method: "turn/started",
         params: {
           threadId: "thread-1",
-          turn: { id: "turn-1", status: "inProgress", items: [] }
-        }
+          turn: { id: "turn-1", status: "inProgress", items: [] },
+        },
       });
       for (const item of items) {
         runtime.emit({
           method: "item/completed",
-          params: { threadId: "thread-1", turnId: "turn-1", item }
+          params: { threadId: "thread-1", turnId: "turn-1", item },
         });
       }
       if (diff !== undefined) {
         runtime.emit({
           method: "turn/diff/updated",
-          params: { threadId: "thread-1", turnId: "turn-1", diff }
+          params: { threadId: "thread-1", turnId: "turn-1", diff },
         });
       }
       runtime.emit({
         method: "turn/completed",
         params: {
           threadId: "thread-1",
-          turn: { id: "turn-1", status: "completed", items: [] }
-        }
+          turn: { id: "turn-1", status: "completed", items: [] },
+        },
       });
     }, 0);
   };
@@ -329,13 +331,13 @@ describe("CodexTaskExecutor", () => {
         await validationGate;
         return {
           branch: "spike/demo-v0",
-          workspace: "D:/CodingProject/HuanLink"
+          workspace: "D:/CodingProject/HuanLink",
         };
-      }
+      },
     });
 
     const submitted = requireTask(
-      await client.sendMessage(createSendRequest("Return immediately", true))
+      await client.sendMessage(createSendRequest("Return immediately", true)),
     );
 
     expect(submitted.status?.state).toBe(TaskState.TASK_STATE_SUBMITTED);
@@ -354,8 +356,8 @@ describe("CodexTaskExecutor", () => {
           method: "turn/started",
           params: {
             threadId: "thread-1",
-            turn: { id: "turn-1", status: "inProgress", items: [] }
-          }
+            turn: { id: "turn-1", status: "inProgress", items: [] },
+          },
         });
         runtime.emit({
           method: "item/completed",
@@ -365,9 +367,9 @@ describe("CodexTaskExecutor", () => {
             item: {
               type: "agentMessage",
               id: "message-1",
-              text: "Implemented the focused change."
-            }
-          }
+              text: "Implemented the focused change.",
+            },
+          },
         });
         runtime.emit({
           method: "item/completed",
@@ -381,26 +383,26 @@ describe("CodexTaskExecutor", () => {
               changes: [
                 {
                   path: "apps/codex-a2a-adapter/src/example.ts",
-                  diff: "+export const real = true;"
-                }
-              ]
-            }
-          }
+                  diff: "+export const real = true;",
+                },
+              ],
+            },
+          },
         });
         runtime.emit({
           method: "turn/diff/updated",
           params: {
             threadId: "thread-1",
             turnId: "turn-1",
-            diff: "diff --git a/example.ts b/example.ts"
-          }
+            diff: "diff --git a/example.ts b/example.ts",
+          },
         });
         runtime.emit({
           method: "turn/completed",
           params: {
             threadId: "thread-1",
-            turn: { id: "turn-1", status: "completed", items: [] }
-          }
+            turn: { id: "turn-1", status: "completed", items: [] },
+          },
         });
       }, 0);
     };
@@ -408,7 +410,7 @@ describe("CodexTaskExecutor", () => {
     const events: StreamResponse[] = [];
 
     for await (const event of client.sendMessageStream(
-      createSendRequest("Implement the focused task", false)
+      createSendRequest("Implement the focused task", false),
     )) {
       events.push(event);
     }
@@ -416,23 +418,23 @@ describe("CodexTaskExecutor", () => {
     expect(events.map(taskStateFrom).filter(Boolean)).toEqual([
       TaskState.TASK_STATE_SUBMITTED,
       TaskState.TASK_STATE_WORKING,
-      TaskState.TASK_STATE_COMPLETED
+      TaskState.TASK_STATE_COMPLETED,
     ]);
     expect(runtime.startThreadCalls).toEqual([
       expect.objectContaining({
         cwd: "D:/CodingProject/HuanLink",
-        model: "gpt-5.4-mini"
-      })
+        model: "gpt-5.4-mini",
+      }),
     ]);
     expect(runtime.startTurnCalls).toEqual([
       {
         threadId: "thread-1",
-        prompt: "Implement the focused task"
-      }
+        prompt: "Implement the focused task",
+      },
     ]);
 
     const artifact = events.find(
-      (event) => event.payload?.$case === "artifactUpdate"
+      (event) => event.payload?.$case === "artifactUpdate",
     );
     expect(artifact?.payload?.$case).toBe("artifactUpdate");
     if (artifact?.payload?.$case !== "artifactUpdate") {
@@ -445,17 +447,15 @@ describe("CodexTaskExecutor", () => {
     }
     expect(resultArtifact.parts[0]?.content).toEqual({
       $case: "text",
-      value: expect.stringContaining("Implemented the focused change.")
+      value: expect.stringContaining("Implemented the focused change."),
     });
     expect(resultArtifact.parts[0]?.content).toEqual({
       $case: "text",
-      value: expect.stringContaining(
-        "apps/codex-a2a-adapter/src/example.ts"
-      )
+      value: expect.stringContaining("apps/codex-a2a-adapter/src/example.ts"),
     });
     expect(resultArtifact.parts[0]?.content).toEqual({
       $case: "text",
-      value: expect.stringContaining("diff --git a/example.ts b/example.ts")
+      value: expect.stringContaining("diff --git a/example.ts b/example.ts"),
     });
     const taskEvent = events.find((event) => event.payload?.$case === "task");
     expect(taskEvent?.payload?.$case).toBe("task");
@@ -464,39 +464,45 @@ describe("CodexTaskExecutor", () => {
     }
     const taskFields = {
       a2aTaskId: taskEvent.payload.value.id,
-      contextId: taskEvent.payload.value.contextId
+      contextId: taskEvent.payload.value.contextId,
     };
     expect(logger.entries).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           level: "info",
           message: "adapter.task.received",
-          fields: expect.objectContaining(taskFields)
+          fields: expect.objectContaining(taskFields),
         }),
         expect.objectContaining({
           level: "info",
           message: "codex.thread.ready",
-          fields: expect.objectContaining({ ...taskFields, threadId: "thread-1" })
+          fields: expect.objectContaining({
+            ...taskFields,
+            threadId: "thread-1",
+          }),
         }),
         expect.objectContaining({
           level: "info",
           message: "codex.turn.started",
-          fields: expect.objectContaining({ ...taskFields, turnId: "turn-1" })
+          fields: expect.objectContaining({ ...taskFields, turnId: "turn-1" }),
         }),
         expect.objectContaining({
           level: "info",
           message: "adapter.artifact.published",
-          fields: expect.objectContaining({ ...taskFields, changedFileCount: 1 })
+          fields: expect.objectContaining({
+            ...taskFields,
+            changedFileCount: 1,
+          }),
         }),
         expect.objectContaining({
           level: "info",
           message: "adapter.task.terminal",
           fields: expect.objectContaining({
             ...taskFields,
-            state: TaskState.TASK_STATE_COMPLETED
-          })
-        })
-      ])
+            state: TaskState.TASK_STATE_COMPLETED,
+          }),
+        }),
+      ]),
     );
   });
 
@@ -508,8 +514,8 @@ describe("CodexTaskExecutor", () => {
           method: "turn/started",
           params: {
             threadId: "thread-1",
-            turn: { id: "turn-1", status: "inProgress", items: [] }
-          }
+            turn: { id: "turn-1", status: "inProgress", items: [] },
+          },
         });
         runtime.emitServerRequest({
           id: "input-1",
@@ -528,24 +534,24 @@ describe("CodexTaskExecutor", () => {
                 options: [
                   {
                     label: "Adapter only",
-                    description: "Limit changes to the Codex adapter."
-                  }
-                ]
-              }
+                    description: "Limit changes to the Codex adapter.",
+                  },
+                ],
+              },
             ],
-            autoResolutionMs: null
-          }
+            autoResolutionMs: null,
+          },
         });
       }, 0);
     };
     const { client } = await startClient(runtime);
     const submitted = requireTask(
-      await client.sendMessage(createSendRequest("Ask when blocked", true))
+      await client.sendMessage(createSendRequest("Ask when blocked", true)),
     );
     const paused = await waitForTaskState(
       client,
       submitted.id,
-      TaskState.TASK_STATE_INPUT_REQUIRED
+      TaskState.TASK_STATE_INPUT_REQUIRED,
     );
 
     expect(paused.status?.message?.parts).toEqual(
@@ -553,8 +559,8 @@ describe("CodexTaskExecutor", () => {
         expect.objectContaining({
           content: {
             $case: "text",
-            value: expect.stringContaining("Which files may be changed?")
-          }
+            value: expect.stringContaining("Which files may be changed?"),
+          },
         }),
         expect.objectContaining({
           content: {
@@ -563,21 +569,21 @@ describe("CodexTaskExecutor", () => {
               questions: [
                 expect.objectContaining({
                   id: "scope",
-                  question: "Which files may be changed?"
-                })
-              ]
-            }
-          }
-        })
-      ])
+                  question: "Which files may be changed?",
+                }),
+              ],
+            },
+          },
+        }),
+      ]),
     );
     expect(runtime.startThreadCalls).toHaveLength(1);
     expect(runtime.startTurnCalls).toHaveLength(1);
 
     const continued = requireTask(
       await client.sendMessage(
-        createContinuationRequest(paused, { scope: ["Adapter only"] })
-      )
+        createContinuationRequest(paused, { scope: ["Adapter only"] }),
+      ),
     );
     expect(continued.id).toBe(submitted.id);
     expect(continued.contextId).toBe(submitted.contextId);
@@ -586,9 +592,9 @@ describe("CodexTaskExecutor", () => {
       {
         id: "input-1",
         result: {
-          answers: { scope: { answers: ["Adapter only"] } }
-        }
-      }
+          answers: { scope: { answers: ["Adapter only"] } },
+        },
+      },
     ]);
     expect(runtime.startThreadCalls).toHaveLength(1);
     expect(runtime.startTurnCalls).toHaveLength(1);
@@ -601,25 +607,25 @@ describe("CodexTaskExecutor", () => {
         item: {
           type: "agentMessage",
           phase: "final_answer",
-          text: "Continued after receiving the requested scope."
-        }
-      }
+          text: "Continued after receiving the requested scope.",
+        },
+      },
     });
     runtime.emit({
       method: "turn/completed",
       params: {
         threadId: "thread-1",
-        turn: { id: "turn-1", status: "completed", items: [] }
-      }
+        turn: { id: "turn-1", status: "completed", items: [] },
+      },
     });
 
     const completed = await waitForTaskState(
       client,
       submitted.id,
-      TaskState.TASK_STATE_COMPLETED
+      TaskState.TASK_STATE_COMPLETED,
     );
     expect(artifactText(completed)).toContain(
-      "Continued after receiving the requested scope."
+      "Continued after receiving the requested scope.",
     );
   });
 
@@ -635,68 +641,75 @@ describe("CodexTaskExecutor", () => {
           item: {
             type: "agentMessage",
             phase: "final_answer",
-            text: "Completed synchronously with the reverse response."
-          }
-        }
+            text: "Completed synchronously with the reverse response.",
+          },
+        },
       });
       runtime.emit({
         method: "turn/completed",
         params: {
           threadId: "thread-1",
-          turn: { id: "turn-1", status: "completed", items: [] }
-        }
+          turn: { id: "turn-1", status: "completed", items: [] },
+        },
       });
     };
     const { client } = await startClient(runtime);
     const submitted = requireTask(
-      await client.sendMessage(createSendRequest("Answer without a race", true))
+      await client.sendMessage(
+        createSendRequest("Answer without a race", true),
+      ),
     );
     const paused = await waitForTaskState(
       client,
       submitted.id,
-      TaskState.TASK_STATE_INPUT_REQUIRED
+      TaskState.TASK_STATE_INPUT_REQUIRED,
     );
 
     await client.sendMessage(
-      createContinuationRequest(paused, { scope: ["Adapter only"] })
+      createContinuationRequest(paused, { scope: ["Adapter only"] }),
     );
 
     const completed = await waitForTaskState(
       client,
       submitted.id,
-      TaskState.TASK_STATE_COMPLETED
+      TaskState.TASK_STATE_COMPLETED,
     );
     expect(artifactText(completed)).toContain(
-      "Completed synchronously with the reverse response."
+      "Completed synchronously with the reverse response.",
     );
   });
 
   it("fails and releases the original execution when answering Codex fails", async () => {
     const runtime = new ControlledCodexRuntime();
-    scheduleInputRequest(runtime, userInputRequest({ id: "input-write-failure" }));
+    scheduleInputRequest(
+      runtime,
+      userInputRequest({ id: "input-write-failure" }),
+    );
     runtime.respondToServerRequestError = new Error("response pipe closed");
     const { client, executor } = await startClient(runtime);
     const submitted = requireTask(
-      await client.sendMessage(createSendRequest("Handle response failure", true))
+      await client.sendMessage(
+        createSendRequest("Handle response failure", true),
+      ),
     );
     const paused = await waitForTaskState(
       client,
       submitted.id,
-      TaskState.TASK_STATE_INPUT_REQUIRED
+      TaskState.TASK_STATE_INPUT_REQUIRED,
     );
 
     await client.sendMessage(
-      createContinuationRequest(paused, { scope: ["Adapter only"] })
+      createContinuationRequest(paused, { scope: ["Adapter only"] }),
     );
 
     const failed = await waitForTaskState(
       client,
       submitted.id,
-      TaskState.TASK_STATE_FAILED
+      TaskState.TASK_STATE_FAILED,
     );
     expect(failed.status?.message?.parts[0]?.content).toEqual({
       $case: "text",
-      value: expect.stringContaining("response pipe closed")
+      value: expect.stringContaining("response pipe closed"),
     });
     await new Promise<void>((resolve) => setImmediate(resolve));
     await executor.close(1_000);
@@ -708,12 +721,14 @@ describe("CodexTaskExecutor", () => {
     scheduleInputRequest(runtime, userInputRequest({ id: "input-first" }));
     const { client } = await startClient(runtime);
     const submitted = requireTask(
-      await client.sendMessage(createSendRequest("Reject duplicate input", true))
+      await client.sendMessage(
+        createSendRequest("Reject duplicate input", true),
+      ),
     );
     await waitForTaskState(
       client,
       submitted.id,
-      TaskState.TASK_STATE_INPUT_REQUIRED
+      TaskState.TASK_STATE_INPUT_REQUIRED,
     );
 
     runtime.emitServerRequest(userInputRequest({ id: "input-second" }));
@@ -721,7 +736,7 @@ describe("CodexTaskExecutor", () => {
 
     expect(runtime.discardedServerRequests).toHaveLength(2);
     expect(new Set(runtime.discardedServerRequests)).toEqual(
-      new Set(["input-first", "input-second"])
+      new Set(["input-first", "input-second"]),
     );
     runtime.emitClose(new Error("test cleanup"));
   });
@@ -731,33 +746,33 @@ describe("CodexTaskExecutor", () => {
     scheduleInputRequest(runtime);
     const { client } = await startClient(runtime);
     const submitted = requireTask(
-      await client.sendMessage(createSendRequest("Wait for my scope", true))
+      await client.sendMessage(createSendRequest("Wait for my scope", true)),
     );
     const paused = await waitForTaskState(
       client,
       submitted.id,
-      TaskState.TASK_STATE_INPUT_REQUIRED
+      TaskState.TASK_STATE_INPUT_REQUIRED,
     );
 
     runtime.emit({
       method: "turn/completed",
       params: {
         threadId: "thread-1",
-        turn: { id: "turn-1", status: "completed", items: [] }
-      }
+        turn: { id: "turn-1", status: "completed", items: [] },
+      },
     });
     await new Promise<void>((resolve) => setTimeout(resolve, 25));
 
     await expect(
-      client.getTask(GetTaskRequest.fromJSON({ id: submitted.id }))
+      client.getTask(GetTaskRequest.fromJSON({ id: submitted.id })),
     ).resolves.toMatchObject({
-      status: { state: TaskState.TASK_STATE_INPUT_REQUIRED }
+      status: { state: TaskState.TASK_STATE_INPUT_REQUIRED },
     });
 
     const continued = requireTask(
       await client.sendMessage(
-        createContinuationRequest(paused, { scope: ["Adapter only"] })
-      )
+        createContinuationRequest(paused, { scope: ["Adapter only"] }),
+      ),
     );
     expect(continued.status?.state).toBe(TaskState.TASK_STATE_WORKING);
     expect(runtime.startTurnCalls).toHaveLength(1);
@@ -771,18 +786,22 @@ describe("CodexTaskExecutor", () => {
         item: {
           type: "agentMessage",
           phase: "final_answer",
-          text: "Completed after the real continuation."
-        }
-      }
+          text: "Completed after the real continuation.",
+        },
+      },
     });
     runtime.emit({
       method: "turn/completed",
       params: {
         threadId: "thread-1",
-        turn: { id: "turn-1", status: "completed", items: [] }
-      }
+        turn: { id: "turn-1", status: "completed", items: [] },
+      },
     });
-    await waitForTaskState(client, submitted.id, TaskState.TASK_STATE_COMPLETED);
+    await waitForTaskState(
+      client,
+      submitted.id,
+      TaskState.TASK_STATE_COMPLETED,
+    );
   });
 
   it("ignores user-input requests that do not match both the active thread and turn", async () => {
@@ -793,29 +812,27 @@ describe("CodexTaskExecutor", () => {
           method: "turn/started",
           params: {
             threadId: "thread-1",
-            turn: { id: "turn-1", status: "inProgress", items: [] }
-          }
+            turn: { id: "turn-1", status: "inProgress", items: [] },
+          },
         });
       }, 0);
     };
     const { client } = await startClient(runtime);
     const submitted = requireTask(
-      await client.sendMessage(createSendRequest("Keep request routing strict", true))
+      await client.sendMessage(
+        createSendRequest("Keep request routing strict", true),
+      ),
     );
     await waitForTaskState(client, submitted.id, TaskState.TASK_STATE_WORKING);
 
-    runtime.emitServerRequest(
-      userInputRequest({ turnId: "turn-other" })
-    );
-    runtime.emitServerRequest(
-      userInputRequest({ threadId: "thread-other" })
-    );
+    runtime.emitServerRequest(userInputRequest({ turnId: "turn-other" }));
+    runtime.emitServerRequest(userInputRequest({ threadId: "thread-other" }));
     await new Promise<void>((resolve) => setImmediate(resolve));
 
     await expect(
-      client.getTask(GetTaskRequest.fromJSON({ id: submitted.id }))
+      client.getTask(GetTaskRequest.fromJSON({ id: submitted.id })),
     ).resolves.toMatchObject({
-      status: { state: TaskState.TASK_STATE_WORKING }
+      status: { state: TaskState.TASK_STATE_WORKING },
     });
     runtime.emitClose(new Error("test cleanup"));
   });
@@ -825,32 +842,32 @@ describe("CodexTaskExecutor", () => {
     scheduleInputRequest(runtime);
     const { client } = await startClient(runtime);
     const submitted = requireTask(
-      await client.sendMessage(createSendRequest("Validate my response", true))
+      await client.sendMessage(createSendRequest("Validate my response", true)),
     );
     const paused = await waitForTaskState(
       client,
       submitted.id,
-      TaskState.TASK_STATE_INPUT_REQUIRED
+      TaskState.TASK_STATE_INPUT_REQUIRED,
     );
 
     const firstRequest = createContinuationRequest(paused, {
-      unknown: ["not allowed"]
+      unknown: ["not allowed"],
     });
-    const firstRejected = requireTask(
-      await client.sendMessage(
-        firstRequest
-      )
-    );
+    const firstRejected = requireTask(await client.sendMessage(firstRequest));
     const secondRejected = requireTask(
       await client.sendMessage(
-        createContinuationRequest(paused, { unknown: ["still not allowed"] })
-      )
+        createContinuationRequest(paused, { unknown: ["still not allowed"] }),
+      ),
     );
 
-    expect(firstRejected.status?.state).toBe(TaskState.TASK_STATE_INPUT_REQUIRED);
-    expect(secondRejected.status?.state).toBe(TaskState.TASK_STATE_INPUT_REQUIRED);
+    expect(firstRejected.status?.state).toBe(
+      TaskState.TASK_STATE_INPUT_REQUIRED,
+    );
+    expect(secondRejected.status?.state).toBe(
+      TaskState.TASK_STATE_INPUT_REQUIRED,
+    );
     expect(firstRejected.status?.message?.messageId).not.toBe(
-      secondRejected.status?.message?.messageId
+      secondRejected.status?.message?.messageId,
     );
     expect(runtime.serverResponses).toEqual([]);
     expect(runtime.startThreadCalls).toHaveLength(1);
@@ -860,7 +877,7 @@ describe("CodexTaskExecutor", () => {
 
   it.each([
     ["failed", TaskState.TASK_STATE_FAILED],
-    ["interrupted", TaskState.TASK_STATE_CANCELED]
+    ["interrupted", TaskState.TASK_STATE_CANCELED],
   ] as const)(
     "honors a real %s turn terminal while user input is pending",
     async (turnStatus, expectedState) => {
@@ -868,18 +885,20 @@ describe("CodexTaskExecutor", () => {
       scheduleInputRequest(runtime);
       const { client } = await startClient(runtime);
       const submitted = requireTask(
-        await client.sendMessage(createSendRequest("Observe the real terminal", true))
+        await client.sendMessage(
+          createSendRequest("Observe the real terminal", true),
+        ),
       );
       await waitForTaskState(
         client,
         submitted.id,
-        TaskState.TASK_STATE_INPUT_REQUIRED
+        TaskState.TASK_STATE_INPUT_REQUIRED,
       );
       const controller = new AbortController();
       const iterator = client
         .resubscribeTask(
           SubscribeToTaskRequest.fromJSON({ id: submitted.id }),
-          { signal: controller.signal }
+          { signal: controller.signal },
         )
         [Symbol.asyncIterator]();
       await expect(iterator.next()).resolves.toMatchObject({
@@ -887,9 +906,9 @@ describe("CodexTaskExecutor", () => {
         value: {
           payload: {
             $case: "task",
-            value: { status: { state: TaskState.TASK_STATE_INPUT_REQUIRED } }
-          }
-        }
+            value: { status: { state: TaskState.TASK_STATE_INPUT_REQUIRED } },
+          },
+        },
       });
       const nextEvent = iterator.next();
       await new Promise<void>((resolve) => setImmediate(resolve));
@@ -905,9 +924,9 @@ describe("CodexTaskExecutor", () => {
               turnStatus === "failed"
                 ? { message: "Codex turn failed while awaiting input" }
                 : undefined,
-            items: []
-          }
-        }
+            items: [],
+          },
+        },
       });
       try {
         await expect(nextEvent).resolves.toMatchObject({
@@ -915,15 +934,15 @@ describe("CodexTaskExecutor", () => {
           value: {
             payload: {
               $case: "statusUpdate",
-              value: { status: { state: expectedState } }
-            }
-          }
+              value: { status: { state: expectedState } },
+            },
+          },
         });
       } finally {
         controller.abort();
         runtime.emitClose(new Error("test cleanup"));
       }
-    }
+    },
   );
 
   it.each(["cancel", "close"] as const)(
@@ -937,25 +956,27 @@ describe("CodexTaskExecutor", () => {
             method: "turn/completed",
             params: {
               threadId: "thread-1",
-              turn: { id: "turn-1", status: "interrupted", items: [] }
-            }
+              turn: { id: "turn-1", status: "interrupted", items: [] },
+            },
           });
         }, 0);
       };
       const { client, executor } = await startClient(runtime);
       const submitted = requireTask(
-        await client.sendMessage(createSendRequest("Clean up pending input", true))
+        await client.sendMessage(
+          createSendRequest("Clean up pending input", true),
+        ),
       );
       await waitForTaskState(
         client,
         submitted.id,
-        TaskState.TASK_STATE_INPUT_REQUIRED
+        TaskState.TASK_STATE_INPUT_REQUIRED,
       );
       const controller = new AbortController();
       const iterator = client
         .resubscribeTask(
           SubscribeToTaskRequest.fromJSON({ id: submitted.id }),
-          { signal: controller.signal }
+          { signal: controller.signal },
         )
         [Symbol.asyncIterator]();
       await iterator.next();
@@ -965,7 +986,7 @@ describe("CodexTaskExecutor", () => {
       try {
         if (mode === "cancel") {
           await client.cancelTask(
-            CancelTaskRequest.fromJSON({ id: submitted.id })
+            CancelTaskRequest.fromJSON({ id: submitted.id }),
           );
         } else {
           await executor.close(1_000);
@@ -977,14 +998,14 @@ describe("CodexTaskExecutor", () => {
           value: {
             payload: {
               $case: "statusUpdate",
-              value: { status: { state: TaskState.TASK_STATE_CANCELED } }
-            }
-          }
+              value: { status: { state: TaskState.TASK_STATE_CANCELED } },
+            },
+          },
         });
       } finally {
         controller.abort();
       }
-    }
+    },
   );
 
   it("uses the non-empty final answer and never lets empty agent messages overwrite it", async () => {
@@ -993,38 +1014,40 @@ describe("CodexTaskExecutor", () => {
       {
         type: "agentMessage",
         phase: "commentary",
-        text: "Working through the edge case."
+        text: "Working through the edge case.",
       },
       { type: "agentMessage", phase: "commentary", text: "   " },
       {
         type: "agentMessage",
         phase: "final_answer",
-        text: "Implemented the focused change."
+        text: "Implemented the focused change.",
       },
-      { type: "agentMessage", phase: "final_answer", text: "" }
+      { type: "agentMessage", phase: "final_answer", text: "" },
     ]);
     const { client } = await startClient(runtime);
 
     const submitted = requireTask(
-      await client.sendMessage(createSendRequest("Complete without edits", true))
+      await client.sendMessage(
+        createSendRequest("Complete without edits", true),
+      ),
     );
     const completed = await waitForTaskState(
       client,
       submitted.id,
-      TaskState.TASK_STATE_COMPLETED
+      TaskState.TASK_STATE_COMPLETED,
     );
 
     expect(artifactText(completed)).toContain(
-      "Summary:\nImplemented the focused change."
+      "Summary:\nImplemented the focused change.",
     );
     expect(artifactText(completed)).toContain(
-      "Last commentary:\nWorking through the edge case."
+      "Last commentary:\nWorking through the edge case.",
     );
     expect(runtime.startThreadCalls[0]?.developerInstructions).toContain(
-      "Make minor implementation or wording choices yourself instead of pausing to ask."
+      "Make minor implementation or wording choices yourself instead of pausing to ask.",
     );
     expect(runtime.startThreadCalls[0]?.developerInstructions).toContain(
-      "When genuinely blocked by missing user input, use request_user_input."
+      "When genuinely blocked by missing user input, use request_user_input.",
     );
   });
 
@@ -1032,21 +1055,21 @@ describe("CodexTaskExecutor", () => {
     const runtime = new ControlledCodexRuntime();
     scheduleCompletedTurn(runtime, [
       { type: "agentMessage", text: "Legacy app-server final answer." },
-      { type: "agentMessage", text: "  " }
+      { type: "agentMessage", text: "  " },
     ]);
     const { client } = await startClient(runtime);
 
     const submitted = requireTask(
-      await client.sendMessage(createSendRequest("Use legacy messages", true))
+      await client.sendMessage(createSendRequest("Use legacy messages", true)),
     );
     const completed = await waitForTaskState(
       client,
       submitted.id,
-      TaskState.TASK_STATE_COMPLETED
+      TaskState.TASK_STATE_COMPLETED,
     );
 
     expect(artifactText(completed)).toContain(
-      "Summary:\nLegacy app-server final answer."
+      "Summary:\nLegacy app-server final answer.",
     );
   });
 
@@ -1056,22 +1079,24 @@ describe("CodexTaskExecutor", () => {
       {
         type: "agentMessage",
         phase: null,
-        text: "Null-phase app-server final answer."
-      }
+        text: "Null-phase app-server final answer.",
+      },
     ]);
     const { client } = await startClient(runtime);
 
     const submitted = requireTask(
-      await client.sendMessage(createSendRequest("Use a null message phase", true))
+      await client.sendMessage(
+        createSendRequest("Use a null message phase", true),
+      ),
     );
     const completed = await waitForTaskState(
       client,
       submitted.id,
-      TaskState.TASK_STATE_COMPLETED
+      TaskState.TASK_STATE_COMPLETED,
     );
 
     expect(artifactText(completed)).toContain(
-      "Summary:\nNull-phase app-server final answer."
+      "Summary:\nNull-phase app-server final answer.",
     );
   });
 
@@ -1081,30 +1106,30 @@ describe("CodexTaskExecutor", () => {
       {
         type: "agentMessage",
         phase: "final_answer",
-        text: "Known final answer."
+        text: "Known final answer.",
       },
       {
         type: "agentMessage",
         phase: "unknown_phase",
-        text: "Unknown phase must be ignored."
-      }
+        text: "Unknown phase must be ignored.",
+      },
     ]);
     const { client: clientWithFinal } = await startClient(runtimeWithFinal);
 
     const submittedWithFinal = requireTask(
       await clientWithFinal.sendMessage(
-        createSendRequest("Keep the known final answer", true)
-      )
+        createSendRequest("Keep the known final answer", true),
+      ),
     );
     const completed = await waitForTaskState(
       clientWithFinal,
       submittedWithFinal.id,
-      TaskState.TASK_STATE_COMPLETED
+      TaskState.TASK_STATE_COMPLETED,
     );
 
     expect(artifactText(completed)).toContain("Summary:\nKnown final answer.");
     expect(artifactText(completed)).not.toContain(
-      "Unknown phase must be ignored."
+      "Unknown phase must be ignored.",
     );
 
     const unknownOnlyRuntime = new ControlledCodexRuntime();
@@ -1112,26 +1137,27 @@ describe("CodexTaskExecutor", () => {
       {
         type: "agentMessage",
         phase: "unknown_phase",
-        text: "Unknown phase is not a meaningful result."
-      }
+        text: "Unknown phase is not a meaningful result.",
+      },
     ]);
     const { client: unknownOnlyClient } = await startClient(unknownOnlyRuntime);
 
     const unknownOnlySubmitted = requireTask(
       await unknownOnlyClient.sendMessage(
-        createSendRequest("Return only an unknown phase", true)
-      )
+        createSendRequest("Return only an unknown phase", true),
+      ),
     );
     const failed = await waitForTaskState(
       unknownOnlyClient,
       unknownOnlySubmitted.id,
-      TaskState.TASK_STATE_FAILED
+      TaskState.TASK_STATE_FAILED,
     );
 
     expect(failed.artifacts).toEqual([]);
     expect(failed.status?.message?.parts[0]?.content).toEqual({
       $case: "text",
-      value: "Codex turn completed without a final answer or any reported changes."
+      value:
+        "Codex turn completed without a final answer or any reported changes.",
     });
   });
 
@@ -1143,35 +1169,33 @@ describe("CodexTaskExecutor", () => {
         {
           type: "agentMessage",
           phase: "commentary",
-          text: "Applied the requested edit."
+          text: "Applied the requested edit.",
         },
         { type: "agentMessage", phase: "final_answer", text: " " },
         {
           type: "fileChange",
           status: "completed",
-          changes: [{ path: "apps/codex-a2a-adapter/src/example.ts" }]
-        }
+          changes: [{ path: "apps/codex-a2a-adapter/src/example.ts" }],
+        },
       ],
-      "diff --git a/example.ts b/example.ts"
+      "diff --git a/example.ts b/example.ts",
     );
     const { client } = await startClient(runtime);
 
     const submitted = requireTask(
-      await client.sendMessage(createSendRequest("Edit the example", true))
+      await client.sendMessage(createSendRequest("Edit the example", true)),
     );
     const completed = await waitForTaskState(
       client,
       submitted.id,
-      TaskState.TASK_STATE_COMPLETED
+      TaskState.TASK_STATE_COMPLETED,
     );
     const result = artifactText(completed);
 
     expect(result).toContain(
-      "Summary:\nCodex completed without a final answer."
+      "Summary:\nCodex completed without a final answer.",
     );
-    expect(result).toContain(
-      "Last commentary:\nApplied the requested edit."
-    );
+    expect(result).toContain("Last commentary:\nApplied the requested edit.");
     expect(result).toContain("apps/codex-a2a-adapter/src/example.ts");
     expect(result).toContain("diff --git a/example.ts b/example.ts");
   });
@@ -1182,27 +1206,29 @@ describe("CodexTaskExecutor", () => {
       {
         type: "agentMessage",
         phase: "commentary",
-        text: "Investigated the request but produced no result."
+        text: "Investigated the request but produced no result.",
       },
       { type: "agentMessage", phase: "commentary", text: "" },
-      { type: "agentMessage", phase: "final_answer", text: "   " }
+      { type: "agentMessage", phase: "final_answer", text: "   " },
     ]);
     const { client } = await startClient(runtime);
 
     const submitted = requireTask(
-      await client.sendMessage(createSendRequest("Return an honest result", true))
+      await client.sendMessage(
+        createSendRequest("Return an honest result", true),
+      ),
     );
     const failed = await waitForTaskState(
       client,
       submitted.id,
-      TaskState.TASK_STATE_FAILED
+      TaskState.TASK_STATE_FAILED,
     );
 
     expect(failed.artifacts).toEqual([]);
     expect(failed.status?.message?.parts[0]?.content).toEqual({
       $case: "text",
       value:
-        "Codex turn completed without a final answer or any reported changes. Last commentary: Investigated the request but produced no result."
+        "Codex turn completed without a final answer or any reported changes. Last commentary: Investigated the request but produced no result.",
     });
   });
 
@@ -1214,21 +1240,21 @@ describe("CodexTaskExecutor", () => {
     });
     const { client } = await startClient(runtime);
     const first = requireTask(
-      await client.sendMessage(createSendRequest("First active task", true))
+      await client.sendMessage(createSendRequest("First active task", true)),
     );
     await expect.poll(() => runtime.startTurnCalls).toHaveLength(1);
 
     const conflicting = requireTask(
-      await client.sendMessage(createSendRequest("Conflicting task", true))
+      await client.sendMessage(createSendRequest("Conflicting task", true)),
     );
     const rejected = await waitForTaskState(
       client,
       conflicting.id,
-      TaskState.TASK_STATE_FAILED
+      TaskState.TASK_STATE_FAILED,
     );
     expect(rejected.status?.message?.parts[0]?.content).toEqual({
       $case: "text",
-      value: "Codex thread thread-1 already has an active task"
+      value: "Codex thread thread-1 already has an active task",
     });
 
     runtime.emit({
@@ -1239,9 +1265,9 @@ describe("CodexTaskExecutor", () => {
         item: {
           type: "agentMessage",
           id: "message-before-start-response",
-          text: "The first task retained its early notification."
-        }
-      }
+          text: "The first task retained its early notification.",
+        },
+      },
     });
     releaseFirstTurn();
     await waitForTaskState(client, first.id, TaskState.TASK_STATE_WORKING);
@@ -1250,27 +1276,27 @@ describe("CodexTaskExecutor", () => {
       params: {
         threadId: "thread-1",
         turnId: "turn-1",
-        diff: "diff --git a/first.ts b/first.ts"
-      }
+        diff: "diff --git a/first.ts b/first.ts",
+      },
     });
     runtime.emit({
       method: "turn/completed",
       params: {
         threadId: "thread-1",
-        turn: { id: "turn-1", status: "completed", items: [] }
-      }
+        turn: { id: "turn-1", status: "completed", items: [] },
+      },
     });
 
     const completed = await waitForTaskState(
       client,
       first.id,
-      TaskState.TASK_STATE_COMPLETED
+      TaskState.TASK_STATE_COMPLETED,
     );
     expect(completed.artifacts[0]?.parts[0]?.content).toEqual({
       $case: "text",
       value: expect.stringContaining(
-        "The first task retained its early notification."
-      )
+        "The first task retained its early notification.",
+      ),
     });
   });
 
@@ -1282,38 +1308,38 @@ describe("CodexTaskExecutor", () => {
           method: "turn/started",
           params: {
             threadId: "thread-1",
-            turn: { id: "turn-1", status: "inProgress", items: [] }
-          }
+            turn: { id: "turn-1", status: "inProgress", items: [] },
+          },
         });
       }, 0);
     };
     const { client } = await startClient(runtime);
     const submitted = requireTask(
-      await client.sendMessage(createSendRequest("Cancel the real turn", true))
+      await client.sendMessage(createSendRequest("Cancel the real turn", true)),
     );
     await waitForTaskState(client, submitted.id, TaskState.TASK_STATE_WORKING);
 
     const canceling = client.cancelTask(
-      CancelTaskRequest.fromJSON({ id: submitted.id })
+      CancelTaskRequest.fromJSON({ id: submitted.id }),
     );
-    await expect.poll(() => runtime.interruptCalls).toEqual([
-      { threadId: "thread-1", turnId: "turn-1" }
-    ]);
+    await expect
+      .poll(() => runtime.interruptCalls)
+      .toEqual([{ threadId: "thread-1", turnId: "turn-1" }]);
     expect(
-      (await client.getTask(GetTaskRequest.fromJSON({ id: submitted.id }))).status
-        ?.state
+      (await client.getTask(GetTaskRequest.fromJSON({ id: submitted.id })))
+        .status?.state,
     ).toBe(TaskState.TASK_STATE_WORKING);
 
     runtime.emit({
       method: "turn/completed",
       params: {
         threadId: "thread-1",
-        turn: { id: "turn-1", status: "interrupted", items: [] }
-      }
+        turn: { id: "turn-1", status: "interrupted", items: [] },
+      },
     });
 
     await expect(canceling).resolves.toMatchObject({
-      status: { state: TaskState.TASK_STATE_CANCELED }
+      status: { state: TaskState.TASK_STATE_CANCELED },
     });
   });
 
@@ -1325,14 +1351,16 @@ describe("CodexTaskExecutor", () => {
           method: "turn/started",
           params: {
             threadId: "thread-1",
-            turn: { id: "turn-1", status: "inProgress", items: [] }
-          }
+            turn: { id: "turn-1", status: "inProgress", items: [] },
+          },
         });
       }, 0);
     };
     const { client } = await startClient(runtime);
     const submitted = requireTask(
-      await client.sendMessage(createSendRequest("Observe app-server exit", true))
+      await client.sendMessage(
+        createSendRequest("Observe app-server exit", true),
+      ),
     );
     await waitForTaskState(client, submitted.id, TaskState.TASK_STATE_WORKING);
 
@@ -1341,12 +1369,12 @@ describe("CodexTaskExecutor", () => {
     const failed = await waitForTaskState(
       client,
       submitted.id,
-      TaskState.TASK_STATE_FAILED
+      TaskState.TASK_STATE_FAILED,
     );
     expect(failed.status?.message?.parts[0]?.content).toEqual({
       $case: "text",
       value:
-        "Codex app-server connection closed: app-server exited with code 1"
+        "Codex app-server connection closed: app-server exited with code 1",
     });
   });
 
@@ -1358,8 +1386,8 @@ describe("CodexTaskExecutor", () => {
           method: "turn/started",
           params: {
             threadId: "thread-1",
-            turn: { id: "turn-1", status: "inProgress", items: [] }
-          }
+            turn: { id: "turn-1", status: "inProgress", items: [] },
+          },
         });
       }, 0);
     };
@@ -1369,26 +1397,26 @@ describe("CodexTaskExecutor", () => {
           method: "turn/completed",
           params: {
             threadId: "thread-1",
-            turn: { id: "turn-1", status: "interrupted", items: [] }
-          }
+            turn: { id: "turn-1", status: "interrupted", items: [] },
+          },
         });
       }, 0);
     };
     const { client, executor } = await startClient(runtime);
     const submitted = requireTask(
-      await client.sendMessage(createSendRequest("Shutdown active turn", true))
+      await client.sendMessage(createSendRequest("Shutdown active turn", true)),
     );
     await waitForTaskState(client, submitted.id, TaskState.TASK_STATE_WORKING);
 
     await executor.close(1_000);
 
     expect(runtime.interruptCalls).toEqual([
-      { threadId: "thread-1", turnId: "turn-1" }
+      { threadId: "thread-1", turnId: "turn-1" },
     ]);
     await expect(
-      client.getTask(GetTaskRequest.fromJSON({ id: submitted.id }))
+      client.getTask(GetTaskRequest.fromJSON({ id: submitted.id })),
     ).resolves.toMatchObject({
-      status: { state: TaskState.TASK_STATE_CANCELED }
+      status: { state: TaskState.TASK_STATE_CANCELED },
     });
   });
 
@@ -1400,28 +1428,28 @@ describe("CodexTaskExecutor", () => {
           method: "turn/started",
           params: {
             threadId: "thread-1",
-            turn: { id: "turn-1", status: "inProgress", items: [] }
-          }
+            turn: { id: "turn-1", status: "inProgress", items: [] },
+          },
         });
       }, 0);
     };
     const { client } = await startClient(runtime, { cancelTimeoutMs: 25 });
     const submitted = requireTask(
-      await client.sendMessage(createSendRequest("Timeout cancellation", true))
+      await client.sendMessage(createSendRequest("Timeout cancellation", true)),
     );
     await waitForTaskState(client, submitted.id, TaskState.TASK_STATE_WORKING);
 
     await expect(
-      client.cancelTask(CancelTaskRequest.fromJSON({ id: submitted.id }))
+      client.cancelTask(CancelTaskRequest.fromJSON({ id: submitted.id })),
     ).rejects.toThrow("Task not cancelable");
 
     const failed = await client.getTask(
-      GetTaskRequest.fromJSON({ id: submitted.id })
+      GetTaskRequest.fromJSON({ id: submitted.id }),
     );
     expect(failed.status?.state).toBe(TaskState.TASK_STATE_FAILED);
     expect(failed.status?.message?.parts[0]?.content).toEqual({
       $case: "text",
-      value: "Timed out waiting for Codex interrupted terminal status"
+      value: "Timed out waiting for Codex interrupted terminal status",
     });
     expect(runtime.closeCalls).toBe(1);
   });
@@ -1434,15 +1462,15 @@ describe("CodexTaskExecutor", () => {
           method: "turn/started",
           params: {
             threadId: "thread-1",
-            turn: { id: "turn-1", status: "inProgress", items: [] }
-          }
+            turn: { id: "turn-1", status: "inProgress", items: [] },
+          },
         });
         runtime.emit({
           method: "turn/completed",
           params: {
             threadId: "thread-1",
-            turn: { id: "turn-1", status: "completed", items: [] }
-          }
+            turn: { id: "turn-1", status: "completed", items: [] },
+          },
         });
       }, 0);
     };
@@ -1455,25 +1483,25 @@ describe("CodexTaskExecutor", () => {
         }
         return {
           branch: "spike/demo-v0",
-          workspace: "D:/CodingProject/HuanLink"
+          workspace: "D:/CodingProject/HuanLink",
         };
-      }
+      },
     });
     const submitted = requireTask(
-      await client.sendMessage(createSendRequest("Guard completion", true))
+      await client.sendMessage(createSendRequest("Guard completion", true)),
     );
 
     const failed = await waitForTaskState(
       client,
       submitted.id,
-      TaskState.TASK_STATE_FAILED
+      TaskState.TASK_STATE_FAILED,
     );
     expect(validations).toBe(2);
     expect(failed.artifacts).toEqual([]);
     expect(failed.status?.message?.parts[0]?.content).toEqual({
       $case: "text",
       value:
-        "Workspace changed before Codex completion: Expected branch spike/demo-v0, found main"
+        "Workspace changed before Codex completion: Expected branch spike/demo-v0, found main",
     });
   });
 });

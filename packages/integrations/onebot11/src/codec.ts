@@ -61,8 +61,7 @@ export function normalizeOneBot11Message(
   const segments: OneBot11MessageSegment[] = [];
   for (const rawSegment of input) {
     const segment = asObject(rawSegment);
-    const rawData =
-      segment?.data === null ? {} : asObject(segment?.data);
+    const rawData = segment?.data === null ? {} : asObject(segment?.data);
     if (
       segment === undefined ||
       typeof segment.type !== "string" ||
@@ -169,7 +168,9 @@ export function createOneBot11SendGroupTextAction(
 ): OneBot11Action {
   const groupId = parseOutgoingGroupId(conversationId);
   if (groupId === undefined) {
-    throw new Error("OneBot 11 group ID must be a safe positive integer string");
+    throw new Error(
+      "OneBot 11 group ID must be a safe positive integer string",
+    );
   }
   if (typeof echo !== "string" || echo.length === 0) {
     throw new Error("OneBot 11 action echo must be a non-empty string");

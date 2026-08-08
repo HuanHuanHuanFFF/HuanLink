@@ -4,7 +4,7 @@ import { NoopRuntimeLogger } from "../logging/noop-runtime-logger.js";
 import type {
   RuntimeLogFields,
   RuntimeLogLevel,
-  RuntimeLogger
+  RuntimeLogger,
 } from "../logging/types.js";
 import type { AgentCallId, RunId } from "../shared/ids.js";
 import {
@@ -23,7 +23,7 @@ import {
   type AgentCallSubmitter,
   type AgentCallTaskSnapshot,
   type AgentCallTerminalListener,
-  type AgentCallTransport
+  type AgentCallTransport,
 } from "./types.js";
 
 export type AgentCallServiceOptions = {
@@ -58,7 +58,10 @@ export class AgentCallService
   private readonly createMessageId: () => string;
   private readonly logger: RuntimeLogger;
   private readonly now: () => Date;
-  private readonly recordsByAgentCallId = new Map<AgentCallId, AgentCallRecord>();
+  private readonly recordsByAgentCallId = new Map<
+    AgentCallId,
+    AgentCallRecord
+  >();
   private readonly agentCallIdByTaskId = new Map<string, AgentCallId>();
   private readonly terminalHandled = new Set<AgentCallId>();
   private readonly inputRequiredHandled = new Set<AgentCallId>();
@@ -122,7 +125,7 @@ export class AgentCallService
         : { questions: cloneQuestions(record.questions) }),
       ...(record.statusMessage === undefined
         ? {}
-        : { statusMessage: record.statusMessage })
+        : { statusMessage: record.statusMessage }),
     };
   }
 
@@ -133,13 +136,13 @@ export class AgentCallService
     this.activeSubmissions.add(operation);
     void operation.then(
       () => this.activeSubmissions.delete(operation),
-      () => this.activeSubmissions.delete(operation)
+      () => this.activeSubmissions.delete(operation),
     );
     return operation;
   }
 
   private async performSubmit(
-    request: AgentCallRequest
+    request: AgentCallRequest,
   ): Promise<AgentCallReceipt> {
     const agentCallId = this.createId();
     const startedFields: RuntimeLogFields = {
@@ -151,17 +154,17 @@ export class AgentCallService
       inputLength: request.input.length,
       ...(request.contextId === undefined
         ? {}
-        : { contextId: request.contextId })
+        : { contextId: request.contextId }),
     };
     this.writeLog("info", "agent_call.submit.started", startedFields);
     this.writeLog("debug", "agent_call.submit.started", {
       ...startedFields,
-      input: request.input
+      input: request.input,
     });
     try {
       const capability = await this.transport.discoverCapability(
         request.skillId,
-        { signal: request.signal }
+        { signal: request.signal },
       );
       if (this.closed) {
         throw new Error("AgentCallService closed during submission");
@@ -173,7 +176,7 @@ export class AgentCallService
         ...(request.contextId === undefined
           ? {}
           : { contextId: request.contextId }),
-        ...(request.signal === undefined ? {} : { signal: request.signal })
+        ...(request.signal === undefined ? {} : { signal: request.signal }),
       });
 
       if (this.closed) {
@@ -183,8 +186,8 @@ export class AgentCallService
           this.reportBackgroundError(
             new Error(
               `Failed to cancel remote task ${submitted.taskId} accepted during shutdown`,
-              { cause: error }
-            )
+              { cause: error },
+            ),
           );
         }
         throw new Error("AgentCallService closed during submission");
@@ -216,19 +219,19 @@ export class AgentCallService
           ? {}
           : { statusMessage: submitted.statusMessage }),
         createdAt: timestamp,
-        updatedAt: timestamp
+        updatedAt: timestamp,
       };
 
       this.recordsByAgentCallId.set(agentCallId, record);
       this.agentCallIdByTaskId.set(submitted.taskId, agentCallId);
       const acceptedFields = {
         ...agentCallLogFields(record),
-        ...snapshotCountFields(submitted)
+        ...snapshotCountFields(submitted),
       };
       this.writeLog("info", "agent_call.submit.accepted", acceptedFields);
       this.writeLog("debug", "agent_call.submit.accepted", {
         ...acceptedFields,
-        snapshot: snapshotForLog(submitted)
+        snapshot: snapshotForLog(submitted),
       });
       this.startWatcher(agentCallId, submitted);
 
@@ -237,7 +240,7 @@ export class AgentCallService
         executionMode: request.executionMode,
         agentCallId,
         taskId: submitted.taskId,
-        state: submitted.state
+        state: submitted.state,
       };
     } catch (error) {
       const failedFields = { ...startedFields, ...errorLogFields(error) };
@@ -266,7 +269,7 @@ export class AgentCallService
 
   async waitForOutcome(
     agentCallId: AgentCallId,
-    signal?: AbortSignal
+    signal?: AbortSignal,
   ): Promise<AgentCallRecord> {
     const current = this.requireRecord(agentCallId);
     if (isAgentCallOutcomeState(current.state)) {
@@ -302,13 +305,13 @@ export class AgentCallService
             const outcome = this.requireRecord(agentCallId);
             if (!isAgentCallOutcomeState(outcome.state)) {
               throw new Error(
-                `AgentCall ${agentCallId} stopped before an outcome`
+                `AgentCall ${agentCallId} stopped before an outcome`,
               );
             }
             return this.requireRecordClone(agentCallId);
-          })
+          }),
         ]),
-        signal
+        signal,
       );
     } finally {
       waiters.delete(waiter);
@@ -336,7 +339,7 @@ export class AgentCallService
   cancel(agentCallId: AgentCallId): Promise<AgentCallRecord> {
     const record = this.requireRecord(agentCallId);
     const activeCancellation = this.activeCancellationByTaskId.get(
-      record.taskId
+      record.taskId,
     );
     if (activeCancellation) {
       return activeCancellation;
@@ -345,7 +348,7 @@ export class AgentCallService
     this.writeLog("info", "agent_call.cancel.started", startedFields);
     this.writeLog("debug", "agent_call.cancel.started", {
       ...startedFields,
-      snapshot: snapshotForLog(snapshotFromRecord(record))
+      snapshot: snapshotForLog(snapshotFromRecord(record)),
     });
     this.activeContinuationByTaskId.get(record.taskId)?.controller.abort();
     const operation = Promise.resolve()
@@ -354,12 +357,12 @@ export class AgentCallService
         const snapshot = snapshotFromRecord(canceledRecord);
         const completedFields = {
           ...agentCallLogFields(canceledRecord),
-          ...snapshotCountFields(snapshot)
+          ...snapshotCountFields(snapshot),
         };
         this.writeLog("info", "agent_call.cancel.completed", completedFields);
         this.writeLog("debug", "agent_call.cancel.completed", {
           ...completedFields,
-          snapshot: snapshotForLog(snapshot)
+          snapshot: snapshotForLog(snapshot),
         });
         return canceledRecord;
       })
@@ -368,7 +371,7 @@ export class AgentCallService
         this.writeLog("error", "agent_call.cancel.failed", failedFields);
         this.writeLog("debug", "agent_call.cancel.failed", {
           ...failedFields,
-          snapshot: snapshotForLog(snapshotFromRecord(record))
+          snapshot: snapshotForLog(snapshotFromRecord(record)),
         });
         throw error;
       });
@@ -376,14 +379,14 @@ export class AgentCallService
     this.activeCancellations.add(operation);
     void operation.then(
       () => this.finishCancellation(record.taskId, operation),
-      () => this.finishCancellation(record.taskId, operation)
+      () => this.finishCancellation(record.taskId, operation),
     );
     return operation;
   }
 
   private async performCancel(
     agentCallId: AgentCallId,
-    taskId: string
+    taskId: string,
   ): Promise<AgentCallRecord> {
     const continuation = this.activeContinuationByTaskId.get(taskId);
     if (continuation) {
@@ -403,7 +406,7 @@ export class AgentCallService
 
   private finishCancellation(
     taskId: string,
-    operation: Promise<AgentCallRecord>
+    operation: Promise<AgentCallRecord>,
   ): void {
     if (this.activeCancellationByTaskId.get(taskId) === operation) {
       this.activeCancellationByTaskId.delete(taskId);
@@ -414,7 +417,7 @@ export class AgentCallService
   continueTask(
     taskId: string,
     answers: AgentCallInputAnswers,
-    signal?: AbortSignal
+    signal?: AbortSignal,
   ): Promise<AgentCallRecord> {
     this.assertOpen();
     const initialRecord = this.getByTaskId(taskId);
@@ -424,21 +427,21 @@ export class AgentCallService
         ? { a2aTaskId: taskId }
         : agentCallLogFields(initialRecord)),
       questionIds,
-      count: questionIds.length
+      count: questionIds.length,
     };
     this.writeLog("info", "agent_call.continue.started", startedFields);
     this.writeLog("debug", "agent_call.continue.started", {
       ...startedFields,
-      answers: answersForLog(answers, initialRecord?.questions)
+      answers: answersForLog(answers, initialRecord?.questions),
     });
     if (this.activeCancellationByTaskId.has(taskId)) {
       return Promise.reject(
-        new Error(`Remote task ${taskId} is being canceled`)
+        new Error(`Remote task ${taskId} is being canceled`),
       );
     }
     if (this.activeContinuationByTaskId.has(taskId)) {
       return Promise.reject(
-        new Error(`Remote task ${taskId} already has an active continuation`)
+        new Error(`Remote task ${taskId} already has an active continuation`),
       );
     }
     const controller = new AbortController();
@@ -452,20 +455,20 @@ export class AgentCallService
           taskId,
           answers,
           continuationSignal,
-          controller.signal
-        )
+          controller.signal,
+        ),
       )
       .then((record) => {
         const acceptedFields = {
           ...agentCallLogFields(record),
           questionIds,
-          count: questionIds.length
+          count: questionIds.length,
         };
         this.writeLog("info", "agent_call.continue.accepted", acceptedFields);
         this.writeLog("debug", "agent_call.continue.accepted", {
           ...acceptedFields,
           answers: answersForLog(answers, initialRecord?.questions),
-          snapshot: snapshotForLog(snapshotFromRecord(record))
+          snapshot: snapshotForLog(snapshotFromRecord(record)),
         });
         return record;
       })
@@ -474,7 +477,7 @@ export class AgentCallService
         this.writeLog("error", "agent_call.continue.failed", failedFields);
         this.writeLog("debug", "agent_call.continue.failed", {
           ...failedFields,
-          answers: answersForLog(answers, initialRecord?.questions)
+          answers: answersForLog(answers, initialRecord?.questions),
         });
         throw error;
       });
@@ -494,7 +497,7 @@ export class AgentCallService
         ) {
           this.activeContinuationByTaskId.delete(taskId);
         }
-      }
+      },
     );
     return operation;
   }
@@ -503,7 +506,7 @@ export class AgentCallService
     taskId: string,
     answers: AgentCallInputAnswers,
     signal: AbortSignal,
-    internalSignal: AbortSignal
+    internalSignal: AbortSignal,
   ): Promise<AgentCallRecord> {
     const agentCallId = this.agentCallIdByTaskId.get(taskId);
     if (agentCallId === undefined) {
@@ -512,7 +515,7 @@ export class AgentCallService
     const record = this.requireRecord(agentCallId);
     if (record.state !== "input-required") {
       throw new Error(
-        `Remote task ${taskId} must be input-required before it can continue`
+        `Remote task ${taskId} must be input-required before it can continue`,
       );
     }
     const previousWatcher = this.activeWatchers.get(agentCallId);
@@ -526,7 +529,7 @@ export class AgentCallService
     const latestRecord = this.requireRecord(agentCallId);
     if (latestRecord.state !== "input-required") {
       throw new Error(
-        `Remote task ${taskId} must be input-required before it can continue`
+        `Remote task ${taskId} must be input-required before it can continue`,
       );
     }
 
@@ -537,7 +540,7 @@ export class AgentCallService
         : { contextId: latestRecord.contextId }),
       messageId: this.createMessageId(),
       signal,
-      answers: cloneAnswers(answers)
+      answers: cloneAnswers(answers),
     });
     if (this.closed) {
       await this.rejectContinuationDuringShutdown(agentCallId, taskId);
@@ -546,7 +549,7 @@ export class AgentCallService
     this.assertMatchingTask(latestRecord, continued);
     if (continued.state !== "working") {
       throw new Error(
-        `Remote task ${taskId} continued in unexpected state ${continued.state}`
+        `Remote task ${taskId} continued in unexpected state ${continued.state}`,
       );
     }
     await this.applySnapshot(agentCallId, continued);
@@ -564,7 +567,7 @@ export class AgentCallService
 
   private async rejectContinuationDuringShutdown(
     agentCallId: AgentCallId,
-    taskId: string
+    taskId: string,
   ): Promise<never> {
     try {
       await this.transport.cancelTask(taskId);
@@ -572,13 +575,13 @@ export class AgentCallService
       this.reportBackgroundError(
         new Error(
           `Failed to cancel remote task ${taskId} continued during shutdown`,
-          { cause: error }
+          { cause: error },
         ),
-        agentCallId
+        agentCallId,
       );
     }
     throw new Error(
-      `AgentCallService closed during continuation of remote task ${taskId}`
+      `AgentCallService closed during continuation of remote task ${taskId}`,
     );
   }
 
@@ -589,18 +592,14 @@ export class AgentCallService
       this.activeContinuationByTaskId.size > 0 ||
       this.activeCancellations.size > 0
     ) {
-      await Promise.allSettled(
-        [
-          ...[...this.activeWatchers.values()].map(
-            (watcher) => watcher.promise
-          ),
-          ...this.activePauseNotifications,
-          ...[...this.activeContinuationByTaskId.values()].map(
-            (continuation) => continuation.promise
-          ),
-          ...this.activeCancellations
-        ]
-      );
+      await Promise.allSettled([
+        ...[...this.activeWatchers.values()].map((watcher) => watcher.promise),
+        ...this.activePauseNotifications,
+        ...[...this.activeContinuationByTaskId.values()].map(
+          (continuation) => continuation.promise,
+        ),
+        ...this.activeCancellations,
+      ]);
     }
   }
 
@@ -618,7 +617,7 @@ export class AgentCallService
       submissionCount: this.activeSubmissions.size,
       watcherCount: this.activeWatchers.size,
       continuationCount: this.activeContinuationByTaskId.size,
-      cancellationCount: this.activeCancellations.size
+      cancellationCount: this.activeCancellations.size,
     });
     this.closeOperation = Promise.resolve().then(() => this.drainClose());
     return this.closeOperation;
@@ -634,12 +633,12 @@ export class AgentCallService
     }
     await Promise.allSettled(
       [...this.activeContinuationByTaskId.values()].map(
-        (continuation) => continuation.promise
-      )
+        (continuation) => continuation.promise,
+      ),
     );
     await this.waitForIdle();
     this.writeLog("info", "agent_call.service.closed", {
-      count: this.recordsByAgentCallId.size
+      count: this.recordsByAgentCallId.size,
     });
   }
 
@@ -648,101 +647,98 @@ export class AgentCallService
       this.reportBackgroundError(
         new Error(
           `Failed to cancel AgentCall ${agentCallId} after its wait was aborted`,
-          { cause: cancelError }
+          { cause: cancelError },
         ),
-        agentCallId
+        agentCallId,
       );
     });
   }
 
   private startWatcher(
     agentCallId: AgentCallId,
-    initial: AgentCallTaskSnapshot
+    initial: AgentCallTaskSnapshot,
   ): void {
     const controller = new AbortController();
-    const promise = Promise.resolve()
-      .then(async () => {
-        const startedRecord = this.requireRecord(agentCallId);
-        const startedFields = agentCallLogFields(startedRecord);
-        this.writeLog("info", "agent_call.watcher.started", startedFields);
-        this.writeLog("debug", "agent_call.watcher.started", {
-          ...startedFields,
-          snapshot: snapshotForLog(initial)
-        });
-        try {
-          if (isAgentCallOutcomeState(initial.state)) {
-            await this.applySnapshot(agentCallId, initial);
-            return;
-          }
+    const promise = Promise.resolve().then(async () => {
+      const startedRecord = this.requireRecord(agentCallId);
+      const startedFields = agentCallLogFields(startedRecord);
+      this.writeLog("info", "agent_call.watcher.started", startedFields);
+      this.writeLog("debug", "agent_call.watcher.started", {
+        ...startedFields,
+        snapshot: snapshotForLog(initial),
+      });
+      try {
+        if (isAgentCallOutcomeState(initial.state)) {
+          await this.applySnapshot(agentCallId, initial);
+          return;
+        }
 
-          let sawOutcome = false;
-          for await (const snapshot of this.transport.watchTask(initial.taskId, {
-            signal: controller.signal
-          })) {
-            this.assertMatchingTask(this.requireRecord(agentCallId), snapshot);
-            await this.applySnapshot(agentCallId, snapshot);
-            if (isAgentCallOutcomeState(snapshot.state)) {
-              sawOutcome = true;
-              break;
-            }
-          }
-
-          const finalState = this.requireRecord(agentCallId).state;
-          const isPaused =
-            finalState === "input-required" || finalState === "auth-required";
-          if (
-            !sawOutcome &&
-            !isPaused &&
-            !this.closed &&
-            !controller.signal.aborted
-          ) {
-            throw new Error(
-              "Remote task subscription ended before a terminal state"
-            );
-          }
-        } catch (error) {
-          if (!this.closed && !controller.signal.aborted) {
-            const failedFields = {
-              ...agentCallLogFields(this.requireRecord(agentCallId)),
-              ...errorLogFields(error)
-            };
-            this.writeLog("error", "agent_call.watcher.failed", failedFields);
-            this.writeLog("debug", "agent_call.watcher.failed", failedFields);
-          }
-          if (
-            isAgentCallOutcomeState(this.requireRecord(agentCallId).state)
-          ) {
-            this.reportBackgroundError(error, agentCallId);
-            return;
-          }
-          if (
-            !this.closed &&
-            !controller.signal.aborted &&
-            !this.terminalHandled.has(agentCallId)
-          ) {
-            try {
-              await this.applySnapshot(agentCallId, {
-                taskId: initial.taskId,
-                contextId: initial.contextId,
-                state: "failed",
-                artifacts: this.requireRecord(agentCallId).artifacts,
-                statusMessage: errorMessage(error)
-              });
-            } catch (notificationError) {
-              this.reportBackgroundError(notificationError, agentCallId);
-            }
-          }
-        } finally {
-          const stoppedRecord = this.getByAgentCallId(agentCallId);
-          if (stoppedRecord !== undefined) {
-            this.writeLog(
-              "info",
-              "agent_call.watcher.stopped",
-              agentCallLogFields(stoppedRecord)
-            );
+        let sawOutcome = false;
+        for await (const snapshot of this.transport.watchTask(initial.taskId, {
+          signal: controller.signal,
+        })) {
+          this.assertMatchingTask(this.requireRecord(agentCallId), snapshot);
+          await this.applySnapshot(agentCallId, snapshot);
+          if (isAgentCallOutcomeState(snapshot.state)) {
+            sawOutcome = true;
+            break;
           }
         }
-      });
+
+        const finalState = this.requireRecord(agentCallId).state;
+        const isPaused =
+          finalState === "input-required" || finalState === "auth-required";
+        if (
+          !sawOutcome &&
+          !isPaused &&
+          !this.closed &&
+          !controller.signal.aborted
+        ) {
+          throw new Error(
+            "Remote task subscription ended before a terminal state",
+          );
+        }
+      } catch (error) {
+        if (!this.closed && !controller.signal.aborted) {
+          const failedFields = {
+            ...agentCallLogFields(this.requireRecord(agentCallId)),
+            ...errorLogFields(error),
+          };
+          this.writeLog("error", "agent_call.watcher.failed", failedFields);
+          this.writeLog("debug", "agent_call.watcher.failed", failedFields);
+        }
+        if (isAgentCallOutcomeState(this.requireRecord(agentCallId).state)) {
+          this.reportBackgroundError(error, agentCallId);
+          return;
+        }
+        if (
+          !this.closed &&
+          !controller.signal.aborted &&
+          !this.terminalHandled.has(agentCallId)
+        ) {
+          try {
+            await this.applySnapshot(agentCallId, {
+              taskId: initial.taskId,
+              contextId: initial.contextId,
+              state: "failed",
+              artifacts: this.requireRecord(agentCallId).artifacts,
+              statusMessage: errorMessage(error),
+            });
+          } catch (notificationError) {
+            this.reportBackgroundError(notificationError, agentCallId);
+          }
+        }
+      } finally {
+        const stoppedRecord = this.getByAgentCallId(agentCallId);
+        if (stoppedRecord !== undefined) {
+          this.writeLog(
+            "info",
+            "agent_call.watcher.stopped",
+            agentCallLogFields(stoppedRecord),
+          );
+        }
+      }
+    });
 
     const activeWatcher = { controller, promise };
     this.activeWatchers.set(agentCallId, activeWatcher);
@@ -756,13 +752,13 @@ export class AgentCallService
         if (this.activeWatchers.get(agentCallId) === activeWatcher) {
           this.activeWatchers.delete(agentCallId);
         }
-      }
+      },
     );
   }
 
   private async applySnapshot(
     agentCallId: AgentCallId,
-    snapshot: AgentCallTaskSnapshot
+    snapshot: AgentCallTaskSnapshot,
   ): Promise<void> {
     if (this.terminalHandled.has(agentCallId)) {
       return;
@@ -785,10 +781,10 @@ export class AgentCallService
             statusMessage:
               current.state === "input-required" && snapshot.state === "working"
                 ? undefined
-                : current.statusMessage
+                : current.statusMessage,
           }
         : { statusMessage: snapshot.statusMessage }),
-      updatedAt: this.now().toISOString()
+      updatedAt: this.now().toISOString(),
     };
     this.recordsByAgentCallId.set(agentCallId, updated);
 
@@ -796,12 +792,12 @@ export class AgentCallService
       const stateFields = {
         ...agentCallLogFields(updated),
         previousState: current.state,
-        ...snapshotCountFields(snapshot)
+        ...snapshotCountFields(snapshot),
       };
       this.writeLog("info", "agent_call.state.changed", stateFields);
       this.writeLog("debug", "agent_call.state.changed", {
         ...stateFields,
-        snapshot: snapshotForLog(snapshot)
+        snapshot: snapshotForLog(snapshot),
       });
     }
 
@@ -817,13 +813,13 @@ export class AgentCallService
         ...agentCallLogFields(updated),
         questionIds: questions.map(({ id }) => id),
         questionCount: questions.length,
-        statusMessageLength: updated.statusMessage?.length ?? 0
+        statusMessageLength: updated.statusMessage?.length ?? 0,
       };
       this.writeLog("info", "agent_call.paused", pausedFields);
       this.writeLog("debug", "agent_call.paused", {
         ...pausedFields,
         questions: questionsForLog(questions),
-        snapshot: snapshotForLog(snapshot)
+        snapshot: snapshotForLog(snapshot),
       });
       if (
         updated.executionMode === "async" ||
@@ -850,13 +846,13 @@ export class AgentCallService
     const terminalFields = {
       ...agentCallLogFields(updated),
       artifactCount: updated.artifacts.length,
-      statusMessageLength: updated.statusMessage?.length ?? 0
+      statusMessageLength: updated.statusMessage?.length ?? 0,
     };
     this.writeLog("info", "agent_call.terminal", terminalFields);
     this.writeLog("debug", "agent_call.terminal", {
       ...terminalFields,
       artifacts: cloneArtifacts(updated.artifacts),
-      snapshot: snapshotForLog(snapshot)
+      snapshot: snapshotForLog(snapshot),
     });
     const notifyAfterContinuation =
       this.notifyOutcomesAfterContinuation.delete(agentCallId);
@@ -866,17 +862,17 @@ export class AgentCallService
     this.activeWatchers.get(agentCallId)?.controller.abort();
     const results = await Promise.allSettled(
       [...this.terminalListeners].map((listener) =>
-        Promise.resolve().then(() => listener(cloneRecord(updated)!))
-      )
+        Promise.resolve().then(() => listener(cloneRecord(updated)!)),
+      ),
     );
     const failures = results.flatMap((result) =>
-      result.status === "rejected" ? [errorMessage(result.reason)] : []
+      result.status === "rejected" ? [errorMessage(result.reason)] : [],
     );
     if (failures.length > 0) {
       const terminalNotificationError = failures.join("; ");
       this.recordsByAgentCallId.set(agentCallId, {
         ...updated,
-        terminalNotificationError
+        terminalNotificationError,
       });
       throw new Error(terminalNotificationError);
     }
@@ -884,11 +880,11 @@ export class AgentCallService
 
   private assertMatchingTask(
     record: AgentCallRecord,
-    snapshot: AgentCallTaskSnapshot
+    snapshot: AgentCallTaskSnapshot,
   ): void {
     if (record.taskId !== snapshot.taskId) {
       throw new Error(
-        `Remote update task ${snapshot.taskId} does not match ${record.taskId}`
+        `Remote update task ${snapshot.taskId} does not match ${record.taskId}`,
       );
     }
   }
@@ -914,7 +910,7 @@ export class AgentCallService
   private writeLog(
     level: RuntimeLogLevel,
     message: string,
-    fields?: RuntimeLogFields
+    fields?: RuntimeLogFields,
   ): void {
     try {
       this.logger[level](message, fields);
@@ -925,7 +921,7 @@ export class AgentCallService
 
   private reportBackgroundError(
     error: unknown,
-    agentCallId?: AgentCallId
+    agentCallId?: AgentCallId,
   ): void {
     const normalized =
       error instanceof Error ? error : new Error(errorMessage(error));
@@ -935,13 +931,15 @@ export class AgentCallService
         : this.getByAgentCallId(agentCallId);
     const fields = {
       ...(record === undefined ? {} : agentCallLogFields(record)),
-      ...errorLogFields(normalized)
+      ...errorLogFields(normalized),
     };
     this.writeLog("error", "agent_call.background_error", fields);
     this.writeLog("debug", "agent_call.background_error", fields);
     for (const listener of this.backgroundErrorListeners) {
       try {
-        void Promise.resolve(listener(normalized, record)).catch(() => undefined);
+        void Promise.resolve(listener(normalized, record)).catch(
+          () => undefined,
+        );
       } catch {
         // Error observers must not create another unhandled background failure.
       }
@@ -951,8 +949,8 @@ export class AgentCallService
   private notifyPaused(record: AgentCallRecord): void {
     const operation = Promise.allSettled(
       [...this.pausedListeners].map((listener) =>
-        Promise.resolve().then(() => listener(cloneRecord(record)!))
-      )
+        Promise.resolve().then(() => listener(cloneRecord(record)!)),
+      ),
     ).then((results) => {
       for (const result of results) {
         if (result.status === "rejected") {
@@ -963,13 +961,13 @@ export class AgentCallService
     this.activePauseNotifications.add(operation);
     void operation.then(
       () => this.activePauseNotifications.delete(operation),
-      () => this.activePauseNotifications.delete(operation)
+      () => this.activePauseNotifications.delete(operation),
     );
   }
 }
 
 function cloneArtifacts(
-  artifacts: readonly AgentCallRecord["artifacts"][number][]
+  artifacts: readonly AgentCallRecord["artifacts"][number][],
 ): AgentCallRecord["artifacts"] {
   return artifacts.map((artifact) => ({ ...artifact }));
 }
@@ -985,29 +983,29 @@ function agentCallLogFields(record: AgentCallRecord): RuntimeLogFields {
     ...(record.contextId === undefined ? {} : { contextId: record.contextId }),
     skillId: record.skillId,
     state: record.state,
-    executionMode: record.executionMode
+    executionMode: record.executionMode,
   };
 }
 
 function snapshotCountFields(
-  snapshot: AgentCallTaskSnapshot
+  snapshot: AgentCallTaskSnapshot,
 ): RuntimeLogFields {
   return {
     artifactCount: snapshot.artifacts.length,
     questionCount: snapshot.questions?.length ?? 0,
-    statusMessageLength: snapshot.statusMessage?.length ?? 0
+    statusMessageLength: snapshot.statusMessage?.length ?? 0,
   };
 }
 
 function errorLogFields(error: unknown): RuntimeLogFields {
   return {
     errorType: error instanceof Error ? error.name : typeof error,
-    errorMessageLength: errorMessage(error).length
+    errorMessageLength: errorMessage(error).length,
   };
 }
 
 function questionsForLog(
-  questions: NonNullable<AgentCallRecord["questions"]>
+  questions: NonNullable<AgentCallRecord["questions"]>,
 ): unknown[] {
   return questions.map((question) =>
     question.isSecret
@@ -1022,35 +1020,35 @@ function questionsForLog(
               ? null
               : question.options.map(() => ({
                   label: LOG_REDACTED_VALUE,
-                  description: LOG_REDACTED_VALUE
-                }))
+                  description: LOG_REDACTED_VALUE,
+                })),
         }
       : {
           ...question,
           options:
             question.options === null
               ? null
-              : question.options.map((option) => ({ ...option }))
-        }
+              : question.options.map((option) => ({ ...option })),
+        },
   );
 }
 
 function answersForLog(
   answers: AgentCallInputAnswers,
-  questions: AgentCallRecord["questions"]
+  questions: AgentCallRecord["questions"],
 ): AgentCallInputAnswers {
   const ordinaryQuestionIds = new Set(
     (questions ?? [])
       .filter((question) => !question.isSecret)
-      .map((question) => question.id)
+      .map((question) => question.id),
   );
   return Object.fromEntries(
     Object.entries(answers).map(([questionId, values]) => [
       questionId,
       ordinaryQuestionIds.has(questionId)
         ? [...values]
-        : values.map(() => LOG_REDACTED_VALUE)
-    ])
+        : values.map(() => LOG_REDACTED_VALUE),
+    ]),
   );
 }
 
@@ -1065,7 +1063,7 @@ function snapshotForLog(snapshot: AgentCallTaskSnapshot): unknown {
       : { questions: questionsForLog(snapshot.questions) }),
     ...(containsSecretQuestion && snapshot.statusMessage !== undefined
       ? { statusMessage: LOG_REDACTED_VALUE }
-      : {})
+      : {}),
   };
 }
 
@@ -1080,19 +1078,19 @@ function snapshotFromRecord(record: AgentCallRecord): AgentCallTaskSnapshot {
       : { questions: cloneQuestions(record.questions) }),
     ...(record.statusMessage === undefined
       ? {}
-      : { statusMessage: record.statusMessage })
+      : { statusMessage: record.statusMessage }),
   };
 }
 
 function cloneQuestions(
-  questions: NonNullable<AgentCallRecord["questions"]>
+  questions: NonNullable<AgentCallRecord["questions"]>,
 ): NonNullable<AgentCallRecord["questions"]> {
   return questions.map((question) => ({
     ...question,
     options:
       question.options === null
         ? null
-        : question.options.map((option) => ({ ...option }))
+        : question.options.map((option) => ({ ...option })),
   }));
 }
 
@@ -1100,13 +1098,13 @@ function cloneAnswers(answers: AgentCallInputAnswers): AgentCallInputAnswers {
   return Object.fromEntries(
     Object.entries(answers).map(([questionId, values]) => [
       questionId,
-      [...values]
-    ])
+      [...values],
+    ]),
   );
 }
 
 function cloneRecord(
-  record: AgentCallRecord | undefined
+  record: AgentCallRecord | undefined,
 ): AgentCallRecord | undefined {
   return record === undefined
     ? undefined
@@ -1115,7 +1113,7 @@ function cloneRecord(
         artifacts: cloneArtifacts(record.artifacts),
         ...(record.questions === undefined
           ? {}
-          : { questions: cloneQuestions(record.questions) })
+          : { questions: cloneQuestions(record.questions) }),
       };
 }
 
@@ -1125,7 +1123,7 @@ function errorMessage(error: unknown): string {
 
 function waitWithSignal<T>(
   promise: Promise<T>,
-  signal: AbortSignal | undefined
+  signal: AbortSignal | undefined,
 ): Promise<T> {
   if (signal === undefined) {
     return promise;
@@ -1149,7 +1147,7 @@ function waitWithSignal<T>(
       (error) => {
         cleanup();
         reject(error);
-      }
+      },
     );
   });
 }

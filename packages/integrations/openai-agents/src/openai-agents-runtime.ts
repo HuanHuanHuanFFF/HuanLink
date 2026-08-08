@@ -5,7 +5,7 @@ import type {
   AgentRuntimeResult,
   AgentRuntimeTrigger,
   RunId,
-  SessionId
+  SessionId,
 } from "@huanlink/core";
 import { Agent, Runner } from "@openai/agents";
 
@@ -17,7 +17,7 @@ export type OpenAiAgentsRunner = {
     options?: {
       signal?: AbortSignal;
       context?: OpenAiAgentsRunContext;
-    }
+    },
   ): Promise<{ finalOutput: unknown }>;
 };
 
@@ -53,18 +53,18 @@ export class OpenAiAgentsRuntime implements AgentRuntime {
         runId: input.runId,
         sessionId: input.sessionId,
         trigger: input.trigger ?? "user",
-        ...(input.signal === undefined ? {} : { signal: input.signal })
-      }
+        ...(input.signal === undefined ? {} : { signal: input.signal }),
+      },
     });
 
     if (typeof result.finalOutput !== "string") {
       throw new Error(
-        "OpenAiAgentsRuntime expected a text finalOutput from @openai/agents"
+        "OpenAiAgentsRuntime expected a text finalOutput from @openai/agents",
       );
     }
 
     return {
-      output: result.finalOutput
+      output: result.finalOutput,
     };
   }
 }

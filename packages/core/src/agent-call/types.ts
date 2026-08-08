@@ -16,7 +16,7 @@ export const AGENT_CALL_TERMINAL_STATES = [
   "completed",
   "failed",
   "canceled",
-  "rejected"
+  "rejected",
 ] as const satisfies readonly AgentCallTaskState[];
 
 const terminalStates = new Set<AgentCallTaskState>(AGENT_CALL_TERMINAL_STATES);
@@ -90,17 +90,17 @@ export type AgentCallTransportContinueRequest = {
 export interface AgentCallTransport {
   discoverCapability(
     skillId: string,
-    options?: { signal?: AbortSignal }
+    options?: { signal?: AbortSignal },
   ): Promise<AgentCallCapability>;
   submitTask(
-    request: AgentCallTransportSubmitRequest
+    request: AgentCallTransportSubmitRequest,
   ): Promise<AgentCallTaskSnapshot>;
   continueTask(
-    request: AgentCallTransportContinueRequest
+    request: AgentCallTransportContinueRequest,
   ): Promise<AgentCallTaskSnapshot>;
   watchTask(
     taskId: string,
-    options: { signal: AbortSignal }
+    options: { signal: AbortSignal },
   ): AsyncIterable<AgentCallTaskSnapshot>;
   cancelTask(taskId: string): Promise<AgentCallTaskSnapshot>;
 }
@@ -174,19 +174,19 @@ export interface AgentCallContinuator {
   continueTask(
     taskId: string,
     answers: AgentCallInputAnswers,
-    signal?: AbortSignal
+    signal?: AbortSignal,
   ): Promise<AgentCallRecord>;
 }
 
 export type AgentCallTerminalListener = (
-  record: AgentCallRecord
+  record: AgentCallRecord,
 ) => Promise<void> | void;
 
 export type AgentCallPausedListener = (
-  record: AgentCallRecord
+  record: AgentCallRecord,
 ) => Promise<void> | void;
 
 export type AgentCallBackgroundErrorListener = (
   error: Error,
-  record: AgentCallRecord | undefined
+  record: AgentCallRecord | undefined,
 ) => Promise<void> | void;

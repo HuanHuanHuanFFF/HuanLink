@@ -6,7 +6,7 @@ import { startCodexAdapterRuntime } from "./runtime.js";
 
 const logger = createCodexAdapterRuntimeLogger({
   level: parseLogLevel(process.env.HUANLINK_LOG_LEVEL ?? "info"),
-  moduleUrl: import.meta.url
+  moduleUrl: import.meta.url,
 });
 
 try {
@@ -27,7 +27,7 @@ try {
     host,
     logger,
     port,
-    workspace
+    workspace,
   });
   logger.info("adapter.process.started", { origin: runtime.origin });
   console.log(`Codex A2A adapter listening at ${runtime.origin}`);
@@ -50,7 +50,7 @@ try {
         await logger.close();
         console.error("Failed to stop Codex A2A adapter", error);
         process.exit(1);
-      }
+      },
     );
   };
 

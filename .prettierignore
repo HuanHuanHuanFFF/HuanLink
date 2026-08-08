@@ -1,0 +1,40 @@
+# Documentation and external references
+docs/
+references/
+LICENSE
+
+# Dependency, build, and test artifacts
+node_modules/
+.pnpm-store/
+dist/
+build/
+coverage/
+.vite/
+.vitest/
+.vitest-*/
+*.tsbuildinfo
+
+# Local workspace and runtime state
+.agents/
+.codex/
+.codex-tmp/
+.idea/
+.obsidian/
+.tmp/
+.vscode/
+.env*
+.huaness/
+.huanlink/*
+!.huanlink/config/
+!.huanlink/config/**
+runs/
+traces/
+**/*.md
+*.log
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.db
+
+# Package-manager generated content
+pnpm-lock.yaml

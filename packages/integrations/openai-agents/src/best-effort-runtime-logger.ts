@@ -2,11 +2,11 @@ import {
   NoopRuntimeLogger,
   type RuntimeLogFields,
   type RuntimeLogLevel,
-  type RuntimeLogger
+  type RuntimeLogger,
 } from "@huanlink/core";
 
 export function bestEffortRuntimeLogger(
-  logger: RuntimeLogger | undefined
+  logger: RuntimeLogger | undefined,
 ): RuntimeLogger {
   return new BestEffortRuntimeLogger(logger ?? new NoopRuntimeLogger());
 }
@@ -49,7 +49,7 @@ class BestEffortRuntimeLogger implements RuntimeLogger {
   private write(
     level: RuntimeLogLevel,
     message: string,
-    fields?: RuntimeLogFields
+    fields?: RuntimeLogFields,
   ): void {
     try {
       this.delegate[level](message, fields);

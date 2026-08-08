@@ -1,9 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
 
-import {
-  AgentTurnScheduler,
-  type AgentRuntime
-} from "../src/index.js";
+import { AgentTurnScheduler, type AgentRuntime } from "../src/index.js";
 
 function deferred() {
   let resolve!: () => void;
@@ -27,13 +24,13 @@ describe("AgentTurnScheduler", () => {
     const first = scheduler.run({
       runId: "run-first",
       sessionId: "session-shared",
-      input: "first"
+      input: "first",
     });
     const second = scheduler.run({
       runId: "run-reentry",
       sessionId: "session-shared",
       trigger: "agent_call_terminal",
-      input: "second"
+      input: "second",
     });
 
     await new Promise<void>((resolve) => setImmediate(resolve));
@@ -44,7 +41,7 @@ describe("AgentTurnScheduler", () => {
     await expect(second).resolves.toEqual({ output: "run-reentry" });
     expect(run.mock.calls.map(([input]) => input.runId)).toEqual([
       "run-first",
-      "run-reentry"
+      "run-reentry",
     ]);
   });
 });

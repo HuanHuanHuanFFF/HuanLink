@@ -6,7 +6,7 @@ import type { AgentCallRequest } from "@huanlink/core";
 
 import {
   createDeepSeekMainAgentModelBinding,
-  createPhase3MainAgentRuntime
+  createPhase3MainAgentRuntime,
 } from "../../src/index.js";
 
 describe("real DeepSeek MainAgent smoke", () => {
@@ -15,7 +15,7 @@ describe("real DeepSeek MainAgent smoke", () => {
     const apiKey = process.env.DEEPSEEK_API_KEY?.trim();
     if (!apiKey) {
       throw new Error(
-        "DEEPSEEK_API_KEY must be set for the real DeepSeek smoke"
+        "DEEPSEEK_API_KEY must be set for the real DeepSeek smoke",
       );
     }
 
@@ -32,7 +32,7 @@ describe("real DeepSeek MainAgent smoke", () => {
         executionMode: request.executionMode,
         agentCallId: "real-deepseek-agent-call",
         taskId: "real-deepseek-a2a-task",
-        state: "submitted" as const
+        state: "submitted" as const,
       };
     });
     const getByAgentCallId = vi.fn(() => undefined);
@@ -41,21 +41,21 @@ describe("real DeepSeek MainAgent smoke", () => {
       invoker: { invoke },
       taskReader: {
         getByAgentCallId,
-        getByTaskId
+        getByTaskId,
       },
       taskContinuator: {
         continueTask: vi.fn(async () => {
           throw new Error("Unexpected task continuation in this smoke test");
-        })
+        }),
       },
       modelBinding: createDeepSeekMainAgentModelBinding({
         config: {
           provider: "deepseek",
           modelId,
           baseURL,
-          apiKey
-        }
-      })
+          apiKey,
+        },
+      }),
     });
 
     const result = await runtime.run({
@@ -65,8 +65,8 @@ describe("real DeepSeek MainAgent smoke", () => {
       input: [
         "Delegate this concrete coding task exactly once with submit_codex_agent_call:",
         "add one focused unit test for a parser.",
-        "Use executionMode async, then acknowledge the accepted task."
-      ].join(" ")
+        "Use executionMode async, then acknowledge the accepted task.",
+      ].join(" "),
     });
 
     expect(invoke).toHaveBeenCalledTimes(1);
@@ -78,7 +78,7 @@ describe("real DeepSeek MainAgent smoke", () => {
       sessionId: "session-real-deepseek",
       contextId: "session-real-deepseek",
       skillId: "codex-code-task",
-      executionMode: "async"
+      executionMode: "async",
     });
     expect(invocations[0]?.input.trim().length).toBeGreaterThan(0);
     expect(result.output.trim().length).toBeGreaterThan(0);
@@ -88,15 +88,15 @@ describe("real DeepSeek MainAgent smoke", () => {
       JSON.stringify({
         finalTextNonEmpty: true,
         modelId,
-        toolCalled: true
-      })
+        toolCalled: true,
+      }),
     );
   });
 });
 
 function loadRepositoryEnvFile(): void {
   const envFilePath = fileURLToPath(
-    new URL("../../../../.env", import.meta.url)
+    new URL("../../../../.env", import.meta.url),
   );
   try {
     process.loadEnvFile(envFilePath);

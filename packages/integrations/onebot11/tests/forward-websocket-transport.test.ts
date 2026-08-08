@@ -274,9 +274,7 @@ describe("ForwardWebSocketOneBot11Transport", () => {
     const { server, url } = await startServer();
     server.on("connection", (socket) => {
       socket.on("message", (data) => {
-        const request = JSON.parse(
-          data.toString("utf8"),
-        ) as OneBot11JsonObject;
+        const request = JSON.parse(data.toString("utf8")) as OneBot11JsonObject;
         socket.send(
           JSON.stringify({
             status: "async",

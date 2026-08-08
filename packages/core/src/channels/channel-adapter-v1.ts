@@ -1,10 +1,10 @@
 import type {
   ChannelConversationRouteV1,
-  ChannelDescriptorV1
+  ChannelDescriptorV1,
 } from "./channel-instance-v1.js";
 import type {
   ChannelOutboundMessagePartV1,
-  InboundChannelMessageV1
+  InboundChannelMessageV1,
 } from "./channel-message-v1.js";
 
 /** Server 要求指定 Channel 实例发送消息的命令。 */
@@ -48,9 +48,12 @@ export class ChannelOperationError extends Error {
   constructor(
     code: ChannelErrorCodeV1,
     message: string,
-    options: { retryAfterMs?: number; cause?: unknown } = {}
+    options: { retryAfterMs?: number; cause?: unknown } = {},
   ) {
-    super(message, options.cause === undefined ? undefined : { cause: options.cause });
+    super(
+      message,
+      options.cause === undefined ? undefined : { cause: options.cause },
+    );
     this.name = "ChannelOperationError";
     this.code = code;
     this.retryAfterMs = options.retryAfterMs;
@@ -58,7 +61,7 @@ export class ChannelOperationError extends Error {
 }
 
 export type ChannelMessageListenerV1 = (
-  message: InboundChannelMessageV1
+  message: InboundChannelMessageV1,
 ) => Promise<void> | void;
 
 /**

@@ -7,7 +7,7 @@ import type {
   FlushableRuntimeLogger,
   PinoRuntimeLoggerInput,
   RuntimeLogFields,
-  RuntimeLogger
+  RuntimeLogger,
 } from "./types.js";
 
 class JsonlFileDestination extends Writable {
@@ -16,7 +16,7 @@ class JsonlFileDestination extends Writable {
 
   constructor(
     private readonly filePath: string,
-    private readonly redactValues: readonly string[]
+    private readonly redactValues: readonly string[],
   ) {
     super();
   }
@@ -24,7 +24,7 @@ class JsonlFileDestination extends Writable {
   override _write(
     chunk: Buffer | string,
     _encoding: BufferEncoding,
-    callback: (error?: Error | null) => void
+    callback: (error?: Error | null) => void,
   ): void {
     const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
 
@@ -33,7 +33,7 @@ class JsonlFileDestination extends Writable {
       (error: unknown) => {
         reportSinkError(error, this.redactValues);
         callback();
-      }
+      },
     );
   }
 
@@ -105,7 +105,7 @@ class JsonlFileRuntimeLogger implements FlushableRuntimeLogger {
   constructor(
     private readonly delegate: RuntimeLogger,
     private readonly lifecycle: SharedJsonlLifecycle,
-    private readonly redactValues: readonly string[]
+    private readonly redactValues: readonly string[],
   ) {}
 
   debug(message: string, fields?: RuntimeLogFields): void {
@@ -128,7 +128,7 @@ class JsonlFileRuntimeLogger implements FlushableRuntimeLogger {
     return new JsonlFileRuntimeLogger(
       this.delegate.child(bindings),
       this.lifecycle,
-      this.redactValues
+      this.redactValues,
     );
   }
 
@@ -143,7 +143,7 @@ class JsonlFileRuntimeLogger implements FlushableRuntimeLogger {
   private write(
     level: "debug" | "info" | "warn" | "error",
     message: string,
-    fields?: RuntimeLogFields
+    fields?: RuntimeLogFields,
   ): void {
     if (this.lifecycle.isClosed) {
       return;
@@ -159,7 +159,7 @@ class JsonlFileRuntimeLogger implements FlushableRuntimeLogger {
 
 export function createJsonlFileRuntimeLogger(
   filePath: string,
-  options: PinoRuntimeLoggerInput = {}
+  options: PinoRuntimeLoggerInput = {},
 ): FlushableRuntimeLogger {
   const redactValues = normalizeRedactValues(options.redactValues);
   const destination = new JsonlFileDestination(resolve(filePath), redactValues);
@@ -169,13 +169,18 @@ export function createJsonlFileRuntimeLogger(
   return new JsonlFileRuntimeLogger(delegate, lifecycle, redactValues);
 }
 
-function normalizeRedactValues(values: readonly string[] | undefined): string[] {
+function normalizeRedactValues(
+  values: readonly string[] | undefined,
+): string[] {
   return [...new Set((values ?? []).filter((value) => value.length > 0))].sort(
-    (left, right) => right.length - left.length
+    (left, right) => right.length - left.length,
   );
 }
 
-function reportSinkError(error: unknown, redactValues: readonly string[]): void {
+function reportSinkError(
+  error: unknown,
+  redactValues: readonly string[],
+): void {
   let detail = error instanceof Error ? error.message : String(error);
 
   for (const redactValue of redactValues) {

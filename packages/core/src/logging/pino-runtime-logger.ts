@@ -2,12 +2,12 @@
 import pino from "pino";
 import type { Logger as PinoLogger, LoggerOptions } from "pino";
 
-import {resolveRuntimeConfig} from "../runtime/runtime-config.js";
+import { resolveRuntimeConfig } from "../runtime/runtime-config.js";
 import type {
   PinoRuntimeLoggerInput,
   PinoRuntimeLoggerOptions,
   RuntimeLogFields,
-  RuntimeLogger
+  RuntimeLogger,
 } from "./types.js";
 
 const REDACTED_VALUE = "[Redacted]";
@@ -24,7 +24,7 @@ const SECRET_KEY_NAMES = new Set([
   "password",
   "passwd",
   "secret",
-  "clientsecret"
+  "clientsecret",
 ]);
 
 const DEFAULT_REDACT_PATHS = [
@@ -36,14 +36,14 @@ const DEFAULT_REDACT_PATHS = [
   "*.authorization",
   "*.apiKey",
   "*.token",
-  "*.password"
+  "*.password",
 ] as const;
 
 class PinoRuntimeLogger implements RuntimeLogger {
   constructor(
     private readonly logger: PinoLogger,
     private readonly bindings: RuntimeLogFields,
-    private readonly redactValues: readonly string[]
+    private readonly redactValues: readonly string[],
   ) {}
 
   debug(message: string, fields?: RuntimeLogFields): void {
@@ -65,15 +65,15 @@ class PinoRuntimeLogger implements RuntimeLogger {
   child(bindings: RuntimeLogFields): RuntimeLogger {
     return new PinoRuntimeLogger(
       this.logger,
-      {...this.bindings, ...bindings},
-      this.redactValues
+      { ...this.bindings, ...bindings },
+      this.redactValues,
     );
   }
 
   private write(
     level: "debug" | "info" | "warn" | "error",
     message: string,
-    fields?: RuntimeLogFields
+    fields?: RuntimeLogFields,
   ): void {
     if (!this.logger.isLevelEnabled(level)) {
       return;
@@ -84,16 +84,14 @@ class PinoRuntimeLogger implements RuntimeLogger {
       const sanitizedMessage = sanitizeString(
         message,
         this.redactValues,
-        truncate
+        truncate,
       );
       const combinedFields =
-        fields === undefined
-          ? this.bindings
-          : {...this.bindings, ...fields};
+        fields === undefined ? this.bindings : { ...this.bindings, ...fields };
       const sanitizedFields = sanitizeFields(
         combinedFields,
         this.redactValues,
-        truncate
+        truncate,
       );
 
       writeLog(this.logger, level, sanitizedMessage, sanitizedFields);
@@ -106,18 +104,20 @@ class PinoRuntimeLogger implements RuntimeLogger {
 // createPinoRuntimeLogger 创建默认输出到 stdout 的 Pino runtime logger。
 export function createPinoRuntimeLogger(
   options: PinoRuntimeLoggerInput = {},
-  destination?: NodeJS.WritableStream
+  destination?: NodeJS.WritableStream,
 ): RuntimeLogger {
   const pinoOptions = toPinoOptions(options);
   const bindings = options.base ?? {};
 
   const logger =
-    destination === undefined ? pino(pinoOptions) : pino(pinoOptions, destination);
+    destination === undefined
+      ? pino(pinoOptions)
+      : pino(pinoOptions, destination);
 
   return new PinoRuntimeLogger(
     logger,
     bindings,
-    normalizeRedactValues(options.redactValues)
+    normalizeRedactValues(options.redactValues),
   );
 }
 
@@ -140,13 +140,13 @@ function toPinoOptions(options: PinoRuntimeLoggerInput): LoggerOptions {
 function sanitizeFields(
   fields: RuntimeLogFields,
   redactValues: readonly string[],
-  truncate: boolean
+  truncate: boolean,
 ): RuntimeLogFields {
   return sanitizeValue(
     fields,
     redactValues,
     truncate,
-    new WeakSet()
+    new WeakSet(),
   ) as RuntimeLogFields;
 }
 
@@ -154,7 +154,7 @@ function sanitizeValue(
   value: unknown,
   redactValues: readonly string[],
   truncate: boolean,
-  seen: WeakSet<object>
+  seen: WeakSet<object>,
 ): unknown {
   if (typeof value === "string") {
     return sanitizeString(value, redactValues, truncate);
@@ -180,7 +180,7 @@ function sanitizeValue(
       stack:
         value.stack === undefined
           ? undefined
-          : sanitizeString(value.stack, redactValues, truncate)
+          : sanitizeString(value.stack, redactValues, truncate),
     };
 
     for (const [key, nestedValue] of Object.entries(value)) {
@@ -197,7 +197,7 @@ function sanitizeValue(
 
   if (Array.isArray(value)) {
     const result = value.map((item) =>
-      sanitizeValue(item, redactValues, truncate, seen)
+      sanitizeValue(item, redactValues, truncate, seen),
     );
     seen.delete(value);
     return result;
@@ -217,7 +217,7 @@ function sanitizeValue(
 function sanitizeString(
   value: string,
   redactValues: readonly string[],
-  truncate: boolean
+  truncate: boolean,
 ): string {
   let sanitized = value;
   for (const redactValue of redactValues) {
@@ -232,9 +232,11 @@ function sanitizeString(
   return `${sanitized.slice(0, INFO_STRING_MAX_LENGTH)}…[truncated ${omittedCharacters} chars]`;
 }
 
-function normalizeRedactValues(values: readonly string[] | undefined): string[] {
+function normalizeRedactValues(
+  values: readonly string[] | undefined,
+): string[] {
   return [...new Set((values ?? []).filter((value) => value.length > 0))].sort(
-    (left, right) => right.length - left.length
+    (left, right) => right.length - left.length,
   );
 }
 
@@ -244,7 +246,7 @@ function isSecretKey(key: string): boolean {
 
 function reportRuntimeLogError(
   error: unknown,
-  redactValues: readonly string[]
+  redactValues: readonly string[],
 ): void {
   const detail = sanitizeString(formatError(error), redactValues, false);
 
@@ -260,7 +262,9 @@ function formatError(error: unknown): string {
 }
 
 // 在默认敏感字段之外，追加调用方声明的脱敏路径。
-function mergeRedactPaths(customPaths: readonly string[] | undefined): string[] {
+function mergeRedactPaths(
+  customPaths: readonly string[] | undefined,
+): string[] {
   return [...new Set([...DEFAULT_REDACT_PATHS, ...(customPaths ?? [])])];
 }
 
@@ -269,7 +273,7 @@ function writeLog(
   logger: PinoLogger,
   level: "debug" | "info" | "warn" | "error",
   message: string,
-  fields?: RuntimeLogFields
+  fields?: RuntimeLogFields,
 ): void {
   if (fields === undefined) {
     logger[level](message);

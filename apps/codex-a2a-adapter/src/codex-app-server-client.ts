@@ -83,14 +83,14 @@ export interface CodexRuntimeClient {
   interruptTurn(options: InterruptCodexTurnOptions): Promise<void>;
   onClose(listener: (error: unknown) => void): () => void;
   onNotification(
-    listener: (notification: CodexAppServerNotification) => void
+    listener: (notification: CodexAppServerNotification) => void,
   ): () => void;
   onServerRequest(
-    listener: (request: CodexAppServerRequest) => void
+    listener: (request: CodexAppServerRequest) => void,
   ): () => void;
   respondToServerRequest(
     id: CodexAppServerRequestId,
-    result: CodexRequestUserInputResponse
+    result: CodexRequestUserInputResponse,
   ): Promise<void>;
   startThread(options: StartCodexThreadOptions): Promise<{ threadId: string }>;
   startTurn(options: StartCodexTurnOptions): Promise<{ turnId: string }>;
@@ -119,18 +119,18 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 5_000;
 
 export function spawnCodexAppServerTransport(
-  options: SpawnCodexAppServerOptions
+  options: SpawnCodexAppServerOptions,
 ): CodexAppServerTransport {
   const invocation = createSpawnInvocation(
     options.executable,
-    options.args ?? ["app-server", "--stdio"]
+    options.args ?? ["app-server", "--stdio"],
   );
   const child = spawn(invocation.executable, invocation.args, {
     cwd: options.cwd,
     env: process.env,
     stdio: ["pipe", "pipe", "pipe"],
     windowsVerbatimArguments: invocation.windowsVerbatimArguments,
-    windowsHide: true
+    windowsHide: true,
   });
   const exited = new Promise<void>((resolve, reject) => {
     child.once("exit", () => resolve());
@@ -148,16 +148,16 @@ export function spawnCodexAppServerTransport(
         child.stdin,
         () => terminateChildProcess(child.pid, child.kill.bind(child)),
         exited,
-        options.shutdownTimeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS
+        options.shutdownTimeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS,
       );
       return closePromise;
-    }
+    },
   };
 }
 
 function createSpawnInvocation(
   executable: string,
-  args: string[]
+  args: string[],
 ): {
   executable: string;
   args: string[];
@@ -171,7 +171,7 @@ function createSpawnInvocation(
   return {
     executable: process.env.ComSpec ?? "cmd.exe",
     args: ["/d", "/s", "/c", `"${command}"`],
-    windowsVerbatimArguments: true
+    windowsVerbatimArguments: true,
   };
 }
 
@@ -201,36 +201,39 @@ export class CodexAppServerClient implements CodexRuntimeClient {
 
   private constructor(
     private readonly transport: CodexAppServerTransport,
-    requestTimeoutMs: number
+    requestTimeoutMs: number,
   ) {
     this.requestTimeoutMs = requestTimeoutMs;
     void this.readMessages();
   }
 
   static async connect(
-    options: CodexAppServerClientOptions
+    options: CodexAppServerClientOptions,
   ): Promise<CodexAppServerClient> {
     const client = new CodexAppServerClient(
       options.transport,
-      options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+      options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     );
 
     try {
-      const initialized = await client.request<InitializeResponse>("initialize", {
-        clientInfo: {
-          name: "huanlink_codex_a2a_adapter",
-          title: "HuanLink Codex A2A Adapter",
-          version: "0.2.0"
+      const initialized = await client.request<InitializeResponse>(
+        "initialize",
+        {
+          clientInfo: {
+            name: "huanlink_codex_a2a_adapter",
+            title: "HuanLink Codex A2A Adapter",
+            version: "0.2.0",
+          },
+          capabilities: {
+            experimentalApi: false,
+            requestAttestation: false,
+          },
         },
-        capabilities: {
-          experimentalApi: false,
-          requestAttestation: false
-        }
-      });
+      );
 
       if (!hasVersionToken(initialized.userAgent, options.expectedVersion)) {
         throw new Error(
-          `Unexpected Codex app-server version: ${initialized.userAgent}; expected ${options.expectedVersion}`
+          `Unexpected Codex app-server version: ${initialized.userAgent}; expected ${options.expectedVersion}`,
         );
       }
 
@@ -262,14 +265,14 @@ export class CodexAppServerClient implements CodexRuntimeClient {
   }
 
   onNotification(
-    listener: (notification: CodexAppServerNotification) => void
+    listener: (notification: CodexAppServerNotification) => void,
   ): () => void {
     this.notificationListeners.add(listener);
     return () => this.notificationListeners.delete(listener);
   }
 
   onServerRequest(
-    listener: (request: CodexAppServerRequest) => void
+    listener: (request: CodexAppServerRequest) => void,
   ): () => void {
     this.serverRequestListeners.add(listener);
     return () => this.serverRequestListeners.delete(listener);
@@ -281,11 +284,11 @@ export class CodexAppServerClient implements CodexRuntimeClient {
 
   async respondToServerRequest(
     id: CodexAppServerRequestId,
-    result: CodexRequestUserInputResponse
+    result: CodexRequestUserInputResponse,
   ): Promise<void> {
     if (!this.serverRequests.delete(id)) {
       throw new Error(
-        `Unknown or already answered Codex app-server request: ${String(id)}`
+        `Unknown or already answered Codex app-server request: ${String(id)}`,
       );
     }
     try {
@@ -297,7 +300,7 @@ export class CodexAppServerClient implements CodexRuntimeClient {
   }
 
   async startThread(
-    options: StartCodexThreadOptions
+    options: StartCodexThreadOptions,
   ): Promise<{ threadId: string }> {
     const result = await this.request<{ thread: { id: string } }>(
       "thread/start",
@@ -307,24 +310,22 @@ export class CodexAppServerClient implements CodexRuntimeClient {
         sandbox: "workspace-write",
         ephemeral: false,
         developerInstructions: options.developerInstructions,
-        model: options.model
-      }
+        model: options.model,
+      },
     );
     return { threadId: result.thread.id };
   }
 
-  async startTurn(
-    options: StartCodexTurnOptions
-  ): Promise<{ turnId: string }> {
+  async startTurn(options: StartCodexTurnOptions): Promise<{ turnId: string }> {
     const result = await this.request<{ turn: { id: string } }>("turn/start", {
       threadId: options.threadId,
       input: [
         {
           type: "text",
           text: options.prompt,
-          text_elements: []
-        }
-      ]
+          text_elements: [],
+        },
+      ],
     });
     return { turnId: result.turn.id };
   }
@@ -348,7 +349,7 @@ export class CodexAppServerClient implements CodexRuntimeClient {
       this.pending.set(id, {
         resolve: (value) => resolve(value as Result),
         reject,
-        timer
+        timer,
       });
 
       void this.writeMessage({ method, id, params }).catch((error: unknown) => {
@@ -398,8 +399,8 @@ export class CodexAppServerClient implements CodexRuntimeClient {
         id: message.id,
         error: {
           code: -32601,
-          message: `Unsupported Codex app-server request: ${message.method}`
-        }
+          message: `Unsupported Codex app-server request: ${message.method}`,
+        },
       }).catch((error: unknown) => {
         this.failConnection(error);
       });
@@ -409,7 +410,7 @@ export class CodexAppServerClient implements CodexRuntimeClient {
     if (typeof message.method === "string" && message.id === undefined) {
       const notification: CodexAppServerNotification = {
         method: message.method,
-        params: isRecord(message.params) ? message.params : undefined
+        params: isRecord(message.params) ? message.params : undefined,
       };
       for (const listener of this.notificationListeners) {
         listener(notification);
@@ -431,8 +432,8 @@ export class CodexAppServerClient implements CodexRuntimeClient {
     if (isRpcError(message.error)) {
       pending.reject(
         new Error(
-          `Codex app-server RPC error ${message.error.code}: ${message.error.message}`
-        )
+          `Codex app-server RPC error ${message.error.code}: ${message.error.message}`,
+        ),
       );
       return;
     }
@@ -489,7 +490,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function userInputRequestFrom(
-  message: Record<string, unknown>
+  message: Record<string, unknown>,
 ): CodexAppServerRequest | undefined {
   if (
     message.method !== "item/tool/requestUserInput" ||
@@ -504,7 +505,7 @@ function userInputRequestFrom(
 }
 
 function requestUserInputParamsFrom(
-  value: unknown
+  value: unknown,
 ): CodexRequestUserInputParams | undefined {
   const params = isRecord(value) ? value : undefined;
   if (
@@ -521,18 +522,20 @@ function requestUserInputParamsFrom(
     return undefined;
   }
   const autoResolutionMs =
-    typeof params.autoResolutionMs === "number" ? params.autoResolutionMs : null;
+    typeof params.autoResolutionMs === "number"
+      ? params.autoResolutionMs
+      : null;
   return {
     autoResolutionMs,
     itemId: params.itemId,
     questions: questions as CodexUserInputQuestion[],
     threadId: params.threadId,
-    turnId: params.turnId
+    turnId: params.turnId,
   };
 }
 
 function userInputQuestionFrom(
-  value: unknown
+  value: unknown,
 ): CodexUserInputQuestion | undefined {
   const question = isRecord(value) ? value : undefined;
   if (
@@ -560,7 +563,7 @@ function userInputQuestionFrom(
     isOther: question.isOther === true,
     isSecret: question.isSecret === true,
     options: parsedOptions as CodexUserInputOption[] | null,
-    question: question.question
+    question: question.question,
   };
 }
 
@@ -577,7 +580,7 @@ async function closeChildProcess(
   stdin: Writable,
   terminate: () => void,
   exited: Promise<void>,
-  timeoutMs: number
+  timeoutMs: number,
 ): Promise<void> {
   if (!stdin.destroyed) {
     stdin.end();
@@ -603,7 +606,7 @@ async function closeChildProcess(
 
 function terminateChildProcess(
   pid: number | undefined,
-  kill: () => boolean
+  kill: () => boolean,
 ): void {
   if (process.platform !== "win32" || pid === undefined) {
     kill();
@@ -613,7 +616,7 @@ function terminateChildProcess(
   const taskkill = spawn(
     `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\taskkill.exe`,
     ["/pid", String(pid), "/t", "/f"],
-    { stdio: "ignore", windowsHide: true }
+    { stdio: "ignore", windowsHide: true },
   );
   taskkill.once("error", () => {
     kill();
@@ -622,22 +625,20 @@ function terminateChildProcess(
 
 async function observeExit(
   exited: Promise<void>,
-  timeoutMs: number
+  timeoutMs: number,
 ): Promise<
-  | { kind: "exited" }
-  | { kind: "error"; error: unknown }
-  | { kind: "timeout" }
+  { kind: "exited" } | { kind: "error"; error: unknown } | { kind: "timeout" }
 > {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
       exited.then(
         () => ({ kind: "exited" }) as const,
-        (error: unknown) => ({ kind: "error", error }) as const
+        (error: unknown) => ({ kind: "error", error }) as const,
       ),
       new Promise<{ kind: "timeout" }>((resolve) => {
         timer = setTimeout(() => resolve({ kind: "timeout" }), timeoutMs);
-      })
+      }),
     ]);
   } finally {
     if (timer) {

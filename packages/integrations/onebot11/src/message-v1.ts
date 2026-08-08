@@ -70,8 +70,7 @@ export function parseOneBot11MessageV1(
     messageId,
     route: {
       channelId,
-      conversationKind:
-        frame.message_type === "group" ? "group" : "direct",
+      conversationKind: frame.message_type === "group" ? "group" : "direct",
       conversationId,
     },
     sender: {
@@ -126,8 +125,7 @@ function parseTrigger(
 ): InboundChannelMessageV1["trigger"] {
   const mentionedSelf = segments.some(
     (segment) =>
-      segment.type === "at" &&
-      normalizePositiveId(segment.data.qq) === selfId,
+      segment.type === "at" && normalizePositiveId(segment.data.qq) === selfId,
   );
   const leadingText = leadingTriggerText(segments, selfId);
   return resolveChannelTriggerV1({
@@ -150,10 +148,7 @@ function leadingTriggerText(
     if (!contentStarted && segment.type === "reply") {
       continue;
     }
-    if (
-      !contentStarted &&
-      segment.type === "at"
-    ) {
+    if (!contentStarted && segment.type === "at") {
       if (normalizePositiveId(segment.data.qq) === selfId) {
         continue;
       }
@@ -176,11 +171,7 @@ function leadingTriggerText(
  * 输入不是非负整数或无法构造有效日期时返回 undefined。
  */
 function parseReceivedAt(input: unknown): string | undefined {
-  if (
-    typeof input !== "number" ||
-    !Number.isInteger(input) ||
-    input < 0
-  ) {
+  if (typeof input !== "number" || !Number.isInteger(input) || input < 0) {
     return undefined;
   }
   const date = new Date(input * 1000);
@@ -216,10 +207,7 @@ function normalizeInteger(input: unknown): string | undefined {
     const normalized = input.trim();
     return normalized.length === 0 ? undefined : normalized;
   }
-  if (
-    typeof input === "number" &&
-    Number.isSafeInteger(input)
-  ) {
+  if (typeof input === "number" && Number.isSafeInteger(input)) {
     return String(input);
   }
   return undefined;

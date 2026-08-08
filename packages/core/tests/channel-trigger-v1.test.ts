@@ -8,13 +8,13 @@ describe("resolveChannelTriggerV1", () => {
     "/model gpt-5",
     "   /模型 qwen",
     "/agent-status",
-    "/unknown"
+    "/unknown",
   ])("recognizes a leading slash command: %s", (leadingText) => {
     expect(
       resolveChannelTriggerV1({
         mentionedSelf: false,
-        leadingText
-      })
+        leadingText,
+      }),
     ).toEqual({ kind: "command" });
   });
 
@@ -22,8 +22,8 @@ describe("resolveChannelTriggerV1", () => {
     expect(
       resolveChannelTriggerV1({
         mentionedSelf: true,
-        leadingText: "  /model gpt-5"
-      })
+        leadingText: "  /model gpt-5",
+      }),
     ).toEqual({ kind: "command" });
   });
 
@@ -33,17 +33,17 @@ describe("resolveChannelTriggerV1", () => {
       expect(
         resolveChannelTriggerV1({
           mentionedSelf: true,
-          leadingText
-        })
+          leadingText,
+        }),
       ).toEqual({ kind: "mention" });
-    }
+    },
   );
 
   test("returns mention when the platform supplied no leading text", () => {
     expect(
       resolveChannelTriggerV1({
-        mentionedSelf: true
-      })
+        mentionedSelf: true,
+      }),
     ).toEqual({ kind: "mention" });
   });
 
@@ -53,9 +53,9 @@ describe("resolveChannelTriggerV1", () => {
       expect(
         resolveChannelTriggerV1({
           mentionedSelf: false,
-          ...(leadingText === undefined ? {} : { leadingText })
-        })
+          ...(leadingText === undefined ? {} : { leadingText }),
+        }),
       ).toBeUndefined();
-    }
+    },
   );
 });

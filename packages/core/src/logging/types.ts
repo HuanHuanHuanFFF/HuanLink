@@ -6,7 +6,8 @@ export type RuntimeLogReservedFields = {
   readonly source?: RuntimeLogSource;
 };
 
-export type RuntimeLogFields = RuntimeLogReservedFields & Record<string, unknown>;
+export type RuntimeLogFields = RuntimeLogReservedFields &
+  Record<string, unknown>;
 
 export type RuntimeLogLevel = "debug" | "info" | "warn" | "error";
 

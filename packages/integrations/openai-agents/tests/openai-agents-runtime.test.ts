@@ -7,7 +7,7 @@ import type {
   ModelProvider,
   ModelRequest,
   ModelResponse,
-  StreamEvent
+  StreamEvent,
 } from "@openai/agents";
 
 import { OpenAiAgentsRuntime } from "../src/index.js";
@@ -24,10 +24,10 @@ function createAssistantMessage(text: string): ModelResponse["output"][number] {
         type: "output_text",
         text,
         providerData: {
-          annotations: []
-        }
-      }
-    ]
+          annotations: [],
+        },
+      },
+    ],
   };
 }
 
@@ -35,7 +35,7 @@ function createAssistantMessage(text: string): ModelResponse["output"][number] {
 class MockTextModel implements Model {
   constructor(
     private readonly text: string,
-    private readonly seenSignals: AbortSignal[] = []
+    private readonly seenSignals: AbortSignal[] = [],
   ) {}
 
   // 记录 signal，并返回一次固定文本响应。
@@ -46,13 +46,13 @@ class MockTextModel implements Model {
 
     return {
       usage: new Usage(),
-      output: [createAssistantMessage(this.text)]
+      output: [createAssistantMessage(this.text)],
     };
   }
 
   // 当前 spike 不覆盖流式路径。
   async *getStreamedResponse(
-    _request: ModelRequest
+    _request: ModelRequest,
   ): AsyncIterable<StreamEvent> {
     throw new Error("Streaming is not implemented in this test model");
   }
@@ -76,14 +76,14 @@ describe("OpenAiAgentsRuntime", () => {
       agent: new Agent({
         name: "ContextAgent",
         instructions: "Return text.",
-        model: "mock-text-model"
+        model: "mock-text-model",
       }),
       runner: {
         run: async (_agent, _input, options) => {
           seenOptions = options;
           return { finalOutput: "context observed" };
-        }
-      }
+        },
+      },
     });
 
     await runtime.run({
@@ -91,7 +91,7 @@ describe("OpenAiAgentsRuntime", () => {
       sessionId: "session_context_01",
       trigger: "agent_call_terminal",
       input: "summarize a completed task",
-      signal: abortController.signal
+      signal: abortController.signal,
     });
 
     expect(seenOptions).toMatchObject({
@@ -99,8 +99,8 @@ describe("OpenAiAgentsRuntime", () => {
         runId: "run_context_01",
         sessionId: "session_context_01",
         trigger: "agent_call_terminal",
-        signal: abortController.signal
-      }
+        signal: abortController.signal,
+      },
     });
   });
 
@@ -110,24 +110,24 @@ describe("OpenAiAgentsRuntime", () => {
       agent: new Agent({
         name: "MockAgent",
         instructions: "Return the mock text output.",
-        model: "mock-text-model"
+        model: "mock-text-model",
       }),
       runner: new Runner({
         modelProvider: new MockTextModelProvider(
-          new MockTextModel("hello from openai agents runtime")
+          new MockTextModel("hello from openai agents runtime"),
         ),
-        tracingDisabled: true
-      })
+        tracingDisabled: true,
+      }),
     });
 
     const result = await runtime.run({
       runId: "run_openai_agents_01",
       sessionId: "session_openai_agents_01",
-      input: "ping"
+      input: "ping",
     });
 
     expect(result).toEqual({
-      output: "hello from openai agents runtime"
+      output: "hello from openai agents runtime",
     });
   });
 
@@ -139,21 +139,21 @@ describe("OpenAiAgentsRuntime", () => {
       agent: new Agent({
         name: "MockAgentWithSignal",
         instructions: "Return the mock text output.",
-        model: "mock-text-model"
+        model: "mock-text-model",
       }),
       runner: new Runner({
         modelProvider: new MockTextModelProvider(
-          new MockTextModel("signal observed", seenSignals)
+          new MockTextModel("signal observed", seenSignals),
         ),
-        tracingDisabled: true
-      })
+        tracingDisabled: true,
+      }),
     });
 
     const result = await runtime.run({
       runId: "run_openai_agents_signal_01",
       sessionId: "session_openai_agents_signal_01",
       input: "ping",
-      signal: abortController.signal
+      signal: abortController.signal,
     });
 
     expect(result.output).toBe("signal observed");
@@ -166,25 +166,25 @@ describe("OpenAiAgentsRuntime", () => {
       agent: new Agent({
         name: "NonTextAgent",
         instructions: "Return a non-text final output.",
-        model: "mock-text-model"
+        model: "mock-text-model",
       }),
       runner: {
         run: async () => ({
           finalOutput: {
-            answer: "not text"
-          }
-        })
-      }
+            answer: "not text",
+          },
+        }),
+      },
     });
 
     await expect(
       runtime.run({
         runId: "run_openai_agents_non_text_01",
         sessionId: "session_openai_agents_non_text_01",
-        input: "ping"
-      })
+        input: "ping",
+      }),
     ).rejects.toThrow(
-      "OpenAiAgentsRuntime expected a text finalOutput from @openai/agents"
+      "OpenAiAgentsRuntime expected a text finalOutput from @openai/agents",
     );
   });
 });

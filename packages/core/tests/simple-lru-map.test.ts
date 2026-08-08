@@ -19,10 +19,10 @@ describe("SimpleLruMap", () => {
 
   test("rejects invalid max sizes", () => {
     expect(() => new SimpleLruMap<string, number>(0)).toThrow(
-      /maxSize must be a positive integer/
+      /maxSize must be a positive integer/,
     );
     expect(() => new SimpleLruMap<string, number>(1.5)).toThrow(
-      /maxSize must be a positive integer/
+      /maxSize must be a positive integer/,
     );
   });
 });

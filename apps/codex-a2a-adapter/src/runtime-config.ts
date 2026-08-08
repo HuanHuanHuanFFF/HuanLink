@@ -6,12 +6,7 @@ import { z } from "zod";
 
 const LOOPBACK_HOST_VALUES = ["127.0.0.1", "localhost", "::1"] as const;
 const LOOPBACK_HOSTS = new Set<string>(LOOPBACK_HOST_VALUES);
-const LOG_LEVELS = new Set<RuntimeLogLevel>([
-  "debug",
-  "info",
-  "warn",
-  "error"
-]);
+const LOG_LEVELS = new Set<RuntimeLogLevel>(["debug", "info", "warn", "error"]);
 
 const NON_EMPTY_STRING = z.string().trim().min(1);
 const STABLE_ID = NON_EMPTY_STRING.regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/);
@@ -25,7 +20,7 @@ const RUNTIME_FIELD_NAMES = new Set([
   "port",
   "codexExecutable",
   "expectedCodexVersion",
-  "heartbeatIntervalMs"
+  "heartbeatIntervalMs",
 ]);
 const ENTRY_FIELD_NAMES = new Set(["version", "server", "adapters"]);
 const ADAPTERS_FIELD_NAMES = new Set(["codex"]);
@@ -35,7 +30,7 @@ const PROJECT_FIELD_NAMES = new Set([
   "projectId",
   "workspace",
   "branch",
-  "defaultModelId"
+  "defaultModelId",
 ]);
 
 const adapterRuntimeSchema = z
@@ -45,7 +40,7 @@ const adapterRuntimeSchema = z
     port: z.number().int().min(0).max(65_535),
     codexExecutable: NON_EMPTY_STRING,
     expectedCodexVersion: NON_EMPTY_STRING,
-    heartbeatIntervalMs: z.number().int().safe().positive()
+    heartbeatIntervalMs: z.number().int().safe().positive(),
   })
   .strict();
 
@@ -53,14 +48,16 @@ const configEntrySchema = z
   .object({
     version: z.literal(1),
     server: z.unknown().optional(),
-    adapters: z.unknown().optional()
+    adapters: z.unknown().optional(),
   })
   .strict();
 
 const codexAdapterEntrySchema = z
   .object({
     runtime: explicitConfigReferenceSchema("adapters/codex"),
-    projects: z.array(explicitConfigReferenceSchema("adapters/codex/projects")).min(1)
+    projects: z
+      .array(explicitConfigReferenceSchema("adapters/codex/projects"))
+      .min(1),
   })
   .strict();
 
@@ -70,7 +67,7 @@ const projectSchema = z
     projectId: STABLE_ID,
     workspace: RELATIVE_WORKSPACE,
     branch: NON_EMPTY_STRING,
-    defaultModelId: NON_EMPTY_STRING
+    defaultModelId: NON_EMPTY_STRING,
   })
   .strict();
 
@@ -79,9 +76,9 @@ export type CodexAdapterLocalConfig = {
   projects: Array<Omit<z.output<typeof projectSchema>, "version">>;
 };
 
-export async function loadCodexAdapterLocalConfig(
-  { configRoot: configuredRoot }: { configRoot?: string } = {}
-): Promise<CodexAdapterLocalConfig> {
+export async function loadCodexAdapterLocalConfig({
+  configRoot: configuredRoot,
+}: { configRoot?: string } = {}): Promise<CodexAdapterLocalConfig> {
   try {
     let configRoot = configuredRoot;
     if (configRoot === undefined) {
@@ -95,30 +92,34 @@ export async function loadCodexAdapterLocalConfig(
       configEntrySchema,
       await readJsonObject(configRoot, "config.json"),
       "config.json",
-      ENTRY_FIELD_NAMES
+      ENTRY_FIELD_NAMES,
     );
     const adapters = parseConfigFile(
       z.object({ codex: z.unknown() }).strict(),
       entry.adapters,
       "config.json",
       ADAPTERS_FIELD_NAMES,
-      "adapters"
+      "adapters",
     );
     const codexEntry = parseConfigFile(
       codexAdapterEntrySchema,
       adapters.codex,
       "config.json",
       CODEX_ENTRY_FIELD_NAMES,
-      "adapters.codex"
+      "adapters.codex",
     );
-    ensureUniqueReferences(codexEntry.projects, "config.json", "adapters.codex.projects");
+    ensureUniqueReferences(
+      codexEntry.projects,
+      "config.json",
+      "adapters.codex.projects",
+    );
 
     const runtimeLocation = removeReferencePrefix(codexEntry.runtime);
     const parsedRuntime = parseConfigFile(
       adapterRuntimeSchema,
       await readJsonObject(configRoot, runtimeLocation),
       runtimeLocation,
-      RUNTIME_FIELD_NAMES
+      RUNTIME_FIELD_NAMES,
     );
     const parsedProjects = await Promise.all(
       codexEntry.projects.map(async (reference) => {
@@ -128,11 +129,11 @@ export async function loadCodexAdapterLocalConfig(
             projectSchema,
             await readJsonObject(configRoot, location),
             location,
-            PROJECT_FIELD_NAMES
+            PROJECT_FIELD_NAMES,
           ),
-          location
+          location,
         };
-      })
+      }),
     );
     const projectIds = new Set<string>();
     for (const { project, location } of parsedProjects) {
@@ -148,7 +149,7 @@ export async function loadCodexAdapterLocalConfig(
       projects: parsedProjects.map(({ project }) => {
         const { version: _projectVersion, ...projectConfig } = project;
         return projectConfig;
-      })
+      }),
     };
   } catch (error: unknown) {
     if (error instanceof LocalConfigError) {
@@ -193,7 +194,10 @@ function invalidHost(value: string): Error {
   return new Error(`Invalid HUANLINK_CODEX_A2A_HOST: ${value}`);
 }
 
-async function assertRegularDirectory(path: string, location: string): Promise<void> {
+async function assertRegularDirectory(
+  path: string,
+  location: string,
+): Promise<void> {
   try {
     const metadata = await lstat(path);
     if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
@@ -209,7 +213,7 @@ async function assertRegularDirectory(path: string, location: string): Promise<v
 
 async function readJsonObject(
   configRoot: string,
-  location: string
+  location: string,
 ): Promise<Record<string, unknown>> {
   try {
     const segments = location.split("/");
@@ -226,9 +230,15 @@ async function readJsonObject(
       }
     }
 
-    const text = new TextDecoder("utf-8", { fatal: true }).decode(await readFile(currentPath));
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(
+      await readFile(currentPath),
+    );
     const parsed: unknown = JSON.parse(text);
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      Array.isArray(parsed)
+    ) {
       throw invalidLocalConfig(location);
     }
     return parsed as Record<string, unknown>;
@@ -245,7 +255,7 @@ function parseConfigFile<T extends z.ZodType>(
   contents: unknown,
   location: string,
   safeFieldNames: Set<string>,
-  fieldPrefix?: string
+  fieldPrefix?: string,
 ): z.output<T> {
   const result = schema.safeParse(contents);
   if (result.success) {
@@ -256,7 +266,7 @@ function parseConfigFile<T extends z.ZodType>(
     .map((issue) => issue.path[0])
     .find(
       (candidate): candidate is string =>
-        typeof candidate === "string" && safeFieldNames.has(candidate)
+        typeof candidate === "string" && safeFieldNames.has(candidate),
     );
   throw invalidLocalConfig(
     location,
@@ -264,19 +274,25 @@ function parseConfigFile<T extends z.ZodType>(
       ? fieldPrefix
       : fieldPrefix === undefined
         ? fieldName
-        : `${fieldPrefix}.${fieldName}`
+        : `${fieldPrefix}.${fieldName}`,
   );
 }
 
 function explicitConfigReferenceSchema(prefix: string): z.ZodType<string> {
-  return z.string().refine(
-    (value) => isExplicitConfigReference(value, prefix),
-    "must be an explicit configuration reference"
-  );
+  return z
+    .string()
+    .refine(
+      (value) => isExplicitConfigReference(value, prefix),
+      "must be an explicit configuration reference",
+    );
 }
 
 function isExplicitConfigReference(value: string, prefix: string): boolean {
-  if (!value.startsWith("./") || !value.endsWith(".json") || value.includes("\\")) {
+  if (
+    !value.startsWith("./") ||
+    !value.endsWith(".json") ||
+    value.includes("\\")
+  ) {
     return false;
   }
 
@@ -284,7 +300,9 @@ function isExplicitConfigReference(value: string, prefix: string): boolean {
   const segments = relativePath.split("/");
   return (
     relativePath.startsWith(`${prefix}/`) &&
-    segments.every((segment) => segment.length > 0 && segment !== "." && segment !== "..")
+    segments.every(
+      (segment) => segment.length > 0 && segment !== "." && segment !== "..",
+    )
   );
 }
 
@@ -295,7 +313,7 @@ function removeReferencePrefix(reference: string): string {
 function ensureUniqueReferences(
   references: readonly string[],
   location: string,
-  fieldName: string
+  fieldName: string,
 ): void {
   const seen = new Set<string>();
   for (const reference of references) {
@@ -310,18 +328,32 @@ function isRelativeWorkspace(value: string): boolean {
   if (value === ".") {
     return true;
   }
-  if (value.includes("\\") || value.includes(":") || win32.isAbsolute(value) || posix.isAbsolute(value)) {
+  if (
+    value.includes("\\") ||
+    value.includes(":") ||
+    win32.isAbsolute(value) ||
+    posix.isAbsolute(value)
+  ) {
     return false;
   }
   return value
     .split("/")
-    .every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
+    .every(
+      (segment) => segment.length > 0 && segment !== "." && segment !== "..",
+    );
 }
 
 class LocalConfigError extends Error {}
 
-function invalidLocalConfig(location?: string, fieldName?: string): LocalConfigError {
+function invalidLocalConfig(
+  location?: string,
+  fieldName?: string,
+): LocalConfigError {
   const suffix =
-    location === undefined ? "" : `: ${location}${fieldName === undefined ? "" : `: ${fieldName}`}`;
-  return new LocalConfigError(`Invalid local Codex Adapter configuration${suffix}`);
+    location === undefined
+      ? ""
+      : `: ${location}${fieldName === undefined ? "" : `: ${fieldName}`}`;
+  return new LocalConfigError(
+    `Invalid local Codex Adapter configuration${suffix}`,
+  );
 }

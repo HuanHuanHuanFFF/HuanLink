@@ -17,9 +17,9 @@ async function git(cwd: string, ...args: string[]): Promise<void> {
 
 afterEach(async () => {
   await Promise.all(
-    temporaryRepositories.splice(0).map((path) =>
-      rm(path, { force: true, recursive: true })
-    )
+    temporaryRepositories
+      .splice(0)
+      .map((path) => rm(path, { force: true, recursive: true })),
   );
 });
 
@@ -45,7 +45,7 @@ describe("captureWorktreeSnapshot", () => {
     expect(after.branch).toBe("spike/demo-v0");
     expect(before.files["target.txt"]).toBeUndefined();
     expect(after.files["untracked.txt"]).not.toBe(
-      before.files["untracked.txt"]
+      before.files["untracked.txt"],
     );
     expect(after.status).toBe(before.status);
   });

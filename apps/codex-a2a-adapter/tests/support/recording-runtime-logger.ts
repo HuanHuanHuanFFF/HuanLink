@@ -1,7 +1,7 @@
 import type {
   RuntimeLogFields,
   RuntimeLogLevel,
-  RuntimeLogger
+  RuntimeLogger,
 } from "@huanlink/core";
 
 export type RecordedRuntimeLog = {
@@ -13,7 +13,7 @@ export type RecordedRuntimeLog = {
 export class RecordingRuntimeLogger implements RuntimeLogger {
   constructor(
     readonly entries: RecordedRuntimeLog[] = [],
-    private readonly bindings: RuntimeLogFields = {}
+    private readonly bindings: RuntimeLogFields = {},
   ) {}
 
   debug(message: string, fields?: RuntimeLogFields): void {
@@ -35,19 +35,19 @@ export class RecordingRuntimeLogger implements RuntimeLogger {
   child(bindings: RuntimeLogFields): RuntimeLogger {
     return new RecordingRuntimeLogger(this.entries, {
       ...this.bindings,
-      ...bindings
+      ...bindings,
     });
   }
 
   private record(
     level: RuntimeLogLevel,
     message: string,
-    fields: RuntimeLogFields = {}
+    fields: RuntimeLogFields = {},
   ): void {
     this.entries.push({
       level,
       message,
-      fields: { ...this.bindings, ...fields }
+      fields: { ...this.bindings, ...fields },
     });
   }
 }

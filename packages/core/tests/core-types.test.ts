@@ -17,7 +17,7 @@ import type {
   EventWriter,
   RunId,
   SessionId,
-  TaskExecutionMode
+  TaskExecutionMode,
 } from "../src/index.js";
 
 describe("core public types", () => {
@@ -44,8 +44,8 @@ describe("core public types", () => {
         taskId: "task_01",
         skillId: "coding",
         executionMode,
-        state
-      }
+        state,
+      },
     };
 
     const eventDraft: AgentEventDraft = {
@@ -57,16 +57,16 @@ describe("core public types", () => {
         cause: {
           agentCallId,
           taskId: "task_01",
-          state: "completed"
-        }
-      }
+          state: "completed",
+        },
+      },
     };
 
     const eventWriter: EventWriter = { append: () => event };
     const eventReader: EventReader = { readRunEvents: () => [event] };
     const eventLog: EventLog = {
       append: eventWriter.append,
-      readRunEvents: eventReader.readRunEvents
+      readRunEvents: eventReader.readRunEvents,
     };
 
     expect(CORE_SCHEMA_VERSION).toBe("3.0");
@@ -82,7 +82,7 @@ describe("core public types", () => {
       "ToolGateway",
       "AllowPolicyEngine",
       "echoTool",
-      "StaticContextAssembler"
+      "StaticContextAssembler",
     ];
 
     expect(retiredExports.filter((name) => name in coreApi)).toEqual([]);

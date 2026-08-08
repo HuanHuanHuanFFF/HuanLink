@@ -1,7 +1,7 @@
 import type {
   AgentRuntime,
   AgentRuntimeInput,
-  AgentRuntimeResult
+  AgentRuntimeResult,
 } from "../runtime/agent-runtime.js";
 import type { SessionId } from "../shared/ids.js";
 
@@ -25,7 +25,7 @@ export class AgentTurnScheduler implements AgentRuntime {
       .then(() => this.runtime.run(input));
     const tail = result.then(
       () => undefined,
-      () => undefined
+      () => undefined,
     );
     this.tails.set(input.sessionId, tail);
     void tail.then(() => {

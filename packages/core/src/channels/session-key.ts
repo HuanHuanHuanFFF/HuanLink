@@ -4,7 +4,7 @@ import type { ChannelConversationRouteV1 } from "./channel-instance-v1.js";
 import { assertValidChannelConversationRoute } from "./channel-validation-v1.js";
 
 export function channelSessionIdFor(
-  route: ChannelConversationRouteV1
+  route: ChannelConversationRouteV1,
 ): SessionId {
   assertValidChannelConversationRoute(route);
 

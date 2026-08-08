@@ -1,7 +1,7 @@
 import type {
   DeliveryReceiptV1,
   ChannelConversationRouteV1,
-  InboundChannelMessageV1
+  InboundChannelMessageV1,
 } from "../channels/contract-v1.js";
 import type { RunId, SessionId } from "../shared/ids.js";
 

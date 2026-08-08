@@ -6,7 +6,7 @@ import * as core from "../src/index.js";
 import type {
   PinoRuntimeLoggerOptions,
   RuntimeLogReservedFields,
-  RuntimeLogger
+  RuntimeLogger,
 } from "../src/index.js";
 
 describe("NoopRuntimeLogger", () => {
@@ -36,9 +36,9 @@ describe("createPinoRuntimeLogger", () => {
     const logger = core.createPinoRuntimeLogger(
       {
         level: "info",
-        base: { service: "core-runtime" }
+        base: { service: "core-runtime" },
       },
-      sink
+      sink,
     );
 
     logger.debug("hidden", { step: 0 });
@@ -49,7 +49,7 @@ describe("createPinoRuntimeLogger", () => {
       level: 30,
       service: "core-runtime",
       step: 1,
-      msg: "visible"
+      msg: "visible",
     });
   });
 
@@ -57,9 +57,9 @@ describe("createPinoRuntimeLogger", () => {
     const sink = createMemorySink();
     const logger = core.createPinoRuntimeLogger(
       {
-        base: { service: "core-runtime" }
+        base: { service: "core-runtime" },
       },
-      sink
+      sink,
     );
     const child = logger.child({ module: "gateway", runId: "run_01" });
 
@@ -70,7 +70,7 @@ describe("createPinoRuntimeLogger", () => {
       module: "gateway",
       runId: "run_01",
       step: 2,
-      msg: "child line"
+      msg: "child line",
     });
   });
 
@@ -80,52 +80,49 @@ describe("createPinoRuntimeLogger", () => {
 
     logger.info("with source", {
       source: "agent_loop",
-      step: 6
+      step: 6,
     });
 
     expect(JSON.parse(sink.lines[0] ?? "")).toMatchObject({
       source: "agent_loop",
       step: 6,
-      msg: "with source"
+      msg: "with source",
     });
   });
 
   test("applies default redaction and appends custom redaction paths", () => {
     const sink = createMemorySink();
     const options: PinoRuntimeLoggerOptions = {
-      redact: ["nested.secret"]
+      redact: ["nested.secret"],
     };
-    const logger = core.createPinoRuntimeLogger(
-      options,
-      sink
-    );
+    const logger = core.createPinoRuntimeLogger(options, sink);
 
     logger.info("redacted", {
-        authorization: "Bearer top-secret",
-        headers: { authorization: "Bearer nested-secret" },
-        apiKey: "api-key-secret",
-        token: "token-secret",
-        password: "password-secret",
-        auth: { token: "nested-token-secret" },
-        nested: { secret: "hidden", visible: "shown" }
-      });
+      authorization: "Bearer top-secret",
+      headers: { authorization: "Bearer nested-secret" },
+      apiKey: "api-key-secret",
+      token: "token-secret",
+      password: "password-secret",
+      auth: { token: "nested-token-secret" },
+      nested: { secret: "hidden", visible: "shown" },
+    });
 
     expect(JSON.parse(sink.lines[0] ?? "")).toMatchObject({
       authorization: "[Redacted]",
       headers: {
-        authorization: "[Redacted]"
+        authorization: "[Redacted]",
       },
       apiKey: "[Redacted]",
       token: "[Redacted]",
       password: "[Redacted]",
       auth: {
-        token: "[Redacted]"
+        token: "[Redacted]",
       },
       nested: {
         secret: "[Redacted]",
-        visible: "shown"
+        visible: "shown",
       },
-      msg: "redacted"
+      msg: "redacted",
     });
   });
 
@@ -135,15 +132,15 @@ describe("createPinoRuntimeLogger", () => {
       {
         base: {
           service: "core-runtime",
-          token: "base-secret"
-        }
+          token: "base-secret",
+        },
       },
-      sink
+      sink,
     );
     const child = logger.child({
       source: "tool_gateway",
       authorization: "Bearer child-secret",
-      module: "gateway"
+      module: "gateway",
     });
 
     child.info("bound fields", { step: 5 });
@@ -155,7 +152,7 @@ describe("createPinoRuntimeLogger", () => {
       authorization: "[Redacted]",
       module: "gateway",
       step: 5,
-      msg: "bound fields"
+      msg: "bound fields",
     });
   });
 
@@ -163,13 +160,17 @@ describe("createPinoRuntimeLogger", () => {
     const chunks: string[] = [];
     const originalWrite = process.stdout.write.bind(process.stdout);
 
-    process.stdout.write = (((chunk: string | Uint8Array) => {
-      chunks.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
+    process.stdout.write = ((chunk: string | Uint8Array) => {
+      chunks.push(
+        typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"),
+      );
       return true;
-    }) as typeof process.stdout.write);
+    }) as typeof process.stdout.write;
 
     try {
-      const logger = core.createPinoRuntimeLogger({ base: { service: "core-runtime" } });
+      const logger = core.createPinoRuntimeLogger({
+        base: { service: "core-runtime" },
+      });
 
       logger.info("stdout line", { step: 3 });
     } finally {
@@ -179,14 +180,14 @@ describe("createPinoRuntimeLogger", () => {
     expect(JSON.parse(chunks.join("").trim())).toMatchObject({
       service: "core-runtime",
       step: 3,
-      msg: "stdout line"
+      msg: "stdout line",
     });
   });
 
   test("does not expose pretty in public options", () => {
     const sink = createMemorySink();
     const options = {
-      level: "info"
+      level: "info",
     } satisfies PinoRuntimeLoggerOptions;
 
     const logger = core.createPinoRuntimeLogger(options, sink);
@@ -194,7 +195,7 @@ describe("createPinoRuntimeLogger", () => {
 
     expect(JSON.parse(sink.lines[0] ?? "")).toMatchObject({
       step: 4,
-      msg: "no pretty"
+      msg: "no pretty",
     });
   });
 
@@ -204,11 +205,11 @@ describe("createPinoRuntimeLogger", () => {
       {
         runtimeConfig: core.resolveRuntimeConfig({
           logging: {
-            level: "error"
-          }
-        })
+            level: "error",
+          },
+        }),
       },
-      sink
+      sink,
     );
 
     logger.warn("hidden", { step: 1 });
@@ -217,7 +218,7 @@ describe("createPinoRuntimeLogger", () => {
     expect(sink.lines).toHaveLength(1);
     expect(JSON.parse(sink.lines[0] ?? "")).toMatchObject({
       step: 2,
-      msg: "visible"
+      msg: "visible",
     });
   });
 });
@@ -250,7 +251,7 @@ function createMemorySink(): NodeJS.WritableStream & { lines: string[] } {
       buffer = parts.pop() ?? "";
       lines.push(...parts.filter((line) => line.length > 0));
       callback();
-    }
+    },
   }) as unknown as NodeJS.WritableStream & { lines: string[] };
 
   sink.lines = lines;
@@ -259,7 +260,9 @@ function createMemorySink(): NodeJS.WritableStream & { lines: string[] } {
 }
 
 function toUtf8(chunk: string | Uint8Array): string {
-  return typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
+  return typeof chunk === "string"
+    ? chunk
+    : Buffer.from(chunk).toString("utf8");
 }
 
 function acceptsRuntimeLogger(_logger: RuntimeLogger): void {}

@@ -9,7 +9,7 @@ export const RUN_VIEW_STATUSES = [
   "running",
   "completed",
   "failed",
-  "cancelled"
+  "cancelled",
 ] as const;
 
 export type RunViewStatus = (typeof RUN_VIEW_STATUSES)[number];

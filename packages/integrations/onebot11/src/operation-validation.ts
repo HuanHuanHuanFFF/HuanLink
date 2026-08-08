@@ -50,10 +50,7 @@ export function parseMessageIdParameter(
 }
 
 /** 校验必须存在的字符串；判断空值时不修改原始内容。 */
-export function requireNonBlankString(
-  input: unknown,
-  label: string,
-): string {
+export function requireNonBlankString(input: unknown, label: string): string {
   if (typeof input !== "string" || input.trim().length === 0) {
     throw new TypeError(`${label} must be a non-empty string`);
   }
@@ -147,17 +144,16 @@ export function requireEnum<T extends string>(
   allowedValues: readonly T[],
   label: string,
 ): T {
-  if (
-    typeof input !== "string" ||
-    !allowedValues.includes(input as T)
-  ) {
+  if (typeof input !== "string" || !allowedValues.includes(input as T)) {
     throw new TypeError(`${label} must be one of ${allowedValues.join(", ")}`);
   }
   return input as T;
 }
 
 /** 校验并保留引用节点与自定义节点的原始顺序。 */
-export function parseForwardNodes(input: unknown): readonly OneBot11ForwardNode[] {
+export function parseForwardNodes(
+  input: unknown,
+): readonly OneBot11ForwardNode[] {
   if (!Array.isArray(input) || input.length === 0) {
     throw new TypeError("OneBot 11 forward nodes must be a non-empty array");
   }
@@ -245,6 +241,8 @@ export function assertExtensionAction(
     throw new TypeError("OneBot 11 extension params must be an object");
   }
   if (action.echo !== expectedEcho) {
-    throw new TypeError("OneBot 11 extension action must preserve the assigned echo");
+    throw new TypeError(
+      "OneBot 11 extension action must preserve the assigned echo",
+    );
   }
 }

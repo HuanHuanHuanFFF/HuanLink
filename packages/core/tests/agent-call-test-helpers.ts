@@ -1,6 +1,6 @@
 import type {
   AgentCallTaskSnapshot,
-  AgentCallTransport
+  AgentCallTransport,
 } from "../src/index.js";
 
 export function deferred<T = void>() {
@@ -13,14 +13,14 @@ export function deferred<T = void>() {
 
 export function task(
   state: AgentCallTaskSnapshot["state"],
-  overrides: Partial<AgentCallTaskSnapshot> = {}
+  overrides: Partial<AgentCallTaskSnapshot> = {},
 ): AgentCallTaskSnapshot {
   return {
     taskId: "a2a-task-01",
     contextId: "a2a-context-01",
     state,
     artifacts: [],
-    ...overrides
+    ...overrides,
   };
 }
 
@@ -31,7 +31,7 @@ export function scopeQuestion() {
     question: "Which files may be changed?",
     isOther: false,
     isSecret: false,
-    options: null
+    options: null,
   };
 }
 

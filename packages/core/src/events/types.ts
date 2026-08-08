@@ -18,7 +18,7 @@ export const AGENT_EVENT_TYPES = [
   "agent_call.created",
   "agent_call.state.changed",
   "channel.reply.sent",
-  "channel.reply.failed"
+  "channel.reply.failed",
 ] as const;
 
 export type AgentEventType = (typeof AGENT_EVENT_TYPES)[number];

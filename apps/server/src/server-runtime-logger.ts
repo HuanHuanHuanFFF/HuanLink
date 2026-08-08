@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   createJsonlFileRuntimeLogger,
-  type FlushableRuntimeLogger
+  type FlushableRuntimeLogger,
 } from "@huanlink/core";
 
 import type { ServerChannelRuntimeConfig } from "./local-user-config.js";
@@ -19,25 +19,22 @@ export function resolveServerLogPath(moduleUrl: string): string {
 }
 
 export function createServerRuntimeLogger(
-  options: CreateServerRuntimeLoggerOptions
+  options: CreateServerRuntimeLoggerOptions,
 ): FlushableRuntimeLogger {
-  return createJsonlFileRuntimeLogger(
-    resolveServerLogPath(options.moduleUrl),
-    {
-      level: "info",
-      base: { service: "huanlink-server" },
-      redactValues: [
-        ...options.config.channels.flatMap((channel) => [
-          ...(channel.accessToken === undefined ? [] : [channel.accessToken]),
-          ...urlSecrets(channel.url)
-        ]),
-        ...(options.config.mainAgent === undefined
-          ? []
-          : urlSecrets(options.config.mainAgent.baseURL)),
-        ...options.config.agents.flatMap((agent) => urlSecrets(agent.origin))
-      ]
-    }
-  );
+  return createJsonlFileRuntimeLogger(resolveServerLogPath(options.moduleUrl), {
+    level: "info",
+    base: { service: "huanlink-server" },
+    redactValues: [
+      ...options.config.channels.flatMap((channel) => [
+        ...(channel.accessToken === undefined ? [] : [channel.accessToken]),
+        ...urlSecrets(channel.url),
+      ]),
+      ...(options.config.mainAgent === undefined
+        ? []
+        : urlSecrets(options.config.mainAgent.baseURL)),
+      ...options.config.agents.flatMap((agent) => urlSecrets(agent.origin)),
+    ],
+  });
 }
 
 function urlSecrets(rawUrl: string): string[] {
@@ -47,7 +44,7 @@ function urlSecrets(rawUrl: string): string[] {
       url.username,
       url.password,
       url.search,
-      ...url.searchParams.values()
+      ...url.searchParams.values(),
     ].filter((value) => value.length > 0);
     if (parts.length > 0) {
       parts.push(rawUrl);

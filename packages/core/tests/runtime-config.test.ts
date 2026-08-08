@@ -9,14 +9,14 @@ describe("runtime config", () => {
     expect(
       resolveRuntimeConfig({
         eventLog: { baseDir: "custom-events" },
-        logging: { level: "debug" }
-      })
+        logging: { level: "debug" },
+      }),
     ).toEqual({
       eventLog: {
         baseDir: "custom-events",
-        nextSeqCacheSize: defaults.eventLog.nextSeqCacheSize
+        nextSeqCacheSize: defaults.eventLog.nextSeqCacheSize,
       },
-      logging: { level: "debug" }
+      logging: { level: "debug" },
     });
   });
 
@@ -43,7 +43,7 @@ describe("runtime config", () => {
 
     expect(resolveRuntimeConfig()).toEqual({
       eventLog: { baseDir: ".huanlink", nextSeqCacheSize: 256 },
-      logging: { level: "info" }
+      logging: { level: "info" },
     });
   });
 });

@@ -278,9 +278,7 @@ function validateSendCommand(command: SendChannelMessageCommandV1): void {
 }
 
 /** 复用 Core 撤回合同校验，并将失败统一映射为 Channel 操作错误。 */
-function validateRetractCommand(
-  command: RetractChannelMessageCommandV1,
-): void {
+function validateRetractCommand(command: RetractChannelMessageCommandV1): void {
   try {
     assertValidRetractChannelMessageCommand(command);
   } catch (error) {

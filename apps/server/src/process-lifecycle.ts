@@ -1,7 +1,7 @@
 import {
   NoopRuntimeLogger,
   type RuntimeLogFields,
-  type RuntimeLogger
+  type RuntimeLogger,
 } from "@huanlink/core";
 
 import { createBestEffortRuntimeLogger } from "./best-effort-runtime-logger.js";
@@ -28,11 +28,11 @@ export type StartRuntimeWithSignalShutdownOptions = {
 };
 
 export async function startRuntimeWithSignalShutdown(
-  options: StartRuntimeWithSignalShutdownOptions
+  options: StartRuntimeWithSignalShutdownOptions,
 ): Promise<"started" | "stopped"> {
   const signals = options.signals ?? process;
   const logger = createBestEffortRuntimeLogger(
-    options.logger ?? new NoopRuntimeLogger()
+    options.logger ?? new NoopRuntimeLogger(),
   );
   let shutdownOperation: Promise<void> | undefined;
 
@@ -40,9 +40,7 @@ export async function startRuntimeWithSignalShutdown(
     signals.off("SIGINT", onSigint);
     signals.off("SIGTERM", onSigterm);
   };
-  const performShutdown = async (
-    fields: RuntimeLogFields
-  ): Promise<void> => {
+  const performShutdown = async (fields: RuntimeLogFields): Promise<void> => {
     logger.info("process.stopping", fields);
     let stopped = false;
     try {
@@ -61,7 +59,7 @@ export async function startRuntimeWithSignalShutdown(
         logger.error("process.stop_failed", {
           ...fields,
           stage: "logger_close",
-          error
+          error,
         });
         notifyShutdownError(options.onShutdownError, error);
       }
@@ -107,7 +105,7 @@ export async function startRuntimeWithSignalShutdown(
 
 function notifySignal(
   listener: StartRuntimeWithSignalShutdownOptions["onSignal"],
-  signal: ShutdownSignal
+  signal: ShutdownSignal,
 ): void {
   try {
     listener?.(signal);
@@ -118,7 +116,7 @@ function notifySignal(
 
 function notifyShutdownError(
   listener: StartRuntimeWithSignalShutdownOptions["onShutdownError"],
-  error: unknown
+  error: unknown,
 ): void {
   try {
     listener?.(error instanceof Error ? error : new Error(String(error)));
