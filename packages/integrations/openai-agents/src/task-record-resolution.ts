@@ -1,4 +1,8 @@
-import type { AgentCallReader, AgentCallRecord, SessionId } from "@huanlink/core";
+import type {
+  AgentCallReader,
+  AgentCallRecord,
+  SessionId,
+} from "@huanlink/core";
 
 export type TaskRecordResolution =
   | { status: "found"; record: AgentCallRecord }
@@ -8,17 +12,17 @@ export type TaskRecordResolution =
 export function resolveTaskRecord(
   reader: AgentCallReader,
   taskId: string,
-  sessionId: SessionId
+  sessionId: SessionId,
 ): TaskRecordResolution {
   const candidates = [
     reader.getByAgentCallId(taskId),
-    reader.getByTaskId(taskId)
+    reader.getByTaskId(taskId),
   ].filter(
     (candidate): candidate is AgentCallRecord =>
-      candidate !== undefined && candidate.sessionId === sessionId
+      candidate !== undefined && candidate.sessionId === sessionId,
   );
   const recordsByAgentCallId = new Map(
-    candidates.map((candidate) => [candidate.agentCallId, candidate])
+    candidates.map((candidate) => [candidate.agentCallId, candidate]),
   );
   if (recordsByAgentCallId.size === 0) {
     return { status: "not-found" };
@@ -28,6 +32,6 @@ export function resolveTaskRecord(
   }
   return {
     status: "found",
-    record: recordsByAgentCallId.values().next().value!
+    record: recordsByAgentCallId.values().next().value!,
   };
 }

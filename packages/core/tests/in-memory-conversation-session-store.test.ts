@@ -2,30 +2,30 @@ import { describe, expect, test } from "vitest";
 
 import {
   InMemoryConversationSessionStore,
-  type InboundChannelMessageV1
+  type InboundChannelMessageV1,
 } from "../src/index.js";
 
 function inboundMessage(
   messageId: string,
-  overrides: Partial<InboundChannelMessageV1> = {}
+  overrides: Partial<InboundChannelMessageV1> = {},
 ): InboundChannelMessageV1 {
   return {
     messageId,
     route: {
       channelId: "qq-main",
       conversationKind: "group",
-      conversationId: "10001"
+      conversationId: "10001",
     },
     sender: {
       id: "20002",
       username: "Alice",
       displayName: "Alice in group",
-      isSelf: false
+      isSelf: false,
     },
     receivedAt: "2026-08-02T08:00:00.000Z",
     content: "hello",
     contentFormat: "onebot11.cq",
-    ...overrides
+    ...overrides,
   };
 }
 
@@ -41,18 +41,18 @@ describe("InMemoryConversationSessionStore", () => {
         route: {
           channelId: "qq-main",
           conversationKind: "group",
-          conversationId: "10001"
+          conversationId: "10001",
         },
-        contentFormat: "onebot11.cq"
+        contentFormat: "onebot11.cq",
       },
       timeline: [
         {
           type: "channel_message",
           channelId: "qq-main",
           messageId: "message-1",
-          observed: inboundMessage("message-1")
-        }
-      ]
+          observed: inboundMessage("message-1"),
+        },
+      ],
     });
   });
 
@@ -67,9 +67,9 @@ describe("InMemoryConversationSessionStore", () => {
       route: {
         channelId: "qq-main",
         conversationKind: "group",
-        conversationId: "10001"
+        conversationId: "10001",
       },
-      contentFormat: "onebot11.cq"
+      contentFormat: "onebot11.cq",
     });
     expect(metadata).not.toBe(store.getSession("session-a")?.metadata);
   });
@@ -82,7 +82,7 @@ describe("InMemoryConversationSessionStore", () => {
       runId: "run-1",
       toolCallId: "call-1",
       toolName: "reply",
-      arguments: { parts: [{ type: "text", text: "done" }] }
+      arguments: { parts: [{ type: "text", text: "done" }] },
     });
     store.appendAgentToolResult("session-a", {
       runId: "run-1",
@@ -91,8 +91,8 @@ describe("InMemoryConversationSessionStore", () => {
       output: {
         status: "sent",
         target: "group:10001",
-        messageId: "message-2"
-      }
+        messageId: "message-2",
+      },
     });
 
     expect(store.getSession("session-a")?.timeline.slice(1)).toEqual([
@@ -101,7 +101,7 @@ describe("InMemoryConversationSessionStore", () => {
         runId: "run-1",
         toolCallId: "call-1",
         toolName: "reply",
-        arguments: { parts: [{ type: "text", text: "done" }] }
+        arguments: { parts: [{ type: "text", text: "done" }] },
       },
       {
         type: "agent_tool_result",
@@ -111,9 +111,9 @@ describe("InMemoryConversationSessionStore", () => {
         output: {
           status: "sent",
           target: "group:10001",
-          messageId: "message-2"
-        }
-      }
+          messageId: "message-2",
+        },
+      },
     ]);
   });
 
@@ -126,49 +126,49 @@ describe("InMemoryConversationSessionStore", () => {
         runId,
         toolCallId: "call-1",
         toolName: "reply",
-        arguments: { content: runId }
+        arguments: { content: runId },
       });
       store.appendAgentToolResult("session-a", {
         runId,
         toolCallId: "call-1",
         toolName: "reply",
-        output: { status: "sent", messageId: `${runId}-message` }
+        output: { status: "sent", messageId: `${runId}-message` },
       });
     }
 
     expect(
       store
         .getSession("session-a")
-        ?.timeline.filter((entry) => entry.type !== "channel_message")
+        ?.timeline.filter((entry) => entry.type !== "channel_message"),
     ).toEqual([
       {
         type: "agent_tool_call",
         runId: "run-1",
         toolCallId: "call-1",
         toolName: "reply",
-        arguments: { content: "run-1" }
+        arguments: { content: "run-1" },
       },
       {
         type: "agent_tool_result",
         runId: "run-1",
         toolCallId: "call-1",
         toolName: "reply",
-        output: { status: "sent", messageId: "run-1-message" }
+        output: { status: "sent", messageId: "run-1-message" },
       },
       {
         type: "agent_tool_call",
         runId: "run-2",
         toolCallId: "call-1",
         toolName: "reply",
-        arguments: { content: "run-2" }
+        arguments: { content: "run-2" },
       },
       {
         type: "agent_tool_result",
         runId: "run-2",
         toolCallId: "call-1",
         toolName: "reply",
-        output: { status: "sent", messageId: "run-2-message" }
-      }
+        output: { status: "sent", messageId: "run-2-message" },
+      },
     ]);
   });
 
@@ -179,30 +179,30 @@ describe("InMemoryConversationSessionStore", () => {
       runId: "run-1",
       toolCallId: "call-1",
       toolName: "reply",
-      arguments: { parts: [{ type: "text", text: "done" }] }
+      arguments: { parts: [{ type: "text", text: "done" }] },
     });
     store.appendChannelMessage(
       "session-a",
       inboundMessage("message-2", {
         sender: { id: "30003", username: "HuanLink", isSelf: true },
-        content: "done"
-      })
+        content: "done",
+      }),
     );
 
     store.appendAgentToolResult("session-a", {
       runId: "run-1",
       toolCallId: "call-1",
       toolName: "reply",
-      output: { status: "sent", messageId: "message-2" }
+      output: { status: "sent", messageId: "message-2" },
     });
 
     expect(
-      store.getSession("session-a")?.timeline.map(({ type }) => type)
+      store.getSession("session-a")?.timeline.map(({ type }) => type),
     ).toEqual([
       "channel_message",
       "agent_tool_call",
       "agent_tool_result",
-      "channel_message"
+      "channel_message",
     ]);
   });
 
@@ -213,7 +213,7 @@ describe("InMemoryConversationSessionStore", () => {
       runId: "run-1",
       toolCallId: "call-1",
       toolName: "reply",
-      arguments: { parts: [{ type: "text", text: "done" }] }
+      arguments: { parts: [{ type: "text", text: "done" }] },
     });
 
     store.recordOutboundDelivery("session-a", {
@@ -223,7 +223,7 @@ describe("InMemoryConversationSessionStore", () => {
       sentAt: "2026-08-02T08:01:00.000Z",
       runId: "run-1",
       toolCallId: "call-1",
-      sourceSessionId: "session-a"
+      sourceSessionId: "session-a",
     });
 
     expect(
@@ -231,9 +231,8 @@ describe("InMemoryConversationSessionStore", () => {
         .getSession("session-a")
         ?.timeline.some(
           (entry) =>
-            entry.type === "channel_message" &&
-            entry.messageId === "message-2"
-        )
+            entry.type === "channel_message" && entry.messageId === "message-2",
+        ),
     ).toBe(false);
 
     store.appendChannelMessage(
@@ -242,11 +241,11 @@ describe("InMemoryConversationSessionStore", () => {
         sender: {
           id: "30003",
           username: "HuanLink",
-          isSelf: true
+          isSelf: true,
         },
         receivedAt: "2026-08-02T08:01:01.000Z",
-        content: "done"
-      })
+        content: "done",
+      }),
     );
 
     expect(store.getSession("session-a")?.timeline.slice(2)).toEqual([
@@ -258,19 +257,19 @@ describe("InMemoryConversationSessionStore", () => {
           sender: {
             id: "30003",
             username: "HuanLink",
-            isSelf: true
+            isSelf: true,
           },
           receivedAt: "2026-08-02T08:01:01.000Z",
-          content: "done"
+          content: "done",
         }),
         outbound: {
           sentAt: "2026-08-02T08:01:00.000Z",
           runId: "run-1",
           toolCallId: "call-1",
           sourceSessionId: "session-a",
-          origin: "current_session"
-        }
-      }
+          origin: "current_session",
+        },
+      },
     ]);
   });
 
@@ -282,19 +281,19 @@ describe("InMemoryConversationSessionStore", () => {
         route: {
           channelId: "qq-main",
           conversationKind: "group",
-          conversationId: "20002"
-        }
-      })
+          conversationId: "20002",
+        },
+      }),
     );
     store.appendAgentToolCall("other-session", {
       runId: "run-1",
       toolCallId: "call-1",
       toolName: "onebot_standard",
-      arguments: { operation: "send_group_message" }
+      arguments: { operation: "send_group_message" },
     });
     const selfEvent = inboundMessage("message-2", {
       sender: { id: "30003", username: "HuanLink", isSelf: true },
-      content: "done"
+      content: "done",
     });
 
     store.appendChannelMessage("session-a", selfEvent);
@@ -305,7 +304,7 @@ describe("InMemoryConversationSessionStore", () => {
       sentAt: "2026-08-02T08:01:00.000Z",
       runId: "run-1",
       toolCallId: "call-1",
-      sourceSessionId: "other-session"
+      sourceSessionId: "other-session",
     });
 
     expect(store.getSession("session-a")?.timeline).toEqual([
@@ -319,9 +318,9 @@ describe("InMemoryConversationSessionStore", () => {
           runId: "run-1",
           toolCallId: "call-1",
           sourceSessionId: "other-session",
-          origin: "cross_session"
-        }
-      }
+          origin: "cross_session",
+        },
+      },
     ]);
   });
 
@@ -337,10 +336,10 @@ describe("InMemoryConversationSessionStore", () => {
         sentAt: "2026-08-02T08:01:00.000Z",
         runId: "run-1",
         toolCallId: "missing-call",
-        sourceSessionId: "session-a"
-      })
+        sourceSessionId: "session-a",
+      }),
     ).toThrow(
-      /source Tool Call run-1 \/ missing-call does not exist in session session-a/
+      /source Tool Call run-1 \/ missing-call does not exist in session session-a/,
     );
   });
 
@@ -352,7 +351,7 @@ describe("InMemoryConversationSessionStore", () => {
         runId: "run-1",
         toolCallId,
         toolName: "reply",
-        arguments: { content: toolCallId }
+        arguments: { content: toolCallId },
       });
     }
     const receipt = {
@@ -362,16 +361,18 @@ describe("InMemoryConversationSessionStore", () => {
       sentAt: "2026-08-02T08:01:00.000Z",
       runId: "run-1",
       toolCallId: "call-1",
-      sourceSessionId: "session-a"
+      sourceSessionId: "session-a",
     } as const;
 
     store.recordOutboundDelivery("session-a", receipt);
-    expect(() => store.recordOutboundDelivery("session-a", receipt)).not.toThrow();
+    expect(() =>
+      store.recordOutboundDelivery("session-a", receipt),
+    ).not.toThrow();
     expect(() =>
       store.recordOutboundDelivery("session-a", {
         ...receipt,
-        toolCallId: "call-2"
-      })
+        toolCallId: "call-2",
+      }),
     ).toThrow(/message-2.*different outbound association/i);
   });
 
@@ -381,7 +382,7 @@ describe("InMemoryConversationSessionStore", () => {
     const repeated = {
       ...message,
       route: { ...message.route },
-      sender: { ...message.sender }
+      sender: { ...message.sender },
     };
 
     expect(store.appendChannelMessage("session-a", message)).toBe("appended");
@@ -390,7 +391,10 @@ describe("InMemoryConversationSessionStore", () => {
     const first = store.getSession("session-a")!;
     expect(first.timeline).toHaveLength(1);
     const observed = first.timeline[0];
-    if (observed?.type !== "channel_message" || observed.observed === undefined) {
+    if (
+      observed?.type !== "channel_message" ||
+      observed.observed === undefined
+    ) {
       throw new Error("expected an observed channel message");
     }
     (observed.observed.route as { conversationId: string }).conversationId =
@@ -398,13 +402,13 @@ describe("InMemoryConversationSessionStore", () => {
     (observed.observed.sender as { username: string }).username = "mutated";
 
     expect(store.getSession("session-a")?.metadata.route.conversationId).toBe(
-      "10001"
+      "10001",
     );
     const second = store.getSession("session-a")?.timeline[0];
     expect(
       second?.type === "channel_message"
         ? second.observed?.sender.username
-        : undefined
+        : undefined,
     ).toBe("Alice");
   });
 
@@ -416,9 +420,9 @@ describe("InMemoryConversationSessionStore", () => {
         sender: {
           id: "different-user",
           username: "Mallory",
-          isSelf: false
-        }
-      }
+          isSelf: false,
+        },
+      },
     ],
     [
       "route",
@@ -426,31 +430,34 @@ describe("InMemoryConversationSessionStore", () => {
         route: {
           channelId: "qq-main",
           conversationKind: "group" as const,
-          conversationId: "different-group"
-        }
-      }
-    ]
-  ])("rejects conflicting %s for the same Channel message key", (_label, overrides) => {
-    const store = new InMemoryConversationSessionStore();
-    const original = inboundMessage("message-1");
-    store.appendChannelMessage("session-a", original);
+          conversationId: "different-group",
+        },
+      },
+    ],
+  ])(
+    "rejects conflicting %s for the same Channel message key",
+    (_label, overrides) => {
+      const store = new InMemoryConversationSessionStore();
+      const original = inboundMessage("message-1");
+      store.appendChannelMessage("session-a", original);
 
-    expect(() =>
-      store.appendChannelMessage(
-        "session-a",
-        inboundMessage("message-1", overrides)
-      )
-    ).toThrow(/message-1.*conflicts with existing observed facts/i);
+      expect(() =>
+        store.appendChannelMessage(
+          "session-a",
+          inboundMessage("message-1", overrides),
+        ),
+      ).toThrow(/message-1.*conflicts with existing observed facts/i);
 
-    expect(store.getSession("session-a")?.timeline).toEqual([
-      {
-        type: "channel_message",
-        channelId: "qq-main",
-        messageId: "message-1",
-        observed: original
-      }
-    ]);
-  });
+      expect(store.getSession("session-a")?.timeline).toEqual([
+        {
+          type: "channel_message",
+          channelId: "qq-main",
+          messageId: "message-1",
+          observed: original,
+        },
+      ]);
+    },
+  );
 
   test("keeps message identities distinct when IDs contain delimiter characters", () => {
     const store = new InMemoryConversationSessionStore();
@@ -461,9 +468,9 @@ describe("InMemoryConversationSessionStore", () => {
         route: {
           channelId: "a",
           conversationKind: "group",
-          conversationId: "10001"
-        }
-      })
+          conversationId: "10001",
+        },
+      }),
     );
     store.appendChannelMessage(
       "session-b",
@@ -471,9 +478,9 @@ describe("InMemoryConversationSessionStore", () => {
         route: {
           channelId: "a\u0000b",
           conversationKind: "group",
-          conversationId: "10002"
-        }
-      })
+          conversationId: "10002",
+        },
+      }),
     );
 
     expect(store.getSession("session-a")?.timeline).toHaveLength(1);
@@ -491,16 +498,16 @@ describe("InMemoryConversationSessionStore", () => {
           route: {
             channelId: "qq-main",
             conversationKind: "group",
-            conversationId: "different-group"
-          }
-        })
-      )
+            conversationId: "different-group",
+          },
+        }),
+      ),
     ).toThrow(/session-a.*route/i);
     expect(() =>
       store.appendChannelMessage(
         "session-a",
-        inboundMessage("message-3", { contentFormat: "other.format" })
-      )
+        inboundMessage("message-3", { contentFormat: "other.format" }),
+      ),
     ).toThrow(/session-a.*content format/i);
   });
 });

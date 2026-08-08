@@ -1,7 +1,7 @@
 import type {
   RuntimeLogFields,
   RuntimeLogLevel,
-  RuntimeLogger
+  RuntimeLogger,
 } from "@huanlink/core";
 
 export type RuntimeLogAttempt = {
@@ -22,7 +22,7 @@ export class ThrowingRuntimeLogger implements RuntimeLogger {
   constructor(
     private readonly options: ThrowingRuntimeLoggerOptions,
     attempts: RuntimeLogAttempt[] = [],
-    private readonly bindings: RuntimeLogFields = {}
+    private readonly bindings: RuntimeLogFields = {},
   ) {
     this.attempts = attempts;
   }
@@ -47,22 +47,21 @@ export class ThrowingRuntimeLogger implements RuntimeLogger {
     if (this.options.throwOnChild) {
       throw this.failure();
     }
-    return new ThrowingRuntimeLogger(
-      this.options,
-      this.attempts,
-      { ...this.bindings, ...bindings }
-    );
+    return new ThrowingRuntimeLogger(this.options, this.attempts, {
+      ...this.bindings,
+      ...bindings,
+    });
   }
 
   private record(
     level: RuntimeLogLevel,
     message: string,
-    fields: RuntimeLogFields = {}
+    fields: RuntimeLogFields = {},
   ): void {
     const attempt = {
       level,
       message,
-      fields: { ...this.bindings, ...fields }
+      fields: { ...this.bindings, ...fields },
     };
     this.attempts.push(attempt);
     if (this.options.throwWhen?.(attempt)) {

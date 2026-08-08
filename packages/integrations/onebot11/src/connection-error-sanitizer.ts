@@ -41,7 +41,9 @@ function collectOneBot11LogSecrets(
   } catch {
     // URL validity is enforced by the WebSocket constructor.
   }
-  return [...new Set(secrets)].sort((left, right) => right.length - left.length);
+  return [...new Set(secrets)].sort(
+    (left, right) => right.length - left.length,
+  );
 }
 
 function nonEmptyString(input: unknown): string | undefined {

@@ -4,7 +4,7 @@ import {
   type AgentCallInputQuestion,
   type AgentCallReader,
   type RuntimeLogFields,
-  type RuntimeLogger
+  type RuntimeLogger,
 } from "@huanlink/core";
 import { tool } from "@openai/agents";
 import { z } from "zod";
@@ -12,7 +12,7 @@ import { z } from "zod";
 import { combineAbortSignals } from "./abort-signals.js";
 import {
   bestEffortRuntimeLogger,
-  safeRuntimeErrorType
+  safeRuntimeErrorType,
 } from "./best-effort-runtime-logger.js";
 import type { OpenAiAgentsRunContext } from "./openai-agents-runtime.js";
 import { resolveTaskRecord } from "./task-record-resolution.js";
@@ -28,9 +28,9 @@ const parameters = z.object({
   answers: z.array(
     z.object({
       questionId: z.string().trim().min(1),
-      answers: z.array(z.string())
-    })
-  )
+      answers: z.array(z.string()),
+    }),
+  ),
 });
 
 export type CreateTaskContinuationToolOptions = {
@@ -40,7 +40,7 @@ export type CreateTaskContinuationToolOptions = {
 };
 
 export function createTaskContinuationTool(
-  options: CreateTaskContinuationToolOptions
+  options: CreateTaskContinuationToolOptions,
 ) {
   const logger = bestEffortRuntimeLogger(options.logger);
 
@@ -54,17 +54,19 @@ export function createTaskContinuationTool(
       runContext.context.trigger === "agent_call_input_required",
     execute: async ({ taskId, answers }, runContext, details) => {
       if (!runContext) {
-        throw new Error("Task continuation tool requires a HuanLink RunContext");
+        throw new Error(
+          "Task continuation tool requires a HuanLink RunContext",
+        );
       }
 
       const toolLogger = logger.child({
         runId: runContext.context.runId,
         sessionId: runContext.context.sessionId,
-        toolName: CONTINUE_TASK_TOOL_NAME
+        toolName: CONTINUE_TASK_TOOL_NAME,
       });
       const requestFields = {
         taskId,
-        questionIds: answers.map((answer) => answer.questionId)
+        questionIds: answers.map((answer) => answer.questionId),
       };
       toolLogger.info("main_agent.tool.started", requestFields);
 
@@ -77,18 +79,18 @@ export function createTaskContinuationTool(
         const resolution = resolveTaskRecord(
           options.reader,
           taskId,
-          runContext.context.sessionId
+          runContext.context.sessionId,
         );
         if (resolution.status === "not-found") {
           return complete(
             { status: "not-found", taskId },
-            { taskId, status: "not-found" }
+            { taskId, status: "not-found" },
           );
         }
         if (resolution.status === "ambiguous") {
           return complete(
             { status: "ambiguous", taskId },
-            { taskId, status: "ambiguous" }
+            { taskId, status: "ambiguous" },
           );
         }
         const record = resolution.record;
@@ -96,16 +98,16 @@ export function createTaskContinuationTool(
           taskId,
           agentCallId: record.agentCallId,
           a2aTaskId: record.taskId,
-          state: record.state
+          state: record.state,
         };
         if (record.state !== "input-required") {
           return complete(
             {
               status: "invalid-state",
               taskId,
-              state: record.state
+              state: record.state,
             },
-            { ...taskFields, status: "invalid-state" }
+            { ...taskFields, status: "invalid-state" },
           );
         }
         const validatedAnswers = validateAnswers(record.questions, answers);
@@ -115,16 +117,16 @@ export function createTaskContinuationTool(
               status: "invalid-answers",
               taskId,
               error:
-                "Answers must cover every pending question exactly once with at least one non-blank answer."
+                "Answers must cover every pending question exactly once with at least one non-blank answer.",
             },
-            { ...taskFields, status: "invalid-answers" }
+            { ...taskFields, status: "invalid-answers" },
           );
         }
 
         const continued = await options.continuator.continueTask(
           record.taskId,
           validatedAnswers,
-          combineAbortSignals(runContext.context.signal, details?.signal)
+          combineAbortSignals(runContext.context.signal, details?.signal),
         );
 
         return complete(
@@ -132,30 +134,30 @@ export function createTaskContinuationTool(
             status: "continued",
             taskId: continued.agentCallId,
             a2aTaskId: continued.taskId,
-            state: continued.state
+            state: continued.state,
           },
           {
             taskId,
             status: "continued",
             agentCallId: record.agentCallId,
             a2aTaskId: record.taskId,
-            state: continued.state
-          }
+            state: continued.state,
+          },
         );
       } catch (error) {
         toolLogger.error("main_agent.tool.failed", {
           ...requestFields,
-          errorType: safeRuntimeErrorType(error)
+          errorType: safeRuntimeErrorType(error),
         });
         throw error;
       }
-    }
+    },
   });
 }
 
 function validateAnswers(
   questions: AgentCallInputQuestion[] | undefined,
-  answers: Array<{ questionId: string; answers: string[] }>
+  answers: Array<{ questionId: string; answers: string[] }>,
 ): AgentCallInputAnswers | undefined {
   if (questions === undefined || questions.length === 0) {
     return undefined;

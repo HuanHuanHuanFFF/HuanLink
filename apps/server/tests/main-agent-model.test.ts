@@ -5,7 +5,7 @@ import { CONTINUE_TASK_TOOL_NAME } from "@huanlink/integration-openai-agents";
 
 import {
   createDeepSeekMainAgentModelBinding,
-  createPhase3MainAgentRuntime
+  createPhase3MainAgentRuntime,
 } from "../src/index.js";
 
 type CapturedRequest = {
@@ -20,7 +20,7 @@ describe("createDeepSeekMainAgentModelBinding", () => {
     const fakeFetch: typeof fetch = async (input, init) => {
       requests.push({
         url: requestUrl(input),
-        body: parseJsonBody(init?.body)
+        body: parseJsonBody(init?.body),
       });
 
       const response = responses.shift();
@@ -35,37 +35,37 @@ describe("createDeepSeekMainAgentModelBinding", () => {
       executionMode: "async",
       agentCallId: "agent-call-deepseek",
       taskId: "a2a-task-deepseek",
-      state: "submitted"
+      state: "submitted",
     }));
     const continueTask = vi.fn<AgentCallContinuator["continueTask"]>(
       async () => {
         throw new Error("Unexpected task continuation in this test");
-      }
+      },
     );
     const modelBinding = createDeepSeekMainAgentModelBinding({
       config: {
         provider: "deepseek",
         modelId: "deepseek-v4-flash",
         baseURL: "https://api.deepseek.com/beta",
-        apiKey: "test-api-key"
+        apiKey: "test-api-key",
       },
-      fetch: fakeFetch
+      fetch: fakeFetch,
     });
     const runtime = createPhase3MainAgentRuntime({
       invoker: { invoke },
       taskReader: {
         getByAgentCallId: () => undefined,
-        getByTaskId: () => undefined
+        getByTaskId: () => undefined,
       },
       taskContinuator: { continueTask },
-      modelBinding
+      modelBinding,
     });
 
     const result = await runtime.run({
       runId: "run-deepseek-bridge",
       sessionId: "session-deepseek-bridge",
       trigger: "user",
-      input: "Ask Codex to add one focused validation."
+      input: "Ask Codex to add one focused validation.",
     });
 
     expect(result.output).toBe("Codex task accepted through DeepSeek.");
@@ -75,11 +75,11 @@ describe("createDeepSeekMainAgentModelBinding", () => {
       contextId: "session-deepseek-bridge",
       skillId: "codex-code-task",
       input: "add one focused validation",
-      executionMode: "async"
+      executionMode: "async",
     });
     expect(requests).toHaveLength(2);
     expect(requests[0]?.url).toBe(
-      "https://api.deepseek.com/beta/chat/completions"
+      "https://api.deepseek.com/beta/chat/completions",
     );
     expect(requests[0]?.body).toMatchObject({
       model: "deepseek-v4-flash",
@@ -90,24 +90,24 @@ describe("createDeepSeekMainAgentModelBinding", () => {
           type: "function",
           function: {
             name: "submit_codex_agent_call",
-            strict: true
-          }
+            strict: true,
+          },
         },
         {
           type: "function",
           function: {
             name: "get_task_status",
-            strict: true
-          }
+            strict: true,
+          },
         },
         {
           type: "function",
           function: {
             name: CONTINUE_TASK_TOOL_NAME,
-            strict: true
-          }
-        }
-      ]
+            strict: true,
+          },
+        },
+      ],
     });
   });
 });
@@ -119,9 +119,7 @@ function requestUrl(input: string | URL | Request): string {
   return input instanceof URL ? input.toString() : input.url;
 }
 
-function parseJsonBody(
-  body: RequestInit["body"]
-): Record<string, unknown> {
+function parseJsonBody(body: RequestInit["body"]): Record<string, unknown> {
   if (typeof body !== "string") {
     throw new Error("Expected DeepSeek request body to be JSON text");
   }
@@ -146,20 +144,20 @@ function toolCallResponse() {
                 name: "submit_codex_agent_call",
                 arguments: JSON.stringify({
                   task: "add one focused validation",
-                  executionMode: "async"
-                })
-              }
-            }
-          ]
+                  executionMode: "async",
+                }),
+              },
+            },
+          ],
         },
-        finish_reason: "tool_calls"
-      }
+        finish_reason: "tool_calls",
+      },
     ],
     usage: {
       prompt_tokens: 10,
       completion_tokens: 5,
-      total_tokens: 15
-    }
+      total_tokens: 15,
+    },
   };
 }
 
@@ -172,15 +170,15 @@ function finalTextResponse() {
       {
         message: {
           role: "assistant",
-          content: "Codex task accepted through DeepSeek."
+          content: "Codex task accepted through DeepSeek.",
         },
-        finish_reason: "stop"
-      }
+        finish_reason: "stop",
+      },
     ],
     usage: {
       prompt_tokens: 20,
       completion_tokens: 7,
-      total_tokens: 27
-    }
+      total_tokens: 27,
+    },
   };
 }

@@ -4,24 +4,24 @@ import {
   TaskNotCancelableError,
   type AgentExecutor,
   type ExecutionEventBus,
-  type RequestContext
+  type RequestContext,
 } from "@a2a-js/sdk/server";
 import {
   NoopRuntimeLogger,
   type RuntimeLogFields,
   type RuntimeLogLevel,
-  type RuntimeLogger
+  type RuntimeLogger,
 } from "@huanlink/core";
 
 import type {
   CodexAppServerNotification,
   CodexAppServerRequest,
   CodexAppServerRequestId,
-  CodexRuntimeClient
+  CodexRuntimeClient,
 } from "./codex-app-server-client.js";
 import {
   validateDemoWorkspace,
-  type ValidatedDemoWorkspace
+  type ValidatedDemoWorkspace,
 } from "./workspace-guard.js";
 
 export interface CodexTaskExecutorOptions {
@@ -32,7 +32,7 @@ export interface CodexTaskExecutorOptions {
   model: string;
   validateWorkspace?: (
     workspace: string,
-    expectedBranch: string
+    expectedBranch: string,
   ) => Promise<ValidatedDemoWorkspace>;
   workspace: string;
 }
@@ -86,27 +86,26 @@ export class CodexTaskExecutor implements AgentExecutor {
 
   constructor(options: CodexTaskExecutorOptions) {
     this.client = options.client;
-    this.cancelTimeoutMs =
-      options.cancelTimeoutMs ?? DEFAULT_CANCEL_TIMEOUT_MS;
+    this.cancelTimeoutMs = options.cancelTimeoutMs ?? DEFAULT_CANCEL_TIMEOUT_MS;
     this.expectedBranch = options.expectedBranch;
     this.logger = options.logger ?? new NoopRuntimeLogger();
     this.model = options.model;
     this.validateWorkspace = options.validateWorkspace ?? validateDemoWorkspace;
     this.workspace = options.workspace;
     this.unsubscribeNotifications = this.client.onNotification((notification) =>
-      this.handleNotification(notification)
+      this.handleNotification(notification),
     );
     this.unsubscribeServerRequests = this.client.onServerRequest((request) =>
-      this.handleServerRequest(request)
+      this.handleServerRequest(request),
     );
     this.unsubscribeClose = this.client.onClose((error) =>
-      this.handleClientClose(error)
+      this.handleClientClose(error),
     );
   }
 
   async execute(
     requestContext: RequestContext,
-    eventBus: ExecutionEventBus
+    eventBus: ExecutionEventBus,
   ): Promise<void> {
     const existing = this.executions.get(requestContext.taskId);
     if (existing) {
@@ -118,7 +117,7 @@ export class CodexTaskExecutor implements AgentExecutor {
     this.executions.set(execution.taskId, execution);
     this.writeLog("info", "adapter.task.received", {
       ...executionLogFields(execution),
-      messageId: requestContext.userMessage.messageId
+      messageId: requestContext.userMessage.messageId,
     });
     eventBus.publish(AgentEvent.task(createInitialTask(requestContext)));
 
@@ -126,7 +125,7 @@ export class CodexTaskExecutor implements AgentExecutor {
       this.finish(
         execution,
         TaskState.TASK_STATE_FAILED,
-        "Codex task executor is shutting down"
+        "Codex task executor is shutting down",
       );
       this.cleanup(execution);
       return;
@@ -135,7 +134,7 @@ export class CodexTaskExecutor implements AgentExecutor {
     try {
       const validated = await this.validateWorkspace(
         this.workspace,
-        this.expectedBranch
+        this.expectedBranch,
       );
       if (execution.terminal) {
         return;
@@ -143,18 +142,18 @@ export class CodexTaskExecutor implements AgentExecutor {
 
       execution.threadId = await this.getOrCreateThread(
         execution.contextId,
-        validated.workspace
+        validated.workspace,
       );
       this.writeLog("info", "codex.thread.ready", {
         ...executionLogFields(execution),
-        threadId: execution.threadId
+        threadId: execution.threadId,
       });
       if (execution.terminal) {
         return;
       }
       if (this.executionByThread.has(execution.threadId)) {
         throw new Error(
-          `Codex thread ${execution.threadId} already has an active task`
+          `Codex thread ${execution.threadId} already has an active task`,
         );
       }
       this.executionByThread.set(execution.threadId, execution);
@@ -162,13 +161,13 @@ export class CodexTaskExecutor implements AgentExecutor {
       execution.turnStarting = true;
       const started = await this.client.startTurn({
         threadId: execution.threadId,
-        prompt: extractText(requestContext)
+        prompt: extractText(requestContext),
       });
       this.setTurnId(execution, started.turnId);
       this.writeLog("info", "codex.turn.started", {
         ...executionLogFields(execution),
         threadId: execution.threadId,
-        turnId: started.turnId
+        turnId: started.turnId,
       });
       this.publishWorking(execution);
 
@@ -177,14 +176,17 @@ export class CodexTaskExecutor implements AgentExecutor {
       this.finish(
         execution,
         TaskState.TASK_STATE_FAILED,
-        error instanceof Error ? error.message : String(error)
+        error instanceof Error ? error.message : String(error),
       );
     } finally {
       this.cleanup(execution);
     }
   }
 
-  async cancelTask(taskId: string, _eventBus: ExecutionEventBus): Promise<void> {
+  async cancelTask(
+    taskId: string,
+    _eventBus: ExecutionEventBus,
+  ): Promise<void> {
     const execution = this.executions.get(taskId);
     if (!execution || execution.terminal) {
       throw new TaskNotCancelableError(`Task ${taskId} is not running`);
@@ -199,23 +201,25 @@ export class CodexTaskExecutor implements AgentExecutor {
     if (!execution.turnId) {
       await Promise.race([
         execution.turnReadyPromise,
-        execution.terminalPromise
+        execution.terminalPromise,
       ]);
     }
     if (execution.terminal) {
       return;
     }
     if (!execution.threadId || !execution.turnId) {
-      throw new Error(`Task ${taskId} did not expose a Codex turn to interrupt`);
+      throw new Error(
+        `Task ${taskId} did not expose a Codex turn to interrupt`,
+      );
     }
 
     await this.client.interruptTurn({
       threadId: execution.threadId,
-      turnId: execution.turnId
+      turnId: execution.turnId,
     });
     const terminalReached = await waitForTerminal(
       execution.terminalPromise,
-      this.cancelTimeoutMs
+      this.cancelTimeoutMs,
     );
     if (!terminalReached) {
       await this.failRuntimeAfterCancellationTimeout(execution);
@@ -244,17 +248,17 @@ export class CodexTaskExecutor implements AgentExecutor {
           try {
             await this.client.interruptTurn({
               threadId: execution.threadId,
-              turnId: execution.turnId
+              turnId: execution.turnId,
             });
           } catch (error) {
             this.finish(
               execution,
               TaskState.TASK_STATE_FAILED,
-              `Failed to interrupt Codex turn during shutdown: ${describeError(error)}`
+              `Failed to interrupt Codex turn during shutdown: ${describeError(error)}`,
             );
           }
         }
-      })
+      }),
     );
 
     let timedOut = false;
@@ -266,7 +270,7 @@ export class CodexTaskExecutor implements AgentExecutor {
           timedOut = true;
           resolve();
         }, timeoutMs);
-      })
+      }),
     ]);
     if (timer) {
       clearTimeout(timer);
@@ -276,7 +280,7 @@ export class CodexTaskExecutor implements AgentExecutor {
         this.finish(
           execution,
           TaskState.TASK_STATE_FAILED,
-          "Timed out waiting for Codex turn shutdown"
+          "Timed out waiting for Codex turn shutdown",
         );
       }
     }
@@ -288,14 +292,14 @@ export class CodexTaskExecutor implements AgentExecutor {
   private async continueExecution(
     execution: InFlightExecution,
     requestContext: RequestContext,
-    eventBus: ExecutionEventBus
+    eventBus: ExecutionEventBus,
   ): Promise<void> {
     if (execution.terminal || !execution.pendingInput) {
       throw new Error(`Task ${execution.taskId} is not awaiting user input`);
     }
     if (requestContext.contextId !== execution.contextId) {
       throw new Error(
-        `Task ${execution.taskId} continuation has a mismatched context`
+        `Task ${execution.taskId} continuation has a mismatched context`,
       );
     }
     const pending = execution.pendingInput;
@@ -309,7 +313,7 @@ export class CodexTaskExecutor implements AgentExecutor {
         eventBus,
         pending.questions,
         `Invalid user-input response: ${describeError(error)}`,
-        requestContext.userMessage.messageId
+        requestContext.userMessage.messageId,
       );
       await execution.terminalPromise;
       return;
@@ -318,7 +322,7 @@ export class CodexTaskExecutor implements AgentExecutor {
     execution.pendingInput = undefined;
     this.writeLog("info", "adapter.task.input_submitted", {
       ...executionLogFields(execution),
-      questionIds: pending.questions.map((question) => question.id)
+      questionIds: pending.questions.map((question) => question.id),
     });
     publishWorkingUpdate(execution, eventBus);
     try {
@@ -326,15 +330,15 @@ export class CodexTaskExecutor implements AgentExecutor {
         answers: Object.fromEntries(
           Object.entries(answers).map(([questionId, values]) => [
             questionId,
-            { answers: values }
-          ])
-        )
+            { answers: values },
+          ]),
+        ),
       });
     } catch (error) {
       this.finish(
         execution,
         TaskState.TASK_STATE_FAILED,
-        `Failed to answer Codex user-input request: ${describeError(error)}`
+        `Failed to answer Codex user-input request: ${describeError(error)}`,
       );
       return;
     }
@@ -342,7 +346,7 @@ export class CodexTaskExecutor implements AgentExecutor {
   }
 
   private async failRuntimeAfterCancellationTimeout(
-    canceledExecution: InFlightExecution
+    canceledExecution: InFlightExecution,
   ): Promise<void> {
     this.closing = true;
     let closeFailure = "";
@@ -362,7 +366,7 @@ export class CodexTaskExecutor implements AgentExecutor {
 
   private async getOrCreateThread(
     contextId: string,
-    workspace: string
+    workspace: string,
   ): Promise<string> {
     const existing = this.threadByContext.get(contextId);
     if (existing) {
@@ -373,7 +377,7 @@ export class CodexTaskExecutor implements AgentExecutor {
       .startThread({
         cwd: workspace,
         developerInstructions: createDeveloperInstructions(this.expectedBranch),
-        model: this.model
+        model: this.model,
       })
       .then(({ threadId }) => threadId)
       .catch((error: unknown) => {
@@ -438,7 +442,7 @@ export class CodexTaskExecutor implements AgentExecutor {
         ...executionLogFields(execution),
         threadId: execution.threadId,
         turnId: execution.turnId,
-        status: turn.status
+        status: turn.status,
       });
       if (execution.pendingInput && turn.status === "completed") {
         return;
@@ -453,13 +457,15 @@ export class CodexTaskExecutor implements AgentExecutor {
         this.finish(
           execution,
           TaskState.TASK_STATE_FAILED,
-          typeof error?.message === "string" ? error.message : "Codex turn failed"
+          typeof error?.message === "string"
+            ? error.message
+            : "Codex turn failed",
         );
       } else {
         this.finish(
           execution,
           TaskState.TASK_STATE_FAILED,
-          `Unexpected completed Codex turn status: ${turn.status}`
+          `Unexpected completed Codex turn status: ${turn.status}`,
         );
       }
     }
@@ -475,31 +481,31 @@ export class CodexTaskExecutor implements AgentExecutor {
       this.finish(
         execution,
         TaskState.TASK_STATE_FAILED,
-        "Codex requested additional input before the previous request was answered"
+        "Codex requested additional input before the previous request was answered",
       );
       return;
     }
     execution.pendingInput = {
       requestId: request.id,
-      questions: cloneInputQuestions(request.params.questions)
+      questions: cloneInputQuestions(request.params.questions),
     };
     this.writeLog("info", "adapter.task.input_required", {
       ...executionLogFields(execution),
       threadId: request.params.threadId,
       turnId: request.params.turnId,
-      questionIds: request.params.questions.map((question) => question.id)
+      questionIds: request.params.questions.map((question) => question.id),
     });
     publishInputRequiredUpdate(
       execution,
       execution.eventBus,
       request.params.questions,
       undefined,
-      request.params.itemId
+      request.params.itemId,
     );
   }
 
   private findServerRequestExecution(
-    request: CodexAppServerRequest
+    request: CodexAppServerRequest,
   ): InFlightExecution | undefined {
     const execution = this.executionByTurn.get(request.params.turnId);
     return execution?.turnId === request.params.turnId &&
@@ -509,7 +515,7 @@ export class CodexTaskExecutor implements AgentExecutor {
   }
 
   private async completeAfterValidation(
-    execution: InFlightExecution
+    execution: InFlightExecution,
   ): Promise<void> {
     if (execution.terminal || execution.completionPending) {
       return;
@@ -523,14 +529,14 @@ export class CodexTaskExecutor implements AgentExecutor {
         this.finish(
           execution,
           TaskState.TASK_STATE_FAILED,
-          createEmptyResultFailure(execution)
+          createEmptyResultFailure(execution),
         );
       }
     } catch (error) {
       this.finish(
         execution,
         TaskState.TASK_STATE_FAILED,
-        `Workspace changed before Codex completion: ${describeError(error)}`
+        `Workspace changed before Codex completion: ${describeError(error)}`,
       );
     }
   }
@@ -541,13 +547,13 @@ export class CodexTaskExecutor implements AgentExecutor {
       this.finish(
         execution,
         TaskState.TASK_STATE_FAILED,
-        `Codex app-server connection closed: ${describeError(error)}`
+        `Codex app-server connection closed: ${describeError(error)}`,
       );
     }
   }
 
   private findExecution(
-    params: Record<string, unknown>
+    params: Record<string, unknown>,
   ): InFlightExecution | undefined {
     const turn = asRecord(params.turn);
     const turnId =
@@ -570,7 +576,7 @@ export class CodexTaskExecutor implements AgentExecutor {
   private setTurnId(execution: InFlightExecution, turnId: string): void {
     if (execution.turnId && execution.turnId !== turnId) {
       throw new Error(
-        `Task ${execution.taskId} received conflicting Codex turn ids`
+        `Task ${execution.taskId} received conflicting Codex turn ids`,
       );
     }
     execution.turnId = turnId;
@@ -583,7 +589,11 @@ export class CodexTaskExecutor implements AgentExecutor {
       return;
     }
     execution.workingPublished = true;
-    this.writeLog("info", "adapter.task.working", executionLogFields(execution));
+    this.writeLog(
+      "info",
+      "adapter.task.working",
+      executionLogFields(execution),
+    );
     execution.eventBus.publish(
       AgentEvent.statusUpdate({
         taskId: execution.taskId,
@@ -591,17 +601,17 @@ export class CodexTaskExecutor implements AgentExecutor {
         status: {
           state: TaskState.TASK_STATE_WORKING,
           message: undefined,
-          timestamp: new Date().toISOString()
+          timestamp: new Date().toISOString(),
         },
-        metadata: undefined
-      })
+        metadata: undefined,
+      }),
     );
   }
 
   private finish(
     execution: InFlightExecution,
     state: TaskState,
-    failure?: string
+    failure?: string,
   ): void {
     if (execution.terminal) {
       return;
@@ -618,7 +628,7 @@ export class CodexTaskExecutor implements AgentExecutor {
         ...executionLogFields(execution),
         changedFileCount: execution.changedFiles.size,
         threadId: execution.threadId,
-        turnId: execution.turnId
+        turnId: execution.turnId,
       });
       execution.eventBus.publish(
         AgentEvent.artifactUpdate({
@@ -627,8 +637,8 @@ export class CodexTaskExecutor implements AgentExecutor {
           artifact: createResultArtifact(execution),
           append: false,
           lastChunk: true,
-          metadata: undefined
-        })
+          metadata: undefined,
+        }),
       );
     }
 
@@ -644,20 +654,20 @@ export class CodexTaskExecutor implements AgentExecutor {
                 contextId: execution.contextId,
                 taskId: execution.taskId,
                 role: "ROLE_AGENT",
-                parts: [{ text: failure }]
+                parts: [{ text: failure }],
               })
             : undefined,
-          timestamp: new Date().toISOString()
+          timestamp: new Date().toISOString(),
         },
-        metadata: undefined
-      })
+        metadata: undefined,
+      }),
     );
     this.writeLog("info", "adapter.task.terminal", {
       ...executionLogFields(execution),
       state,
       threadId: execution.threadId,
       turnId: execution.turnId,
-      ...(failure === undefined ? {} : { failureLength: failure.length })
+      ...(failure === undefined ? {} : { failureLength: failure.length }),
     });
     execution.eventBus.finished();
     execution.resolveTerminal();
@@ -684,7 +694,7 @@ export class CodexTaskExecutor implements AgentExecutor {
   private writeLog(
     level: RuntimeLogLevel,
     message: string,
-    fields?: RuntimeLogFields
+    fields?: RuntimeLogFields,
   ): void {
     try {
       this.logger[level](message, fields);
@@ -697,7 +707,7 @@ export class CodexTaskExecutor implements AgentExecutor {
 function executionLogFields(execution: InFlightExecution): RuntimeLogFields {
   return {
     a2aTaskId: execution.taskId,
-    contextId: execution.contextId
+    contextId: execution.contextId,
   };
 }
 
@@ -708,17 +718,17 @@ function createInitialTask(requestContext: RequestContext): Task {
     status: {
       state: TaskState.TASK_STATE_SUBMITTED,
       message: undefined,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     },
     artifacts: [],
     history: [requestContext.userMessage],
-    metadata: undefined
+    metadata: undefined,
   };
 }
 
 function createExecution(
   requestContext: RequestContext,
-  eventBus: ExecutionEventBus
+  eventBus: ExecutionEventBus,
 ): InFlightExecution {
   let resolveTerminal!: () => void;
   let resolveTurnReady!: () => void;
@@ -745,14 +755,14 @@ function createExecution(
     terminalPromise,
     turnReadyPromise,
     turnStarting: false,
-    workingPublished: false
+    workingPublished: false,
   };
 }
 
 function extractText(requestContext: RequestContext): string {
   const text = requestContext.userMessage.parts
     .flatMap((part) =>
-      part.content?.$case === "text" ? [part.content.value] : []
+      part.content?.$case === "text" ? [part.content.value] : [],
     )
     .join("\n")
     .trim();
@@ -763,7 +773,7 @@ function extractText(requestContext: RequestContext): string {
 }
 
 function extractAnswers(
-  requestContext: RequestContext
+  requestContext: RequestContext,
 ): Record<string, string[]> {
   const answerParts = requestContext.userMessage.parts.flatMap((part) => {
     if (part.content?.$case !== "data") {
@@ -773,12 +783,17 @@ function extractAnswers(
     return data && asRecord(data.answers) ? [data.answers] : [];
   });
   if (answerParts.length !== 1) {
-    throw new Error("Task continuation requires one structured answers data part");
+    throw new Error(
+      "Task continuation requires one structured answers data part",
+    );
   }
 
   const answers: Record<string, string[]> = {};
   for (const [questionId, value] of Object.entries(answerParts[0]!)) {
-    if (!Array.isArray(value) || value.some((answer) => typeof answer !== "string")) {
+    if (
+      !Array.isArray(value) ||
+      value.some((answer) => typeof answer !== "string")
+    ) {
       throw new Error(`Answer ${questionId} must be an array of strings`);
     }
     answers[questionId] = [...value];
@@ -788,7 +803,7 @@ function extractAnswers(
 
 function validateAnswerIds(
   questions: CodexAppServerRequest["params"]["questions"],
-  answers: Record<string, string[]>
+  answers: Record<string, string[]>,
 ): void {
   const expected = new Set(questions.map((question) => question.id));
   const actual = Object.keys(answers);
@@ -800,10 +815,10 @@ function validateAnswerIds(
     throw new Error(
       [
         unknown.length > 0 ? `unknown question ids: ${unknown.join(", ")}` : "",
-        missing.length > 0 ? `missing question ids: ${missing.join(", ")}` : ""
+        missing.length > 0 ? `missing question ids: ${missing.join(", ")}` : "",
       ]
         .filter(Boolean)
-        .join("; ")
+        .join("; "),
     );
   }
 }
@@ -812,7 +827,7 @@ function createInputRequiredMessage(
   execution: InFlightExecution,
   questions: CodexAppServerRequest["params"]["questions"],
   failure: string | undefined,
-  messageSuffix: string
+  messageSuffix: string,
 ): Message {
   const readable = questions
     .map((question) => `${question.header}: ${question.question}`)
@@ -824,8 +839,8 @@ function createInputRequiredMessage(
     role: "ROLE_AGENT",
     parts: [
       { text: failure ? `${failure}\n${readable}` : readable },
-      { data: { questions } }
-    ]
+      { data: { questions } },
+    ],
   });
 }
 
@@ -834,7 +849,7 @@ function publishInputRequiredUpdate(
   eventBus: ExecutionEventBus,
   questions: CodexAppServerRequest["params"]["questions"],
   failure: string | undefined,
-  messageSuffix: string
+  messageSuffix: string,
 ): void {
   eventBus.publish(
     AgentEvent.statusUpdate({
@@ -846,30 +861,30 @@ function publishInputRequiredUpdate(
           execution,
           questions,
           failure,
-          messageSuffix
+          messageSuffix,
         ),
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
       },
-      metadata: undefined
-    })
+      metadata: undefined,
+    }),
   );
 }
 
 function cloneInputQuestions(
-  questions: CodexAppServerRequest["params"]["questions"]
+  questions: CodexAppServerRequest["params"]["questions"],
 ): CodexAppServerRequest["params"]["questions"] {
   return questions.map((question) => ({
     ...question,
     options:
       question.options === null
         ? null
-        : question.options.map((option) => ({ ...option }))
+        : question.options.map((option) => ({ ...option })),
   }));
 }
 
 function publishWorkingUpdate(
   execution: InFlightExecution,
-  eventBus: ExecutionEventBus
+  eventBus: ExecutionEventBus,
 ): void {
   eventBus.publish(
     AgentEvent.statusUpdate({
@@ -878,16 +893,16 @@ function publishWorkingUpdate(
       status: {
         state: TaskState.TASK_STATE_WORKING,
         message: undefined,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
       },
-      metadata: undefined
-    })
+      metadata: undefined,
+    }),
   );
 }
 
 function collectCompletedItem(
   execution: InFlightExecution,
-  item: Record<string, unknown>
+  item: Record<string, unknown>,
 ): void {
   if (item.type === "agentMessage" && typeof item.text === "string") {
     const text = item.text.trim();
@@ -925,14 +940,14 @@ function createResultArtifact(execution: InFlightExecution): Artifact {
   const sections = [
     `Codex thread: ${execution.threadId ?? "unknown"}`,
     `Codex turn: ${execution.turnId ?? "unknown"}`,
-    `Summary:\n${execution.finalAnswer || "Codex completed without a final answer."}`
+    `Summary:\n${execution.finalAnswer || "Codex completed without a final answer."}`,
   ];
   if (execution.lastCommentary) {
     sections.push(`Last commentary:\n${execution.lastCommentary}`);
   }
   sections.push(
     `Changed files:\n${files.length > 0 ? files.map((file) => `- ${file}`).join("\n") : "- none reported"}`,
-    `Diff:\n${execution.diff || "No unified diff was reported."}`
+    `Diff:\n${execution.diff || "No unified diff was reported."}`,
   );
   return {
     artifactId: `${execution.taskId}-codex-result`,
@@ -943,11 +958,11 @@ function createResultArtifact(execution: InFlightExecution): Artifact {
         content: { $case: "text", value: sections.join("\n\n") },
         metadata: undefined,
         filename: "",
-        mediaType: "text/plain"
-      }
+        mediaType: "text/plain",
+      },
     ],
     metadata: undefined,
-    extensions: []
+    extensions: [],
   };
 }
 
@@ -984,13 +999,13 @@ function createDeveloperInstructions(expectedBranch: string): string {
     "Do not switch branches, commit, merge, or push.",
     "Make minor implementation or wording choices yourself instead of pausing to ask.",
     "When genuinely blocked by missing user input, use request_user_input.",
-    "Make only the requested focused change and report the files and verification run."
+    "Make only the requested focused change and report the files and verification run.",
   ].join(" ");
 }
 
 async function waitForTerminal(
   terminal: Promise<void>,
-  timeoutMs: number
+  timeoutMs: number,
 ): Promise<boolean> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -998,7 +1013,7 @@ async function waitForTerminal(
       terminal.then(() => true),
       new Promise<false>((resolve) => {
         timer = setTimeout(() => resolve(false), timeoutMs);
-      })
+      }),
     ]);
   } finally {
     if (timer) {

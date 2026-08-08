@@ -1,8 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import {
-  createOneBot11SendMessageActionV1,
-} from "./outbound-message-v1.js";
+import { createOneBot11SendMessageActionV1 } from "./outbound-message-v1.js";
 import {
   createCanSendImageAction,
   createCanSendRecordAction,
@@ -110,8 +108,7 @@ export class OneBot11Operations {
     this.standard = Object.freeze<OneBot11StandardOperations>({
       sendGroupMessage: (input) => this.sendGroupMessage(input),
       sendPrivateMessage: (input) => this.sendPrivateMessage(input),
-      sendGroupForwardMessage: (input) =>
-        this.sendGroupForwardMessage(input),
+      sendGroupForwardMessage: (input) => this.sendGroupForwardMessage(input),
       sendPrivateForwardMessage: (input) =>
         this.sendPrivateForwardMessage(input),
       getMessage: (input) =>
@@ -205,10 +202,7 @@ export class OneBot11Operations {
     this.privileged = Object.freeze<OneBot11PrivilegedOperations>({
       deleteMessage: (input) =>
         this.execute(
-          createDeleteMessageOperationAction(
-            input,
-            this.echo("delete-msg"),
-          ),
+          createDeleteMessageOperationAction(input, this.echo("delete-msg")),
           `message:${input.messageId}`,
         ),
       setGroupKick: (input) =>
@@ -223,10 +217,7 @@ export class OneBot11Operations {
         ),
       setGroupWholeBan: (input) =>
         this.executeGroupAction(
-          createSetGroupWholeBanAction(
-            input,
-            this.echo("set-group-whole-ban"),
-          ),
+          createSetGroupWholeBanAction(input, this.echo("set-group-whole-ban")),
           input,
         ),
       setGroupAdmin: (input) =>
@@ -334,9 +325,7 @@ export class OneBot11Operations {
     input: OneBot11SendGroupForwardMessageInput,
   ): Promise<OneBot11OperationData> {
     if (!this.forwardMessagesEnabled) {
-      throw new OneBot11OperationNotSupportedError(
-        "sendGroupForwardMessage",
-      );
+      throw new OneBot11OperationNotSupportedError("sendGroupForwardMessage");
     }
     return await this.executeGroupAction(
       createSendGroupForwardMessageAction(
@@ -351,9 +340,7 @@ export class OneBot11Operations {
     input: OneBot11SendPrivateForwardMessageInput,
   ): Promise<OneBot11OperationData> {
     if (!this.forwardMessagesEnabled) {
-      throw new OneBot11OperationNotSupportedError(
-        "sendPrivateForwardMessage",
-      );
+      throw new OneBot11OperationNotSupportedError("sendPrivateForwardMessage");
     }
     return await this.executeUserAction(
       createSendPrivateForwardMessageAction(

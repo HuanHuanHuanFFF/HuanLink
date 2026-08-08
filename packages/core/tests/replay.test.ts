@@ -5,13 +5,13 @@ import {
   CORE_SCHEMA_VERSION,
   EventLogRunViewReader,
   InMemoryEventLog,
-  createRunView
+  createRunView,
 } from "../src/index.js";
 import type { AgentEvent, AgentEventDraft } from "../src/index.js";
 
 function appendEvents(
   eventLog: InMemoryEventLog,
-  events: AgentEventDraft[]
+  events: AgentEventDraft[],
 ): void {
   for (const event of events) {
     eventLog.append(event);
@@ -27,7 +27,7 @@ describe("replay reducer", () => {
         type: "main_agent.run.started",
         runId: "run_success",
         sessionId: "session_success",
-        data: { trigger: "user" }
+        data: { trigger: "user" },
       },
       {
         type: "agent_call.created",
@@ -38,8 +38,8 @@ describe("replay reducer", () => {
           taskId: "task_01",
           skillId: "coding",
           executionMode: "async",
-          state: "submitted"
-        }
+          state: "submitted",
+        },
       },
       {
         type: "agent_call.state.changed",
@@ -48,8 +48,8 @@ describe("replay reducer", () => {
         data: {
           agentCallId: "agent_call_01",
           taskId: "task_01",
-          state: "working"
-        }
+          state: "working",
+        },
       },
       {
         type: "agent_call.state.changed",
@@ -58,14 +58,14 @@ describe("replay reducer", () => {
         data: {
           agentCallId: "agent_call_01",
           taskId: "task_01",
-          state: "completed"
-        }
+          state: "completed",
+        },
       },
       {
         type: "main_agent.run.completed",
         runId: "run_success",
         sessionId: "session_success",
-        data: { output: "MainAgent finished" }
+        data: { output: "MainAgent finished" },
       },
       {
         type: "channel.reply.sent",
@@ -73,9 +73,9 @@ describe("replay reducer", () => {
         sessionId: "session_success",
         data: {
           conversationId: "group_01",
-          text: "MainAgent finished"
-        }
-      }
+          text: "MainAgent finished",
+        },
+      },
     ]);
 
     const view = createRunView(eventLog.readRunEvents("run_success"));
@@ -91,18 +91,18 @@ describe("replay reducer", () => {
         route: {
           channelId: "qq-main",
           conversationKind: "group",
-          conversationId: "group_01"
+          conversationId: "group_01",
         },
         messageId: "message_01",
         sender: {
           id: "user_01",
           username: "User One",
           displayName: "User One",
-          isSelf: false
+          isSelf: false,
         },
         content: "@bot start",
         contentFormat: "onebot11.cq",
-        trigger: { kind: "mention" }
+        trigger: { kind: "mention" },
       },
       output: "MainAgent finished",
       agentCalls: [
@@ -111,14 +111,14 @@ describe("replay reducer", () => {
           taskId: "task_01",
           skillId: "coding",
           executionMode: "async",
-          state: "completed"
-        }
+          state: "completed",
+        },
       ],
       reply: {
         status: "sent",
         conversationId: "group_01",
-        text: "MainAgent finished"
-      }
+        text: "MainAgent finished",
+      },
     });
     expect(view?.startedAt).toEqual(expect.any(String));
     expect(view?.endedAt).toEqual(expect.any(String));
@@ -139,16 +139,16 @@ describe("replay reducer", () => {
           cause: {
             agentCallId: "agent_call_parent",
             taskId: "task_parent",
-            state: "completed"
-          }
-        }
+            state: "completed",
+          },
+        },
       },
       {
         type: "main_agent.run.completed",
         runId: "run_reentry",
         sessionId: "session_reentry",
-        data: { output: "continued" }
-      }
+        data: { output: "continued" },
+      },
     ]);
 
     expect(createRunView(eventLog.readRunEvents("run_reentry"))).toMatchObject({
@@ -157,11 +157,11 @@ describe("replay reducer", () => {
       cause: {
         agentCallId: "agent_call_parent",
         taskId: "task_parent",
-        state: "completed"
+        state: "completed",
       },
       output: "continued",
       agentCalls: [],
-      reply: { status: "not-sent" }
+      reply: { status: "not-sent" },
     });
   });
 
@@ -172,13 +172,13 @@ describe("replay reducer", () => {
         type: "main_agent.run.started",
         runId: "run_reply_failed",
         sessionId: "session_reply_failed",
-        data: { trigger: "user" }
+        data: { trigger: "user" },
       },
       {
         type: "main_agent.run.completed",
         runId: "run_reply_failed",
         sessionId: "session_reply_failed",
-        data: { output: "done before reply" }
+        data: { output: "done before reply" },
       },
       {
         type: "channel.reply.failed",
@@ -187,13 +187,13 @@ describe("replay reducer", () => {
         data: {
           conversationId: "group_01",
           text: "done before reply",
-          error: "OneBot unavailable"
-        }
-      }
+          error: "OneBot unavailable",
+        },
+      },
     ]);
 
     expect(
-      createRunView(eventLog.readRunEvents("run_reply_failed"))
+      createRunView(eventLog.readRunEvents("run_reply_failed")),
     ).toMatchObject({
       status: "completed",
       output: "done before reply",
@@ -202,8 +202,8 @@ describe("replay reducer", () => {
         conversationId: "group_01",
         text: "done before reply",
         error: "OneBot unavailable",
-        failedAt: expect.any(String)
-      }
+        failedAt: expect.any(String),
+      },
     });
   });
 
@@ -214,14 +214,14 @@ describe("replay reducer", () => {
         type: "main_agent.run.started",
         runId: "run_failed",
         sessionId: "session_failed",
-        data: { trigger: "user" }
+        data: { trigger: "user" },
       },
       {
         type: "main_agent.run.failed",
         runId: "run_failed",
         sessionId: "session_failed",
-        data: { error: "model failed" }
-      }
+        data: { error: "model failed" },
+      },
     ]);
 
     const cancelledLog = new InMemoryEventLog();
@@ -230,27 +230,27 @@ describe("replay reducer", () => {
         type: "main_agent.run.started",
         runId: "run_cancelled",
         sessionId: "session_cancelled",
-        data: { trigger: "user" }
+        data: { trigger: "user" },
       },
       {
         type: "main_agent.run.cancelled",
         runId: "run_cancelled",
         sessionId: "session_cancelled",
-        data: { reason: "user cancelled" }
-      }
+        data: { reason: "user cancelled" },
+      },
     ]);
 
     expect(createRunView(failedLog.readRunEvents("run_failed"))).toMatchObject({
       status: "failed",
       error: "model failed",
-      endedAt: expect.any(String)
+      endedAt: expect.any(String),
     });
     expect(
-      createRunView(cancelledLog.readRunEvents("run_cancelled"))
+      createRunView(cancelledLog.readRunEvents("run_cancelled")),
     ).toMatchObject({
       status: "cancelled",
       error: "user cancelled",
-      endedAt: expect.any(String)
+      endedAt: expect.any(String),
     });
   });
 
@@ -263,17 +263,21 @@ describe("replay reducer", () => {
       type: "main_agent.run.started",
       runId: "run_running",
       sessionId: "session_running",
-      data: { trigger: "user" }
+      data: { trigger: "user" },
     });
 
-    expect(createRunView(pendingLog.readRunEvents("run_pending"))).toMatchObject({
+    expect(
+      createRunView(pendingLog.readRunEvents("run_pending")),
+    ).toMatchObject({
       status: "pending",
-      reply: { status: "not-sent" }
+      reply: { status: "not-sent" },
     });
-    expect(createRunView(runningLog.readRunEvents("run_running"))).toMatchObject({
+    expect(
+      createRunView(runningLog.readRunEvents("run_running")),
+    ).toMatchObject({
       status: "running",
       trigger: "user",
-      reply: { status: "not-sent" }
+      reply: { status: "not-sent" },
     });
   });
 
@@ -281,17 +285,17 @@ describe("replay reducer", () => {
     const events: AgentEvent[] = [
       completeEvent(4, "channel.reply.sent", {
         conversationId: "group_01",
-        text: "ordered"
+        text: "ordered",
       }),
       completeEvent(2, "agent_call.created", {
         agentCallId: "agent_call_ordered",
         taskId: "task_ordered",
         skillId: "coding",
         executionMode: "blocking",
-        state: "submitted"
+        state: "submitted",
       }),
       completeEvent(1, "main_agent.run.started", { trigger: "user" }),
-      completeEvent(3, "main_agent.run.completed", { output: "ordered" })
+      completeEvent(3, "main_agent.run.completed", { output: "ordered" }),
     ];
     const snapshot = structuredClone(events);
 
@@ -308,7 +312,7 @@ describe("replay reducer", () => {
       lastSeq: 4,
       output: "ordered",
       agentCalls: [{ agentCallId: "agent_call_ordered", state: "submitted" }],
-      reply: { status: "sent", sentAt: "2026-07-15T00:00:04.000Z" }
+      reply: { status: "sent", sentAt: "2026-07-15T00:00:04.000Z" },
     });
   });
 
@@ -321,9 +325,9 @@ describe("replay reducer", () => {
         cause: {
           agentCallId: "agent_call_late",
           taskId: "task_late",
-          state: "completed"
-        }
-      })
+          state: "completed",
+        },
+      }),
     ];
 
     expect(createRunView(events)).toMatchObject({
@@ -332,7 +336,7 @@ describe("replay reducer", () => {
       endedAt: "2026-07-15T00:00:02.000Z",
       durationSeconds: 1,
       eventCount: 3,
-      lastSeq: 3
+      lastSeq: 3,
     });
   });
 
@@ -349,20 +353,20 @@ describe("EventLogRunViewReader", () => {
         type: "main_agent.run.started",
         runId: "run_reader",
         sessionId: "session_reader",
-        data: { trigger: "user" }
+        data: { trigger: "user" },
       },
       {
         type: "main_agent.run.completed",
         runId: "run_reader",
         sessionId: "session_reader",
-        data: { output: "reader output" }
-      }
+        data: { output: "reader output" },
+      },
     ]);
     const reader = new EventLogRunViewReader({ eventReader: eventLog });
 
     await expect(reader.readRunView("run_reader")).resolves.toMatchObject({
       status: "completed",
-      output: "reader output"
+      output: "reader output",
     });
     await expect(reader.readRunView("run_missing")).resolves.toBeNull();
   });
@@ -378,28 +382,28 @@ function channelMessage(runId: string, sessionId: string): AgentEventDraft {
         route: {
           channelId: "qq-main",
           conversationKind: "group",
-          conversationId: "group_01"
+          conversationId: "group_01",
         },
         messageId: "message_01",
         sender: {
           id: "user_01",
           username: "User One",
           displayName: "User One",
-          isSelf: false
+          isSelf: false,
         },
         content: "@bot start",
         contentFormat: "onebot11.cq",
         receivedAt: "2026-07-15T00:00:00.000Z",
-        trigger: { kind: "mention" }
-      }
-    }
+        trigger: { kind: "mention" },
+      },
+    },
   };
 }
 
 function completeEvent(
   seq: number,
   type: AgentEvent["type"],
-  data: AgentEvent["data"]
+  data: AgentEvent["data"],
 ): AgentEvent {
   return {
     schemaVersion: CORE_SCHEMA_VERSION,
@@ -409,6 +413,6 @@ function completeEvent(
     type,
     runId: "run_ordered",
     sessionId: "session_ordered",
-    data
+    data,
   } as AgentEvent;
 }

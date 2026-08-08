@@ -27,9 +27,10 @@ class RecordingTransport implements OneBot11Transport {
   }
 }
 
-function createOperations(
-  transport = new RecordingTransport(),
-): { operations: OneBot11Operations; transport: RecordingTransport } {
+function createOperations(transport = new RecordingTransport()): {
+  operations: OneBot11Operations;
+  transport: RecordingTransport;
+} {
   return {
     operations: new OneBot11Operations({
       channelId: "qq-main",
@@ -122,14 +123,17 @@ describe("OneBot11Operations validation", () => {
     expect(transport.actions).toHaveLength(1);
   });
 
-  test.each([0, 11, 1.5])("rejects invalid friend-like count %s", async (times) => {
-    const { operations, transport } = createOperations();
+  test.each([0, 11, 1.5])(
+    "rejects invalid friend-like count %s",
+    async (times) => {
+      const { operations, transport } = createOperations();
 
-    await expect(
-      call(() => operations.standard.sendLike({ userId: "10001", times })),
-    ).rejects.toThrow("integer from 1 to 10");
-    expect(transport.actions).toEqual([]);
-  });
+      await expect(
+        call(() => operations.standard.sendLike({ userId: "10001", times })),
+      ).rejects.toThrow("integer from 1 to 10");
+      expect(transport.actions).toEqual([]);
+    },
+  );
 
   test("rejects unsupported group honor and request enum values", async () => {
     const { operations, transport } = createOperations();

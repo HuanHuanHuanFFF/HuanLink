@@ -13,18 +13,18 @@ const EVENT_ENVELOPE_KEYS = new Set([
   "type",
   "runId",
   "sessionId",
-  "data"
+  "data",
 ]);
 
 const AGENT_RUNTIME_TRIGGERS: ReadonlySet<string> = new Set([
   "user",
   "agent_call_input_required",
-  "agent_call_terminal"
+  "agent_call_terminal",
 ]);
 
 const TASK_EXECUTION_MODES: ReadonlySet<string> = new Set([
   "async",
-  "blocking"
+  "blocking",
 ]);
 
 const AGENT_CALL_TASK_STATES: ReadonlySet<string> = new Set([
@@ -36,7 +36,7 @@ const AGENT_CALL_TASK_STATES: ReadonlySet<string> = new Set([
   "completed",
   "failed",
   "canceled",
-  "rejected"
+  "rejected",
 ]);
 
 export function serializeEvent(event: AgentEvent): string {
@@ -59,7 +59,7 @@ export function parseEventsJsonl(content: string, runId: RunId): AgentEvent[] {
 function parseEventLine(
   line: string,
   lineNumber: number,
-  runId: RunId
+  runId: RunId,
 ): AgentEvent {
   let value: unknown;
 
@@ -68,7 +68,7 @@ function parseEventLine(
   } catch (error) {
     throw new Error(
       `Failed to parse JSONL EventLog line ${lineNumber} for run "${runId}": ${errorMessage(error)}`,
-      { cause: error }
+      { cause: error },
     );
   }
 
@@ -79,7 +79,7 @@ function parseEventLine(
 function assertAgentEventEnvelope(
   value: unknown,
   lineNumber: number,
-  runId: RunId
+  runId: RunId,
 ): asserts value is AgentEvent {
   const record = isRecord(value) ? value : undefined;
   const seq = record?.seq;
@@ -100,7 +100,7 @@ function assertAgentEventEnvelope(
     !isAgentEventData(record.type, record.data)
   ) {
     throw new Error(
-      `Invalid JSONL EventLog event envelope on line ${lineNumber} for run "${runId}"`
+      `Invalid JSONL EventLog event envelope on line ${lineNumber} for run "${runId}"`,
     );
   }
 }
@@ -177,7 +177,7 @@ function hasString(record: Record<string, unknown>, key: string): boolean {
 
 function isAllowedString(
   value: unknown,
-  allowedValues: ReadonlySet<string>
+  allowedValues: ReadonlySet<string>,
 ): boolean {
   return typeof value === "string" && allowedValues.has(value);
 }

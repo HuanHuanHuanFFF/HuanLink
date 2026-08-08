@@ -17,11 +17,11 @@ export interface WorktreeSnapshot {
 
 export async function captureWorktreeSnapshot(
   workspace: string,
-  excludedPaths: readonly string[]
+  excludedPaths: readonly string[],
 ): Promise<WorktreeSnapshot> {
   const pathspec = [
     ".",
-    ...excludedPaths.map((path) => `:(exclude)${normalizePath(path)}`)
+    ...excludedPaths.map((path) => `:(exclude)${normalizePath(path)}`),
   ];
   const [branch, head, listedFiles, stagedDiff, status, unstagedDiff] =
     await Promise.all([
@@ -34,7 +34,7 @@ export async function captureWorktreeSnapshot(
         "--exclude-standard",
         "-z",
         "--",
-        ...pathspec
+        ...pathspec,
       ]),
       git(workspace, [
         "diff",
@@ -42,22 +42,16 @@ export async function captureWorktreeSnapshot(
         "--binary",
         "--no-ext-diff",
         "--",
-        ...pathspec
+        ...pathspec,
       ]),
       git(workspace, [
         "status",
         "--porcelain=v1",
         "--untracked-files=all",
         "--",
-        ...pathspec
+        ...pathspec,
       ]),
-      git(workspace, [
-        "diff",
-        "--binary",
-        "--no-ext-diff",
-        "--",
-        ...pathspec
-      ])
+      git(workspace, ["diff", "--binary", "--no-ext-diff", "--", ...pathspec]),
     ]);
   const paths = listedFiles
     .split("\0")
@@ -66,11 +60,11 @@ export async function captureWorktreeSnapshot(
     .sort();
   const files = Object.fromEntries(
     await Promise.all(
-      paths.map(async (path) => [
-        path,
-        await fingerprint(join(workspace, path))
-      ] as const)
-    )
+      paths.map(
+        async (path) =>
+          [path, await fingerprint(join(workspace, path))] as const,
+      ),
+    ),
   );
 
   return {
@@ -79,7 +73,7 @@ export async function captureWorktreeSnapshot(
     head: head.trimEnd(),
     stagedDiff,
     status,
-    unstagedDiff
+    unstagedDiff,
   };
 }
 
@@ -87,7 +81,7 @@ async function git(workspace: string, args: string[]): Promise<string> {
   const { stdout } = await execFileAsync("git", args, {
     cwd: workspace,
     encoding: "utf8",
-    maxBuffer: 16 * 1024 * 1024
+    maxBuffer: 16 * 1024 * 1024,
   });
   return stdout;
 }

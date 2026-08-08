@@ -5,12 +5,12 @@ import {
   type AgentCallTransport,
   type RuntimeLogFields,
   type RuntimeLogLevel,
-  type RuntimeLogger
+  type RuntimeLogger,
 } from "../src/index.js";
 import {
   deferred,
   rejectUnexpectedContinuation,
-  task
+  task,
 } from "./agent-call-test-helpers.js";
 
 type RecordedLogEntry = {
@@ -22,7 +22,7 @@ type RecordedLogEntry = {
 class RecordingLogger implements RuntimeLogger {
   constructor(
     readonly entries: RecordedLogEntry[] = [],
-    private readonly bindings: RuntimeLogFields = {}
+    private readonly bindings: RuntimeLogFields = {},
   ) {}
 
   debug(message: string, fields?: RuntimeLogFields): void {
@@ -48,12 +48,12 @@ class RecordingLogger implements RuntimeLogger {
   private record(
     level: RuntimeLogLevel,
     message: string,
-    fields: RuntimeLogFields = {}
+    fields: RuntimeLogFields = {},
   ): void {
     this.entries.push({
       level,
       message,
-      fields: { ...this.bindings, ...fields }
+      fields: { ...this.bindings, ...fields },
     });
   }
 }
@@ -86,7 +86,7 @@ describe("AgentCallService", () => {
                 question: ordinaryQuestion,
                 isOther: false,
                 isSecret: false,
-                options: null
+                options: null,
               },
               {
                 id: "passphrase",
@@ -97,28 +97,28 @@ describe("AgentCallService", () => {
                 options: [
                   {
                     label: "Secret option",
-                    description: "Secret option description"
-                  }
-                ]
-              }
-            ]
+                    description: "Secret option description",
+                  },
+                ],
+              },
+            ],
           });
           return;
         }
         yield task("completed", {
           contextId: "context-log-lifecycle",
-          artifacts: [{ id: "artifact-log", text: artifactText }]
+          artifacts: [{ id: "artifact-log", text: artifactText }],
         });
       },
       continueTask: async () =>
         task("working", { contextId: "context-log-lifecycle" }),
-      cancelTask: async () => task("canceled")
+      cancelTask: async () => task("canceled"),
     };
     const service = new AgentCallService({
       transport,
       logger,
       createId: () => "agent-call-log-lifecycle",
-      createMessageId: () => "message-log-continuation"
+      createMessageId: () => "message-log-continuation",
     });
 
     await service.submit({
@@ -127,12 +127,12 @@ describe("AgentCallService", () => {
       skillId: "codex-code-task",
       input,
       contextId: "context-log-lifecycle",
-      executionMode: "async"
+      executionMode: "async",
     });
     await service.waitForIdle();
     await service.continueTask("a2a-task-01", {
       scope: [ordinaryAnswer],
-      passphrase: [secretAnswer]
+      passphrase: [secretAnswer],
     });
     await service.waitForIdle();
     await service.close();
@@ -150,8 +150,8 @@ describe("AgentCallService", () => {
         "agent_call.continue.accepted",
         "agent_call.terminal",
         "agent_call.service.closing",
-        "agent_call.service.closed"
-      ])
+        "agent_call.service.closed",
+      ]),
     );
     expect(logger.entries).toEqual(
       expect.arrayContaining([
@@ -164,8 +164,8 @@ describe("AgentCallService", () => {
             agentCallId: "agent-call-log-lifecycle",
             contextId: "context-log-lifecycle",
             executionMode: "async",
-            inputLength: input.length
-          })
+            inputLength: input.length,
+          }),
         }),
         expect.objectContaining({
           level: "info",
@@ -173,49 +173,49 @@ describe("AgentCallService", () => {
           fields: expect.objectContaining({
             a2aTaskId: "a2a-task-01",
             contextId: "context-log-lifecycle",
-            state: "submitted"
-          })
+            state: "submitted",
+          }),
         }),
         expect.objectContaining({
           level: "info",
           message: "agent_call.state.changed",
           fields: expect.objectContaining({
             previousState: "submitted",
-            state: "input-required"
-          })
+            state: "input-required",
+          }),
         }),
         expect.objectContaining({
           level: "info",
           message: "agent_call.paused",
           fields: expect.objectContaining({
             questionIds: ["scope", "passphrase"],
-            questionCount: 2
-          })
+            questionCount: 2,
+          }),
         }),
         expect.objectContaining({
           level: "info",
           message: "agent_call.continue.started",
           fields: expect.objectContaining({
             questionIds: ["scope", "passphrase"],
-            count: 2
-          })
+            count: 2,
+          }),
         }),
         expect.objectContaining({
           level: "info",
           message: "agent_call.terminal",
           fields: expect.objectContaining({
             state: "completed",
-            artifactCount: 1
-          })
-        })
-      ])
+            artifactCount: 1,
+          }),
+        }),
+      ]),
     );
 
     const nonDebug = JSON.stringify(
-      logger.entries.filter(({ level }) => level !== "debug")
+      logger.entries.filter(({ level }) => level !== "debug"),
     );
     const debug = JSON.stringify(
-      logger.entries.filter(({ level }) => level === "debug")
+      logger.entries.filter(({ level }) => level === "debug"),
     );
     const allLogs = JSON.stringify(logger.entries);
     expect(nonDebug).not.toContain(input);
@@ -238,23 +238,26 @@ describe("AgentCallService", () => {
     const canceledArtifact = "canceled artifact visible only at debug";
     const transport: AgentCallTransport = {
       discoverCapability: async (skillId) => ({ id: skillId, name: skillId }),
-      submitTask: async () => task("submitted", { contextId: "context-log-cancel" }),
+      submitTask: async () =>
+        task("submitted", { contextId: "context-log-cancel" }),
       async *watchTask(_taskId, options) {
         await new Promise<void>((resolve) => {
-          options.signal.addEventListener("abort", () => resolve(), { once: true });
+          options.signal.addEventListener("abort", () => resolve(), {
+            once: true,
+          });
         });
       },
       continueTask: async () => task("working"),
       cancelTask: async () =>
         task("canceled", {
           contextId: "context-log-cancel",
-          artifacts: [{ id: "artifact-canceled", text: canceledArtifact }]
-        })
+          artifacts: [{ id: "artifact-canceled", text: canceledArtifact }],
+        }),
     };
     const service = new AgentCallService({
       transport,
       logger,
-      createId: () => "agent-call-log-cancel"
+      createId: () => "agent-call-log-cancel",
     });
     const submitted = await service.submit({
       runId: "run-log-cancel",
@@ -262,7 +265,7 @@ describe("AgentCallService", () => {
       skillId: "codex-code-task",
       input: "cancel this task",
       contextId: "context-log-cancel",
-      executionMode: "async"
+      executionMode: "async",
     });
 
     await service.cancel(submitted.agentCallId);
@@ -279,21 +282,24 @@ describe("AgentCallService", () => {
             agentCallId: "agent-call-log-cancel",
             a2aTaskId: "a2a-task-01",
             contextId: "context-log-cancel",
-            state: "submitted"
-          })
+            state: "submitted",
+          }),
         }),
         expect.objectContaining({
           level: "info",
           message: "agent_call.cancel.completed",
-          fields: expect.objectContaining({ state: "canceled", artifactCount: 1 })
-        })
-      ])
+          fields: expect.objectContaining({
+            state: "canceled",
+            artifactCount: 1,
+          }),
+        }),
+      ]),
     );
     const nonDebug = JSON.stringify(
-      logger.entries.filter(({ level }) => level !== "debug")
+      logger.entries.filter(({ level }) => level !== "debug"),
     );
     const debug = JSON.stringify(
-      logger.entries.filter(({ level }) => level === "debug")
+      logger.entries.filter(({ level }) => level === "debug"),
     );
     expect(nonDebug).not.toContain(canceledArtifact);
     expect(debug).toContain(canceledArtifact);
@@ -324,9 +330,9 @@ describe("AgentCallService", () => {
               question: secretQuestion,
               isOther: false,
               isSecret: true,
-              options: null
-            }
-          ]
+              options: null,
+            },
+          ],
         });
       },
       async *watchTask() {},
@@ -335,12 +341,12 @@ describe("AgentCallService", () => {
       },
       cancelTask: async () => {
         throw cancellationError;
-      }
+      },
     };
     const service = new AgentCallService({
       transport,
       logger,
-      createId: () => `agent-call-log-failure-${++idSequence}`
+      createId: () => `agent-call-log-failure-${++idSequence}`,
     });
 
     await expect(
@@ -349,8 +355,8 @@ describe("AgentCallService", () => {
         sessionId: "session-log-failures",
         skillId: "codex-code-task",
         input: "first submission",
-        executionMode: "async"
-      })
+        executionMode: "async",
+      }),
     ).rejects.toBe(submitError);
     const paused = await service.submit({
       runId: "run-log-failures",
@@ -358,13 +364,13 @@ describe("AgentCallService", () => {
       skillId: "codex-code-task",
       input: "second submission",
       contextId: "context-log-failures",
-      executionMode: "async"
+      executionMode: "async",
     });
     await expect(
-      service.continueTask(paused.taskId, { passphrase: [secretAnswer] })
+      service.continueTask(paused.taskId, { passphrase: [secretAnswer] }),
     ).rejects.toBe(continuationError);
     await expect(service.cancel(paused.agentCallId)).rejects.toBe(
-      cancellationError
+      cancellationError,
     );
     await service.close();
 
@@ -377,8 +383,8 @@ describe("AgentCallService", () => {
             sessionId: "session-log-failures",
             runId: "run-log-failures",
             errorType: "Error",
-            errorMessageLength: submitError.message.length
-          })
+            errorMessageLength: submitError.message.length,
+          }),
         }),
         expect.objectContaining({
           level: "error",
@@ -387,8 +393,8 @@ describe("AgentCallService", () => {
             a2aTaskId: "a2a-task-01",
             questionIds: ["passphrase"],
             count: 1,
-            errorType: "Error"
-          })
+            errorType: "Error",
+          }),
         }),
         expect.objectContaining({
           level: "error",
@@ -397,10 +403,10 @@ describe("AgentCallService", () => {
             agentCallId: "agent-call-log-failure-2",
             a2aTaskId: "a2a-task-01",
             state: "input-required",
-            errorType: "Error"
-          })
-        })
-      ])
+            errorType: "Error",
+          }),
+        }),
+      ]),
     );
     const allLogs = JSON.stringify(logger.entries);
     expect(allLogs).not.toContain(secretQuestion);
@@ -418,20 +424,20 @@ describe("AgentCallService", () => {
         return task("completed", {
           taskId: `a2a-task-${taskSequence}`,
           artifacts: [
-            { id: `artifact-${taskSequence}`, text: `result-${taskSequence}` }
-          ]
+            { id: `artifact-${taskSequence}`, text: `result-${taskSequence}` },
+          ],
         });
       },
       async *watchTask() {},
       continueTask: rejectUnexpectedContinuation,
-      cancelTask: async (taskId) => task("canceled", { taskId })
+      cancelTask: async (taskId) => task("canceled", { taskId }),
     };
     const service = new AgentCallService({
       transport,
       createId: () => {
         agentCallSequence += 1;
         return `agent-call-${agentCallSequence}`;
-      }
+      },
     });
     const submit = (runId: string) =>
       service.submit({
@@ -439,7 +445,7 @@ describe("AgentCallService", () => {
         sessionId: "session-list",
         skillId: "codex-code-task",
         input: `input for ${runId}`,
-        executionMode: "async"
+        executionMode: "async",
       });
 
     await submit("run-target");
@@ -449,14 +455,14 @@ describe("AgentCallService", () => {
     const listed = service.listByRunId("run-target");
     expect(listed.map(({ agentCallId }) => agentCallId)).toEqual([
       "agent-call-1",
-      "agent-call-3"
+      "agent-call-3",
     ]);
     listed[0]!.input = "mutated input";
     listed[0]!.artifacts[0]!.text = "mutated result";
 
     expect(service.listByRunId("run-target")[0]).toMatchObject({
       input: "input for run-target",
-      artifacts: [{ id: "artifact-1", text: "result-1" }]
+      artifacts: [{ id: "artifact-1", text: "result-1" }],
     });
     expect(service.listByRunId("missing-run")).toEqual([]);
 
@@ -469,7 +475,7 @@ describe("AgentCallService", () => {
     const transport: AgentCallTransport = {
       discoverCapability: async (skillId) => ({
         id: skillId,
-        name: "Codex code task"
+        name: "Codex code task",
       }),
       submitTask: async () => task("submitted"),
       async *watchTask() {
@@ -477,11 +483,11 @@ describe("AgentCallService", () => {
         yield task("completed");
       },
       continueTask: rejectUnexpectedContinuation,
-      cancelTask: async () => task("canceled")
+      cancelTask: async () => task("canceled"),
     };
     const service = new AgentCallService({
       transport,
-      createId: () => "agent-call-async"
+      createId: () => "agent-call-async",
     });
     service.onTerminal(terminalListener);
 
@@ -490,13 +496,13 @@ describe("AgentCallService", () => {
       sessionId: "session-async",
       skillId: "codex-code-task",
       input: "run asynchronously",
-      executionMode: "async"
+      executionMode: "async",
     });
     const firstSignal = await Promise.race([
       invocation.then(() => "accepted" as const),
       new Promise<"still-running">((resolve) =>
-        setImmediate(() => resolve("still-running"))
-      )
+        setImmediate(() => resolve("still-running")),
+      ),
     ]);
     releaseCompletion.resolve();
     const result = await invocation;
@@ -505,7 +511,7 @@ describe("AgentCallService", () => {
     expect(result).toMatchObject({
       status: "accepted",
       executionMode: "async",
-      agentCallId: "agent-call-async"
+      agentCallId: "agent-call-async",
     });
     expect(terminalListener).not.toHaveBeenCalled();
 
@@ -520,7 +526,7 @@ describe("AgentCallService", () => {
     const transport: AgentCallTransport = {
       discoverCapability: async (skillId) => ({
         id: skillId,
-        name: "Codex code task"
+        name: "Codex code task",
       }),
       submitTask: async () => task("submitted"),
       async *watchTask() {
@@ -529,16 +535,16 @@ describe("AgentCallService", () => {
         await releaseCompletion.promise;
         yield task("completed", {
           artifacts: [
-            { id: "blocking-result", text: "completed while blocking" }
-          ]
+            { id: "blocking-result", text: "completed while blocking" },
+          ],
         });
       },
       continueTask: rejectUnexpectedContinuation,
-      cancelTask: async () => task("canceled")
+      cancelTask: async () => task("canceled"),
     };
     const service = new AgentCallService({
       transport,
-      createId: () => "agent-call-blocking"
+      createId: () => "agent-call-blocking",
     });
     service.onTerminal(terminalListener);
     let invocationSettled = false;
@@ -549,7 +555,7 @@ describe("AgentCallService", () => {
         sessionId: "session-blocking",
         skillId: "codex-code-task",
         input: "block until completion",
-        executionMode: "blocking"
+        executionMode: "blocking",
       })
       .finally(() => {
         invocationSettled = true;
@@ -564,9 +570,7 @@ describe("AgentCallService", () => {
       executionMode: "blocking",
       agentCallId: "agent-call-blocking",
       state: "completed",
-      artifacts: [
-        { id: "blocking-result", text: "completed while blocking" }
-      ]
+      artifacts: [{ id: "blocking-result", text: "completed while blocking" }],
     });
     expect(terminalListener).not.toHaveBeenCalled();
   });
@@ -583,16 +587,16 @@ describe("AgentCallService", () => {
         watcherSignal = options.signal;
         subscriptionHeldOpen.resolve();
         yield task("input-required", {
-          statusMessage: "approval is required"
+          statusMessage: "approval is required",
         });
         await releaseSubscription.promise;
       },
       continueTask: rejectUnexpectedContinuation,
-      cancelTask: async () => task("canceled")
+      cancelTask: async () => task("canceled"),
     };
     const service = new AgentCallService({
       transport,
-      createId: () => "agent-call-blocking-paused"
+      createId: () => "agent-call-blocking-paused",
     });
     service.onTerminal(terminalListener);
     let invocationSettled = false;
@@ -603,7 +607,7 @@ describe("AgentCallService", () => {
         sessionId: "session-blocking-paused",
         skillId: "codex-code-task",
         input: "block until input is needed",
-        executionMode: "blocking"
+        executionMode: "blocking",
       })
       .finally(() => {
         invocationSettled = true;
@@ -617,7 +621,7 @@ describe("AgentCallService", () => {
       status: "result",
       executionMode: "blocking",
       state: "input-required",
-      statusMessage: "approval is required"
+      statusMessage: "approval is required",
     });
     const watcherAbortedAfterOutcome = watcherSignal?.aborted;
     releaseSubscription.resolve();
@@ -637,11 +641,11 @@ describe("AgentCallService", () => {
         task("auth-required", { statusMessage: "sign in is required" }),
       watchTask,
       continueTask: rejectUnexpectedContinuation,
-      cancelTask: async () => task("canceled")
+      cancelTask: async () => task("canceled"),
     };
     const service = new AgentCallService({
       transport,
-      createId: () => "agent-call-blocking-initially-paused"
+      createId: () => "agent-call-blocking-initially-paused",
     });
 
     await expect(
@@ -650,13 +654,13 @@ describe("AgentCallService", () => {
         sessionId: "session-blocking-initially-paused",
         skillId: "codex-code-task",
         input: "return the initial auth request",
-        executionMode: "blocking"
-      })
+        executionMode: "blocking",
+      }),
     ).resolves.toMatchObject({
       status: "result",
       executionMode: "blocking",
       state: "auth-required",
-      statusMessage: "sign in is required"
+      statusMessage: "sign in is required",
     });
     await service.waitForIdle();
 
@@ -684,11 +688,11 @@ describe("AgentCallService", () => {
         yield task("completed");
       },
       continueTask: rejectUnexpectedContinuation,
-      cancelTask
+      cancelTask,
     };
     const service = new AgentCallService({
       transport,
-      createId: () => "agent-call-blocking-aborted"
+      createId: () => "agent-call-blocking-aborted",
     });
     const controller = new AbortController();
     const canceled = new Error("MainAgent turn canceled");
@@ -701,7 +705,7 @@ describe("AgentCallService", () => {
         skillId: "codex-code-task",
         input: "cancel the blocking invocation with its caller",
         executionMode: "blocking",
-        signal: controller.signal
+        signal: controller.signal,
       })
       .finally(() => {
         invocationSettled = true;
@@ -739,23 +743,23 @@ describe("AgentCallService", () => {
     const transport: AgentCallTransport = {
       discoverCapability: vi.fn(async (skillId) => ({
         id: skillId,
-        name: "Codex code task"
+        name: "Codex code task",
       })),
       submitTask: vi.fn(async () => task("submitted")),
       async *watchTask() {
         yield task("working");
         await releaseCompletion.promise;
         yield task("completed", {
-          artifacts: [{ id: "result-01", text: "changed src/example.ts" }]
+          artifacts: [{ id: "result-01", text: "changed src/example.ts" }],
         });
         yield task("completed");
       },
       continueTask: rejectUnexpectedContinuation,
-      cancelTask: vi.fn(async () => task("canceled"))
+      cancelTask: vi.fn(async () => task("canceled")),
     };
     const service = new AgentCallService({
       transport,
-      createId: () => "agent-call-01"
+      createId: () => "agent-call-01",
     });
     service.onTerminal(terminalListener);
 
@@ -764,7 +768,7 @@ describe("AgentCallService", () => {
       sessionId: "session-01",
       skillId: "codex-code-task",
       input: "make a focused code change",
-      executionMode: "async"
+      executionMode: "async",
     });
 
     expect(receipt).toEqual({
@@ -772,13 +776,13 @@ describe("AgentCallService", () => {
       executionMode: "async",
       agentCallId: "agent-call-01",
       taskId: "a2a-task-01",
-      state: "submitted"
+      state: "submitted",
     });
     expect(service.getByAgentCallId("agent-call-01")?.taskId).toBe(
-      "a2a-task-01"
+      "a2a-task-01",
     );
     expect(service.getByTaskId("a2a-task-01")?.agentCallId).toBe(
-      "agent-call-01"
+      "agent-call-01",
     );
     expect(terminalListener).not.toHaveBeenCalled();
 
@@ -790,7 +794,7 @@ describe("AgentCallService", () => {
       agentCallId: "agent-call-01",
       taskId: "a2a-task-01",
       state: "completed",
-      artifacts: [{ id: "result-01", text: "changed src/example.ts" }]
+      artifacts: [{ id: "result-01", text: "changed src/example.ts" }],
     });
   });
 
@@ -800,19 +804,19 @@ describe("AgentCallService", () => {
     const transport: AgentCallTransport = {
       discoverCapability: async (skillId) => ({
         id: skillId,
-        name: "Codex code task"
+        name: "Codex code task",
       }),
       submitTask: async () => task("submitted"),
       async *watchTask() {
         throw new Error("subscription disconnected");
       },
       continueTask: rejectUnexpectedContinuation,
-      cancelTask: async () => task("canceled")
+      cancelTask: async () => task("canceled"),
     };
     const service = new AgentCallService({
       transport,
       logger,
-      createId: () => "agent-call-02"
+      createId: () => "agent-call-02",
     });
     service.onTerminal(terminalListener);
 
@@ -821,13 +825,13 @@ describe("AgentCallService", () => {
       sessionId: "session-02",
       skillId: "codex-code-task",
       input: "run a code task",
-      executionMode: "async"
+      executionMode: "async",
     });
     await service.waitForIdle();
 
     expect(service.getByAgentCallId("agent-call-02")).toMatchObject({
       state: "failed",
-      statusMessage: "subscription disconnected"
+      statusMessage: "subscription disconnected",
     });
     expect(terminalListener).toHaveBeenCalledTimes(1);
     expect(logger.entries).toContainEqual(
@@ -839,9 +843,9 @@ describe("AgentCallService", () => {
           a2aTaskId: "a2a-task-01",
           state: "submitted",
           errorType: "Error",
-          errorMessageLength: "subscription disconnected".length
-        })
-      })
+          errorMessageLength: "subscription disconnected".length,
+        }),
+      }),
     );
   });
 
@@ -852,15 +856,15 @@ describe("AgentCallService", () => {
       submitTask: async () => task("submitted"),
       async *watchTask() {
         yield task("input-required", {
-          statusMessage: "approval is required"
+          statusMessage: "approval is required",
         });
       },
       continueTask: rejectUnexpectedContinuation,
-      cancelTask: async () => task("canceled")
+      cancelTask: async () => task("canceled"),
     };
     const service = new AgentCallService({
       transport,
-      createId: () => "agent-call-paused"
+      createId: () => "agent-call-paused",
     });
     service.onTerminal(terminalListener);
 
@@ -869,13 +873,13 @@ describe("AgentCallService", () => {
       sessionId: "session-paused",
       skillId: "codex-code-task",
       input: "pause for approval",
-      executionMode: "async"
+      executionMode: "async",
     });
     await service.waitForIdle();
 
     expect(service.getByAgentCallId("agent-call-paused")).toMatchObject({
       state: "input-required",
-      statusMessage: "approval is required"
+      statusMessage: "approval is required",
     });
     expect(terminalListener).not.toHaveBeenCalled();
   });
@@ -897,19 +901,19 @@ describe("AgentCallService", () => {
               options: [
                 {
                   label: "Adapter only",
-                  description: "Limit changes to the Codex adapter."
-                }
-              ]
-            }
-          ]
-        })
+                  description: "Limit changes to the Codex adapter.",
+                },
+              ],
+            },
+          ],
+        });
       },
       continueTask: async () => task("working"),
-      cancelTask: async () => task("canceled")
+      cancelTask: async () => task("canceled"),
     };
     const service = new AgentCallService({
       transport,
-      createId: () => "agent-call-questions"
+      createId: () => "agent-call-questions",
     });
 
     await service.submit({
@@ -917,7 +921,7 @@ describe("AgentCallService", () => {
       sessionId: "session-questions",
       skillId: "codex-code-task",
       input: "ask before choosing a scope",
-      executionMode: "async"
+      executionMode: "async",
     });
     await service.waitForIdle();
 
@@ -925,8 +929,8 @@ describe("AgentCallService", () => {
       expect.objectContaining({
         id: "scope",
         question: "Which files may be changed?",
-        options: [expect.objectContaining({ label: "Adapter only" })]
-      })
+        options: [expect.objectContaining({ label: "Adapter only" })],
+      }),
     ]);
   });
 
@@ -949,23 +953,23 @@ describe("AgentCallService", () => {
                 question: "Which files may be changed?",
                 isOther: false,
                 isSecret: false,
-                options: null
-              }
-            ]
+                options: null,
+              },
+            ],
           });
           return;
         }
         yield task("completed", {
-          artifacts: [{ id: "result", text: "continued the original task" }]
+          artifacts: [{ id: "result", text: "continued the original task" }],
         });
       },
       continueTask,
-      cancelTask: async () => task("canceled")
+      cancelTask: async () => task("canceled"),
     };
     const service = new AgentCallService({
       transport,
       createId: () => "agent-call-continue",
-      createMessageId: () => "message-continue"
+      createMessageId: () => "message-continue",
     });
     service.onTerminal(terminalListener);
 
@@ -974,30 +978,30 @@ describe("AgentCallService", () => {
       sessionId: "session-continue",
       skillId: "codex-code-task",
       input: "pause and continue",
-      executionMode: "async"
+      executionMode: "async",
     });
     await service.waitForIdle();
 
     await expect(
-      service.continueTask("a2a-task-01", { scope: ["Adapter only"] })
+      service.continueTask("a2a-task-01", { scope: ["Adapter only"] }),
     ).resolves.toMatchObject({
       taskId: "a2a-task-01",
       state: "working",
       questions: undefined,
-      statusMessage: undefined
+      statusMessage: undefined,
     });
     expect(continueTask).toHaveBeenCalledWith({
       taskId: "a2a-task-01",
       contextId: "a2a-context-01",
       messageId: "message-continue",
       signal: expect.any(AbortSignal),
-      answers: { scope: ["Adapter only"] }
+      answers: { scope: ["Adapter only"] },
     });
 
     await service.waitForIdle();
     expect(service.getByTaskId("a2a-task-01")).toMatchObject({
       state: "completed",
-      artifacts: [{ id: "result", text: "continued the original task" }]
+      artifacts: [{ id: "result", text: "continued the original task" }],
     });
     expect(terminalListener).toHaveBeenCalledTimes(1);
   });
@@ -1030,22 +1034,22 @@ describe("AgentCallService", () => {
                 question: "Which files may be changed?",
                 isOther: false,
                 isSecret: false,
-                options: null
-              }
-            ]
+                options: null,
+              },
+            ],
           });
           return;
         }
         yield task("completed", {
-          artifacts: [{ id: "result", text: "first continuation completed" }]
+          artifacts: [{ id: "result", text: "first continuation completed" }],
         });
       },
       continueTask,
-      cancelTask: async () => task("canceled")
+      cancelTask: async () => task("canceled"),
     };
     const service = new AgentCallService({
       transport,
-      createId: () => "agent-call-concurrent-continuation"
+      createId: () => "agent-call-concurrent-continuation",
     });
 
     await service.submit({
@@ -1053,29 +1057,29 @@ describe("AgentCallService", () => {
       sessionId: "session-concurrent-continuation",
       skillId: "codex-code-task",
       input: "continue only once",
-      executionMode: "async"
+      executionMode: "async",
     });
     await service.waitForIdle();
 
     const firstContinuation = service.continueTask("a2a-task-01", {
-      scope: ["Adapter only"]
+      scope: ["Adapter only"],
     });
     await continuationStarted.promise;
     await expect(
-      service.continueTask("a2a-task-01", { scope: ["All files"] })
+      service.continueTask("a2a-task-01", { scope: ["All files"] }),
     ).rejects.toThrow(/already has an active continuation/);
     expect(continueTask).toHaveBeenCalledTimes(1);
 
     releaseContinuation.resolve();
     await expect(firstContinuation).resolves.toMatchObject({
       taskId: "a2a-task-01",
-      state: "working"
+      state: "working",
     });
     await service.waitForIdle();
 
     expect(service.getByTaskId("a2a-task-01")).toMatchObject({
       state: "completed",
-      artifacts: [{ id: "result", text: "first continuation completed" }]
+      artifacts: [{ id: "result", text: "first continuation completed" }],
     });
   });
 
@@ -1099,9 +1103,9 @@ describe("AgentCallService", () => {
                 question: "Which files may be changed?",
                 isOther: false,
                 isSecret: false,
-                options: null
-              }
-            ]
+                options: null,
+              },
+            ],
           });
           return;
         }
@@ -1113,11 +1117,11 @@ describe("AgentCallService", () => {
         await releaseContinuation.promise;
         return task("working");
       },
-      cancelTask
+      cancelTask,
     };
     const service = new AgentCallService({
       transport,
-      createId: () => "agent-call-close-continuation"
+      createId: () => "agent-call-close-continuation",
     });
 
     await service.submit({
@@ -1125,12 +1129,12 @@ describe("AgentCallService", () => {
       sessionId: "session-close-continuation",
       skillId: "codex-code-task",
       input: "pause and close while continuing",
-      executionMode: "async"
+      executionMode: "async",
     });
     await service.waitForIdle();
 
     const continuation = service.continueTask("a2a-task-01", {
-      scope: ["Adapter only"]
+      scope: ["Adapter only"],
     });
     await continuationStarted.promise;
     let closeSettled = false;
@@ -1144,7 +1148,7 @@ describe("AgentCallService", () => {
     releaseContinuation.resolve();
     const continuationOutcome = await continuation.then(
       () => "resolved" as const,
-      (error: unknown) => error
+      (error: unknown) => error,
     );
     await closing;
 
@@ -1152,7 +1156,7 @@ describe("AgentCallService", () => {
     expect(continuationWasAborted).toBe(true);
     expect(continuationOutcome).toBeInstanceOf(Error);
     expect((continuationOutcome as Error).message).toMatch(
-      /closed during continuation/
+      /closed during continuation/,
     );
     expect(cancelTask).toHaveBeenCalledWith("a2a-task-01");
     expect(watchCycle).toBe(1);
@@ -1180,16 +1184,16 @@ describe("AgentCallService", () => {
                 question: "Which files may be changed?",
                 isOther: false,
                 isSecret: false,
-                options: null
-              }
-            ]
+                options: null,
+              },
+            ],
           });
           return;
         }
         yield task("completed");
       },
       continueTask: async () => task("working"),
-      cancelTask
+      cancelTask,
     };
     service = new AgentCallService({
       transport,
@@ -1203,7 +1207,7 @@ describe("AgentCallService", () => {
           });
         }
         return new Date(`2026-07-13T00:00:0${clockTicks}.000Z`);
-      }
+      },
     });
 
     await service.submit({
@@ -1211,23 +1215,23 @@ describe("AgentCallService", () => {
       sessionId: "session-close-after-apply",
       skillId: "codex-code-task",
       input: "close between apply and watch",
-      executionMode: "async"
+      executionMode: "async",
     });
     await service.waitForIdle();
 
     const continuation = service.continueTask("a2a-task-01", {
-      scope: ["Adapter only"]
+      scope: ["Adapter only"],
     });
     await closeTriggered.promise;
     const continuationOutcome = await continuation.then(
       () => "resolved" as const,
-      (error: unknown) => error
+      (error: unknown) => error,
     );
     await closing;
 
     expect(continuationOutcome).toBeInstanceOf(Error);
     expect((continuationOutcome as Error).message).toMatch(
-      /closed during continuation/
+      /closed during continuation/,
     );
     expect(cancelTask).toHaveBeenCalledWith("a2a-task-01");
     expect(watchCycle).toBe(1);
@@ -1251,23 +1255,25 @@ describe("AgentCallService", () => {
                 question: "Which files may be changed?",
                 isOther: false,
                 isSecret: false,
-                options: null
-              }
-            ]
+                options: null,
+              },
+            ],
           });
           return;
         }
         yield task("completed", {
-          artifacts: [{ id: "result", text: "blocking continuation completed" }]
+          artifacts: [
+            { id: "result", text: "blocking continuation completed" },
+          ],
         });
       },
       continueTask: async () => task("working"),
-      cancelTask: async () => task("canceled")
+      cancelTask: async () => task("canceled"),
     };
     const service = new AgentCallService({
       transport,
       createId: () => "agent-call-blocking-continue",
-      createMessageId: () => "message-blocking-continue"
+      createMessageId: () => "message-blocking-continue",
     });
     service.onTerminal(terminalListener);
 
@@ -1277,15 +1283,15 @@ describe("AgentCallService", () => {
         sessionId: "session-blocking-continue",
         skillId: "codex-code-task",
         input: "pause this blocking call",
-        executionMode: "blocking"
-      })
+        executionMode: "blocking",
+      }),
     ).resolves.toMatchObject({
       state: "input-required",
-      questions: [expect.objectContaining({ id: "scope" })]
+      questions: [expect.objectContaining({ id: "scope" })],
     });
 
     await service.continueTask("a2a-task-01", {
-      scope: ["Adapter only"]
+      scope: ["Adapter only"],
     });
     await service.waitForIdle();
 
@@ -1293,7 +1299,7 @@ describe("AgentCallService", () => {
     expect(terminalListener.mock.calls[0]?.[0]).toMatchObject({
       executionMode: "blocking",
       state: "completed",
-      artifacts: [{ text: "blocking continuation completed" }]
+      artifacts: [{ text: "blocking continuation completed" }],
     });
   });
 
@@ -1304,22 +1310,22 @@ describe("AgentCallService", () => {
       submitTask: async () => task("working"),
       async *watchTask() {},
       continueTask,
-      cancelTask: async () => task("canceled")
+      cancelTask: async () => task("canceled"),
     };
     const service = new AgentCallService({
       transport,
-      createId: () => "agent-call-not-paused"
+      createId: () => "agent-call-not-paused",
     });
     await service.submit({
       runId: "run-not-paused",
       sessionId: "session-not-paused",
       skillId: "codex-code-task",
       input: "still working",
-      executionMode: "async"
+      executionMode: "async",
     });
 
     await expect(
-      service.continueTask("a2a-task-01", { scope: ["Adapter only"] })
+      service.continueTask("a2a-task-01", { scope: ["Adapter only"] }),
     ).rejects.toThrow(/input-required/);
     expect(continueTask).not.toHaveBeenCalled();
 
@@ -1337,17 +1343,17 @@ describe("AgentCallService", () => {
           never.promise,
           new Promise<void>((resolve) =>
             options.signal.addEventListener("abort", () => resolve(), {
-              once: true
-            })
-          )
+              once: true,
+            }),
+          ),
         ]);
       },
       continueTask: rejectUnexpectedContinuation,
-      cancelTask: vi.fn(async () => task("canceled"))
+      cancelTask: vi.fn(async () => task("canceled")),
     };
     const service = new AgentCallService({
       transport,
-      createId: () => "agent-call-03"
+      createId: () => "agent-call-03",
     });
     service.onTerminal(terminalListener);
     const receipt = await service.submit({
@@ -1355,7 +1361,7 @@ describe("AgentCallService", () => {
       sessionId: "session-03",
       skillId: "codex-code-task",
       input: "cancel me",
-      executionMode: "async"
+      executionMode: "async",
     });
 
     const canceled = await service.cancel(receipt.agentCallId);
@@ -1380,11 +1386,11 @@ describe("AgentCallService", () => {
       },
       async *watchTask() {},
       continueTask: rejectUnexpectedContinuation,
-      cancelTask
+      cancelTask,
     };
     const service = new AgentCallService({
       transport,
-      createId: () => "agent-call-close-race"
+      createId: () => "agent-call-close-race",
     });
 
     const submitting = service.submit({
@@ -1392,7 +1398,7 @@ describe("AgentCallService", () => {
       sessionId: "session-close-race",
       skillId: "codex-code-task",
       input: "do not outlive shutdown",
-      executionMode: "async"
+      executionMode: "async",
     });
     await submitStarted.promise;
     const closing = service.close();
@@ -1414,12 +1420,12 @@ describe("AgentCallService", () => {
         yield task("completed");
       },
       continueTask: rejectUnexpectedContinuation,
-      cancelTask: async () => task("canceled")
+      cancelTask: async () => task("canceled"),
     };
     const service = new AgentCallService({
       transport,
       logger,
-      createId: () => "agent-call-listener-error"
+      createId: () => "agent-call-listener-error",
     });
     service.onBackgroundError(backgroundError);
     service.onTerminal(() => {
@@ -1431,16 +1437,18 @@ describe("AgentCallService", () => {
       sessionId: "session-listener-error",
       skillId: "codex-code-task",
       input: "complete then fail re-entry",
-      executionMode: "async"
+      executionMode: "async",
     });
     await service.waitForIdle();
 
     expect(backgroundError).toHaveBeenCalledTimes(1);
     expect(backgroundError.mock.calls[0]?.[0]).toBeInstanceOf(Error);
-    expect(service.getByAgentCallId("agent-call-listener-error")).toMatchObject({
-      state: "completed",
-      terminalNotificationError: "MainAgent re-entry failed"
-    });
+    expect(service.getByAgentCallId("agent-call-listener-error")).toMatchObject(
+      {
+        state: "completed",
+        terminalNotificationError: "MainAgent re-entry failed",
+      },
+    );
     expect(logger.entries).toContainEqual(
       expect.objectContaining({
         level: "error",
@@ -1450,9 +1458,9 @@ describe("AgentCallService", () => {
           a2aTaskId: "a2a-task-01",
           state: "completed",
           errorType: "Error",
-          errorMessageLength: "MainAgent re-entry failed".length
-        })
-      })
+          errorMessageLength: "MainAgent re-entry failed".length,
+        }),
+      }),
     );
   });
 });

@@ -3,13 +3,13 @@ import { describe, expect, test, vi } from "vitest";
 import {
   AgentCallService,
   type AgentCallTaskSnapshot,
-  type AgentCallTransport
+  type AgentCallTransport,
 } from "../src/index.js";
 import {
   deferred,
   rejectUnexpectedContinuation,
   scopeQuestion,
-  task
+  task,
 } from "./agent-call-test-helpers.js";
 
 describe("AgentCallService pause lifecycle", () => {
@@ -20,15 +20,15 @@ describe("AgentCallService pause lifecycle", () => {
       submitTask: async () => task("submitted"),
       async *watchTask() {
         yield task("input-required", {
-          statusMessage: "approval is required"
+          statusMessage: "approval is required",
         });
       },
       continueTask: rejectUnexpectedContinuation,
-      cancelTask: async () => task("canceled")
+      cancelTask: async () => task("canceled"),
     };
     const service = new AgentCallService({
       transport,
-      createId: () => "agent-call-paused-listener"
+      createId: () => "agent-call-paused-listener",
     });
     service.onPaused(pausedListener);
 
@@ -37,7 +37,7 @@ describe("AgentCallService pause lifecycle", () => {
       sessionId: "session-paused-listener",
       skillId: "codex-code-task",
       input: "pause for approval",
-      executionMode: "async"
+      executionMode: "async",
     });
     await service.waitForIdle();
 
@@ -46,7 +46,7 @@ describe("AgentCallService pause lifecycle", () => {
       agentCallId: "agent-call-paused-listener",
       taskId: "a2a-task-01",
       state: "input-required",
-      statusMessage: "approval is required"
+      statusMessage: "approval is required",
     });
   });
 
@@ -65,24 +65,24 @@ describe("AgentCallService pause lifecycle", () => {
         return {
           done: false,
           value: task("input-required", {
-            statusMessage: "approval is still required"
-          })
+            statusMessage: "approval is still required",
+          }),
         };
       },
       async return() {
         throw new Error("subscription cleanup failed");
-      }
+      },
     };
     const transport: AgentCallTransport = {
       discoverCapability: async (skillId) => ({ id: skillId, name: skillId }),
       submitTask: async () => task("submitted"),
       watchTask: () => iterator,
       continueTask: rejectUnexpectedContinuation,
-      cancelTask: async () => task("canceled")
+      cancelTask: async () => task("canceled"),
     };
     const service = new AgentCallService({
       transport,
-      createId: () => "agent-call-cleanup-failure"
+      createId: () => "agent-call-cleanup-failure",
     });
     service.onBackgroundError(backgroundErrorListener);
 
@@ -91,22 +91,22 @@ describe("AgentCallService pause lifecycle", () => {
       sessionId: "session-cleanup-failure",
       skillId: "codex-code-task",
       input: "preserve the pause",
-      executionMode: "async"
+      executionMode: "async",
     });
     await service.waitForIdle();
 
-    expect(service.getByAgentCallId("agent-call-cleanup-failure")).toMatchObject(
-      {
-        state: "input-required",
-        statusMessage: "approval is still required"
-      }
-    );
+    expect(
+      service.getByAgentCallId("agent-call-cleanup-failure"),
+    ).toMatchObject({
+      state: "input-required",
+      statusMessage: "approval is still required",
+    });
     expect(backgroundErrorListener).toHaveBeenCalledWith(
       expect.objectContaining({ message: "subscription cleanup failed" }),
       expect.objectContaining({
         agentCallId: "agent-call-cleanup-failure",
-        state: "input-required"
-      })
+        state: "input-required",
+      }),
     );
   });
 
@@ -121,11 +121,11 @@ describe("AgentCallService pause lifecycle", () => {
         task("input-required", { statusMessage: "choose a scope" }),
       watchTask,
       continueTask: rejectUnexpectedContinuation,
-      cancelTask: async () => task("canceled")
+      cancelTask: async () => task("canceled"),
     };
     const service = new AgentCallService({
       transport,
-      createId: () => "agent-call-initial-pause"
+      createId: () => "agent-call-initial-pause",
     });
     service.onPaused(pausedListener);
 
@@ -134,7 +134,7 @@ describe("AgentCallService pause lifecycle", () => {
       sessionId: "session-initial-pause",
       skillId: "codex-code-task",
       input: "start paused",
-      executionMode: "async"
+      executionMode: "async",
     });
     await service.waitForIdle();
 
@@ -154,7 +154,7 @@ describe("AgentCallService pause lifecycle", () => {
         watchCycle += 1;
         if (watchCycle === 1) {
           yield task("input-required", {
-            questions: [scopeQuestion()]
+            questions: [scopeQuestion()],
           });
           await releaseOldWatcher.promise;
           return;
@@ -162,15 +162,15 @@ describe("AgentCallService pause lifecycle", () => {
         yield task("completed");
       },
       continueTask,
-      cancelTask: async () => task("canceled")
+      cancelTask: async () => task("canceled"),
     };
     const service = new AgentCallService({
       transport,
-      createId: () => "agent-call-auto-continue"
+      createId: () => "agent-call-auto-continue",
     });
     service.onPaused(async () => {
       await service.continueTask("a2a-task-01", {
-        scope: ["Adapter only"]
+        scope: ["Adapter only"],
       });
     });
     service.onTerminal(() => terminalObserved.resolve());
@@ -180,13 +180,13 @@ describe("AgentCallService pause lifecycle", () => {
       sessionId: "session-auto-continue",
       skillId: "codex-code-task",
       input: "pause and continue automatically",
-      executionMode: "async"
+      executionMode: "async",
     });
     const firstSignal = await Promise.race([
       terminalObserved.promise.then(() => "completed" as const),
       new Promise<"blocked">((resolve) =>
-        setImmediate(() => resolve("blocked"))
-      )
+        setImmediate(() => resolve("blocked")),
+      ),
     ]);
     releaseOldWatcher.resolve();
     await terminalObserved.promise;
@@ -209,24 +209,24 @@ describe("AgentCallService pause lifecycle", () => {
         watchCycle += 1;
         if (watchCycle === 1) {
           yield task("input-required", {
-            questions: [scopeQuestion()]
+            questions: [scopeQuestion()],
           });
           return;
         }
         yield task("completed");
       },
       continueTask: async () => task("working"),
-      cancelTask: async () => task("canceled")
+      cancelTask: async () => task("canceled"),
     };
     const service = new AgentCallService({
       transport,
-      createId: () => "agent-call-idle-after-pause"
+      createId: () => "agent-call-idle-after-pause",
     });
     service.onPaused(async () => {
       listenerStarted.resolve();
       await releaseListener.promise;
       await service.continueTask("a2a-task-01", {
-        scope: ["Adapter only"]
+        scope: ["Adapter only"],
       });
     });
     service.onTerminal(terminalListener);
@@ -236,7 +236,7 @@ describe("AgentCallService pause lifecycle", () => {
       sessionId: "session-idle-after-pause",
       skillId: "codex-code-task",
       input: "wait through automatic continuation",
-      executionMode: "async"
+      executionMode: "async",
     });
     await listenerStarted.promise;
     let idleSettled = false;
@@ -267,7 +267,7 @@ describe("AgentCallService pause lifecycle", () => {
         watchCycle += 1;
         if (watchCycle === 1) {
           yield task("input-required", {
-            questions: [scopeQuestion()]
+            questions: [scopeQuestion()],
           });
           return;
         }
@@ -278,11 +278,11 @@ describe("AgentCallService pause lifecycle", () => {
         await releaseContinuation.promise;
         return task("working");
       },
-      cancelTask: async () => task("canceled")
+      cancelTask: async () => task("canceled"),
     };
     const service = new AgentCallService({
       transport,
-      createId: () => "agent-call-detached-continuation"
+      createId: () => "agent-call-detached-continuation",
     });
     service.onPaused(() => {
       void service
@@ -296,7 +296,7 @@ describe("AgentCallService pause lifecycle", () => {
       sessionId: "session-detached-continuation",
       skillId: "codex-code-task",
       input: "continue without awaiting the listener callback",
-      executionMode: "async"
+      executionMode: "async",
     });
     await continuationStarted.promise;
     let idleSettled = false;
@@ -325,11 +325,11 @@ describe("AgentCallService pause lifecycle", () => {
         yield task("input-required");
       },
       continueTask: rejectUnexpectedContinuation,
-      cancelTask: async () => task("canceled")
+      cancelTask: async () => task("canceled"),
     };
     const service = new AgentCallService({
       transport,
-      createId: () => "agent-call-close-paused-listener"
+      createId: () => "agent-call-close-paused-listener",
     });
     service.onPaused(async () => {
       listenerStarted.resolve();
@@ -341,7 +341,7 @@ describe("AgentCallService pause lifecycle", () => {
       sessionId: "session-close-paused-listener",
       skillId: "codex-code-task",
       input: "wait for the pause observer during close",
-      executionMode: "async"
+      executionMode: "async",
     });
     await listenerStarted.promise;
     const firstClose = service.close();
@@ -383,11 +383,11 @@ describe("AgentCallService pause lifecycle", () => {
         cancellationStarted.resolve();
         await releaseCancellation.promise;
         return task("canceled");
-      }
+      },
     };
     const service = new AgentCallService({
       transport,
-      createId: () => "agent-call-late-cancellation"
+      createId: () => "agent-call-late-cancellation",
     });
     service.onPaused(async () => {
       listenerStarted.resolve();
@@ -400,7 +400,7 @@ describe("AgentCallService pause lifecycle", () => {
       sessionId: "session-late-cancellation",
       skillId: "codex-code-task",
       input: "cancel while close drains listeners",
-      executionMode: "async"
+      executionMode: "async",
     });
     await listenerStarted.promise;
     let closeSettled = false;
@@ -431,11 +431,11 @@ describe("AgentCallService pause lifecycle", () => {
         yield task("input-required");
       },
       continueTask: rejectUnexpectedContinuation,
-      cancelTask: async () => task("canceled")
+      cancelTask: async () => task("canceled"),
     };
     const service = new AgentCallService({
       transport,
-      createId: () => "agent-call-paused-listener-error"
+      createId: () => "agent-call-paused-listener-error",
     });
     service.onBackgroundError(backgroundError);
     service.onPaused(() => {
@@ -447,13 +447,13 @@ describe("AgentCallService pause lifecycle", () => {
       sessionId: "session-paused-listener-error",
       skillId: "codex-code-task",
       input: "pause then fail the observer",
-      executionMode: "async"
+      executionMode: "async",
     });
     await service.waitForIdle();
 
     expect(backgroundError).toHaveBeenCalledTimes(1);
     expect(backgroundError.mock.calls[0]?.[0]).toMatchObject({
-      message: "Input-required re-entry failed"
+      message: "Input-required re-entry failed",
     });
     const record = service.getByTaskId("a2a-task-01");
     expect(record?.state).toBe("input-required");
@@ -469,7 +469,7 @@ describe("AgentCallService pause lifecycle", () => {
       submitTask: async () => task("submitted"),
       async *watchTask() {
         yield task("input-required", {
-          questions: [scopeQuestion()]
+          questions: [scopeQuestion()],
         });
       },
       continueTask: async () => {
@@ -477,16 +477,16 @@ describe("AgentCallService pause lifecycle", () => {
         await releaseContinuation.promise;
         throw new Error("Remote continuation failed");
       },
-      cancelTask: async () => task("canceled")
+      cancelTask: async () => task("canceled"),
     };
     const service = new AgentCallService({
       transport,
-      createId: () => "agent-call-failed-listener-continuation"
+      createId: () => "agent-call-failed-listener-continuation",
     });
     service.onBackgroundError(backgroundError);
     service.onPaused(async () => {
       await service.continueTask("a2a-task-01", {
-        scope: ["Adapter only"]
+        scope: ["Adapter only"],
       });
     });
 
@@ -495,12 +495,12 @@ describe("AgentCallService pause lifecycle", () => {
       sessionId: "session-failed-listener-continuation",
       skillId: "codex-code-task",
       input: "fail while continuing from a pause listener",
-      executionMode: "async"
+      executionMode: "async",
     });
     await continuationStarted.promise;
     const idleOutcome = service.waitForIdle().then(
       () => "resolved" as const,
-      (error: unknown) => error
+      (error: unknown) => error,
     );
 
     releaseContinuation.resolve();
@@ -510,7 +510,7 @@ describe("AgentCallService pause lifecycle", () => {
     expect(outcome).toBe("resolved");
     expect(backgroundError).toHaveBeenCalledTimes(1);
     expect(backgroundError.mock.calls[0]?.[0]).toMatchObject({
-      message: "Remote continuation failed"
+      message: "Remote continuation failed",
     });
     expect(service.getByTaskId("a2a-task-01")?.state).toBe("input-required");
   });
@@ -525,15 +525,15 @@ describe("AgentCallService pause lifecycle", () => {
         watchCycle += 1;
         yield task("input-required", {
           statusMessage: `question-${watchCycle}`,
-          questions: [scopeQuestion()]
+          questions: [scopeQuestion()],
         });
       },
       continueTask: async () => task("working"),
-      cancelTask: async () => task("canceled")
+      cancelTask: async () => task("canceled"),
     };
     const service = new AgentCallService({
       transport,
-      createId: () => "agent-call-repeated-pause"
+      createId: () => "agent-call-repeated-pause",
     });
     service.onPaused(pausedListener);
 
@@ -542,19 +542,18 @@ describe("AgentCallService pause lifecycle", () => {
       sessionId: "session-repeated-pause",
       skillId: "codex-code-task",
       input: "pause twice",
-      executionMode: "async"
+      executionMode: "async",
     });
     await service.waitForIdle();
     await service.continueTask("a2a-task-01", {
-      scope: ["Adapter only"]
+      scope: ["Adapter only"],
     });
     await service.waitForIdle();
 
     expect(pausedListener).toHaveBeenCalledTimes(2);
-    expect(pausedListener.mock.calls.map(([record]) => record.statusMessage)).toEqual([
-      "question-1",
-      "question-2"
-    ]);
+    expect(
+      pausedListener.mock.calls.map(([record]) => record.statusMessage),
+    ).toEqual(["question-1", "question-2"]);
   });
 
   test("notifies a later pause after a blocking invocation was continued", async () => {
@@ -567,15 +566,15 @@ describe("AgentCallService pause lifecycle", () => {
         watchCycle += 1;
         yield task("input-required", {
           statusMessage: `blocking-question-${watchCycle}`,
-          questions: [scopeQuestion()]
+          questions: [scopeQuestion()],
         });
       },
       continueTask: async () => task("working"),
-      cancelTask: async () => task("canceled")
+      cancelTask: async () => task("canceled"),
     };
     const service = new AgentCallService({
       transport,
-      createId: () => "agent-call-blocking-second-pause"
+      createId: () => "agent-call-blocking-second-pause",
     });
     service.onPaused(pausedListener);
 
@@ -585,23 +584,23 @@ describe("AgentCallService pause lifecycle", () => {
         sessionId: "session-blocking-second-pause",
         skillId: "codex-code-task",
         input: "return first pause, notify the next",
-        executionMode: "blocking"
-      })
+        executionMode: "blocking",
+      }),
     ).resolves.toMatchObject({
       state: "input-required",
-      statusMessage: "blocking-question-1"
+      statusMessage: "blocking-question-1",
     });
     expect(pausedListener).not.toHaveBeenCalled();
 
     await service.continueTask("a2a-task-01", {
-      scope: ["Adapter only"]
+      scope: ["Adapter only"],
     });
     await service.waitForIdle();
 
     expect(pausedListener).toHaveBeenCalledTimes(1);
     expect(pausedListener.mock.calls[0]?.[0]).toMatchObject({
       state: "input-required",
-      statusMessage: "blocking-question-2"
+      statusMessage: "blocking-question-2",
     });
   });
 
@@ -614,11 +613,11 @@ describe("AgentCallService pause lifecycle", () => {
         yield task("auth-required", { statusMessage: "sign in first" });
       },
       continueTask: rejectUnexpectedContinuation,
-      cancelTask: async () => task("canceled")
+      cancelTask: async () => task("canceled"),
     };
     const service = new AgentCallService({
       transport,
-      createId: () => "agent-call-auth-required"
+      createId: () => "agent-call-auth-required",
     });
     service.onPaused(pausedListener);
 
@@ -627,7 +626,7 @@ describe("AgentCallService pause lifecycle", () => {
       sessionId: "session-auth-required",
       skillId: "codex-code-task",
       input: "request authentication",
-      executionMode: "async"
+      executionMode: "async",
     });
     await service.waitForIdle();
 
@@ -653,25 +652,25 @@ describe("AgentCallService pause lifecycle", () => {
         task("input-required", { questions: [scopeQuestion()] }),
       watchTask,
       continueTask,
-      cancelTask: async () => task("canceled")
+      cancelTask: async () => task("canceled"),
     };
     const service = new AgentCallService({
       transport,
-      createId: () => "agent-call-aborted-caller"
+      createId: () => "agent-call-aborted-caller",
     });
     await service.submit({
       runId: "run-aborted-caller",
       sessionId: "session-aborted-caller",
       skillId: "codex-code-task",
       input: "keep tracking committed remote work",
-      executionMode: "async"
+      executionMode: "async",
     });
     await service.waitForIdle();
 
     const continuation = service.continueTask(
       "a2a-task-01",
       { scope: ["Adapter only"] },
-      callerController.signal
+      callerController.signal,
     );
     await continuationStarted.promise;
     callerController.abort();
@@ -697,7 +696,7 @@ describe("AgentCallService pause lifecycle", () => {
       options.signal.addEventListener(
         "abort",
         () => continuationWaiting.resolve(),
-        { once: true }
+        { once: true },
       );
       let delivered = false;
       const firstWatcher: AsyncIterableIterator<AgentCallTaskSnapshot> = {
@@ -712,14 +711,14 @@ describe("AgentCallService pause lifecycle", () => {
           return {
             done: false,
             value: task("input-required", {
-              questions: [scopeQuestion()]
-            })
+              questions: [scopeQuestion()],
+            }),
           };
         },
         async return() {
           await releaseWatcherCleanup.promise;
           return { done: true, value: undefined };
-        }
+        },
       };
       return firstWatcher;
     };
@@ -729,11 +728,11 @@ describe("AgentCallService pause lifecycle", () => {
       submitTask: async () => task("submitted"),
       watchTask,
       continueTask,
-      cancelTask
+      cancelTask,
     };
     const service = new AgentCallService({
       transport,
-      createId: () => "agent-call-cancel-wins"
+      createId: () => "agent-call-cancel-wins",
     });
     service.onPaused(() => pauseObserved.resolve());
 
@@ -742,14 +741,14 @@ describe("AgentCallService pause lifecycle", () => {
       sessionId: "session-cancel-wins",
       skillId: "codex-code-task",
       input: "cancel while continuing",
-      executionMode: "async"
+      executionMode: "async",
     });
     await pauseObserved.promise;
     const continuationOutcome = service
       .continueTask("a2a-task-01", { scope: ["Adapter only"] })
       .then(
         () => "resolved" as const,
-        () => "rejected" as const
+        () => "rejected" as const,
       );
     await continuationWaiting.promise;
 
@@ -779,25 +778,25 @@ describe("AgentCallService pause lifecycle", () => {
         task("input-required", { questions: [scopeQuestion()] }),
       async *watchTask() {},
       continueTask,
-      cancelTask
+      cancelTask,
     };
     const service = new AgentCallService({
       transport,
-      createId: () => "agent-call-cancel-in-flight"
+      createId: () => "agent-call-cancel-in-flight",
     });
     await service.submit({
       runId: "run-cancel-in-flight",
       sessionId: "session-cancel-in-flight",
       skillId: "codex-code-task",
       input: "do not continue after cancellation starts",
-      executionMode: "async"
+      executionMode: "async",
     });
     await service.waitForIdle();
 
     const cancellation = service.cancel("agent-call-cancel-in-flight");
     await cancelStarted.promise;
     const continuation = service.continueTask("a2a-task-01", {
-      scope: ["Adapter only"]
+      scope: ["Adapter only"],
     });
 
     await expect(continuation).rejects.toThrow(/cancel/i);
@@ -816,18 +815,18 @@ describe("AgentCallService pause lifecycle", () => {
         task("input-required", { questions: [scopeQuestion()] }),
       watchTask,
       continueTask,
-      cancelTask: async () => task("canceled")
+      cancelTask: async () => task("canceled"),
     };
     const service = new AgentCallService({
       transport,
-      createId: () => "agent-call-same-turn-cancel"
+      createId: () => "agent-call-same-turn-cancel",
     });
     await service.submit({
       runId: "run-same-turn-cancel",
       sessionId: "session-same-turn-cancel",
       skillId: "codex-code-task",
       input: "cancel before remote continuation",
-      executionMode: "async"
+      executionMode: "async",
     });
     await service.waitForIdle();
 
@@ -835,7 +834,7 @@ describe("AgentCallService pause lifecycle", () => {
       .continueTask("a2a-task-01", { scope: ["Adapter only"] })
       .then(
         () => "resolved" as const,
-        () => "rejected" as const
+        () => "rejected" as const,
       );
     const cancellation = service.cancel("agent-call-same-turn-cancel");
 

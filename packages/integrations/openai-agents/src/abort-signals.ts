@@ -2,7 +2,7 @@ export function combineAbortSignals(
   ...signals: Array<AbortSignal | undefined>
 ): AbortSignal | undefined {
   const available = signals.filter(
-    (signal): signal is AbortSignal => signal !== undefined
+    (signal): signal is AbortSignal => signal !== undefined,
   );
   if (available.length === 0) {
     return undefined;

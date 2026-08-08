@@ -17,7 +17,7 @@ import {
   type ChannelMessageListenerV1,
   type InboundChannelMessageV1,
   type RetractChannelMessageCommandV1,
-  type SendChannelMessageCommandV1
+  type SendChannelMessageCommandV1,
 } from "../src/index.js";
 
 const capabilities: ChannelCapabilitiesV1 = {
@@ -28,36 +28,36 @@ const capabilities: ChannelCapabilitiesV1 = {
     "text",
     "mention",
     "attachmentLink",
-    "attachmentLocalPath"
+    "attachmentLocalPath",
   ],
   reply: true,
   edit: false,
   retract: true,
   reaction: false,
   typing: false,
-  streaming: false
+  streaming: false,
 };
 
 const descriptor: ChannelDescriptorV1 = {
   channelId: "qq-main",
   platform: "onebot11",
   accountId: "10000",
-  capabilities
+  capabilities,
 };
 
 function route(
-  overrides: Partial<ChannelConversationRouteV1> = {}
+  overrides: Partial<ChannelConversationRouteV1> = {},
 ): ChannelConversationRouteV1 {
   return {
     channelId: "qq-main",
     conversationKind: "group",
     conversationId: "20000",
-    ...overrides
+    ...overrides,
   };
 }
 
 function inbound(
-  overrides: Partial<InboundChannelMessageV1> = {}
+  overrides: Partial<InboundChannelMessageV1> = {},
 ): InboundChannelMessageV1 {
   return {
     messageId: "message-1",
@@ -66,12 +66,12 @@ function inbound(
       id: "30000",
       username: "Alice",
       displayName: "Alice",
-      isSelf: false
+      isSelf: false,
     },
     receivedAt: "2026-07-22T00:00:00.000Z",
     content: "hello",
     contentFormat: "onebot11.cq",
-    ...overrides
+    ...overrides,
   };
 }
 
@@ -88,9 +88,9 @@ describe("Channel Contract v1", () => {
           type: "attachmentLink",
           kind: "file",
           url: "https://example.com/result.txt",
-          name: "result.txt"
-        }
-      ]
+          name: "result.txt",
+        },
+      ],
     };
     const adapter: ChannelAdapterV1 = {
       descriptor,
@@ -102,9 +102,9 @@ describe("Channel Contract v1", () => {
       },
       send: vi.fn(async () => ({
         channelId: descriptor.channelId,
-        messageId: "sent-1"
+        messageId: "sent-1",
       })),
-      retract: vi.fn(async () => undefined)
+      retract: vi.fn(async () => undefined),
     };
 
     const unsubscribe = adapter.onMessage(receive);
@@ -114,20 +114,20 @@ describe("Channel Contract v1", () => {
       messageId: "message-2",
       route: route({
         conversationKind: "direct",
-        conversationId: "30000"
-      })
+        conversationId: "30000",
+      }),
     });
     listener?.(incomingGroup);
     listener?.(incomingDirect);
     const receipt = await adapter.send(sendCommand);
     const retractCommand: RetractChannelMessageCommandV1 = {
       route: sendCommand.route,
-      messageId: receipt.messageId
+      messageId: receipt.messageId,
     };
     await adapter.retract(retractCommand);
     expect(receipt).toEqual({
       channelId: "qq-main",
-      messageId: "sent-1"
+      messageId: "sent-1",
     });
     await adapter.close();
     unsubscribe();
@@ -145,18 +145,18 @@ describe("Channel Contract v1", () => {
       expect(() =>
         assertValidRetractChannelMessageCommand({
           route: route(),
-          messageId
-        } as never)
+          messageId,
+        } as never),
       ).toThrow(/messageId must be a non-empty string/);
-    }
+    },
   );
 
   test("accepts an opaque non-empty retract messageId without parsing its format", () => {
     expect(() =>
       assertValidRetractChannelMessageCommand({
         route: route(),
-        messageId: "platform:message/42"
-      })
+        messageId: "platform:message/42",
+      }),
     ).not.toThrow();
   });
 
@@ -164,33 +164,33 @@ describe("Channel Contract v1", () => {
     {
       name: "non-object",
       value: undefined,
-      error: /route must be an object/
+      error: /route must be an object/,
     },
     {
       name: "blank channelId",
       value: route({ channelId: " " }),
-      error: /channelId must be a non-empty string/
+      error: /channelId must be a non-empty string/,
     },
     {
       name: "unsupported conversationKind",
       value: route({ conversationKind: "room" as never }),
-      error: /conversationKind must be direct, group, or channel/
+      error: /conversationKind must be direct, group, or channel/,
     },
     {
       name: "blank conversationId",
       value: route({ conversationId: "" }),
-      error: /conversationId must be a non-empty string/
+      error: /conversationId must be a non-empty string/,
     },
     {
       name: "non-string threadId",
       value: route({ threadId: 123 as never }),
-      error: /threadId must be a non-empty string/
+      error: /threadId must be a non-empty string/,
     },
     {
       name: "unsupported field",
       value: { ...route(), senderId: "30000" },
-      error: /contains unsupported field senderId/
-    }
+      error: /contains unsupported field senderId/,
+    },
   ])("rejects a Channel route with $name", ({ value, error }) => {
     expect(() => assertValidChannelConversationRoute(value)).toThrow(error);
   });
@@ -199,48 +199,47 @@ describe("Channel Contract v1", () => {
     {
       boundary: "inbound",
       validate: (invalidRoute: ChannelConversationRouteV1) =>
-        assertValidInboundChannelMessage(inbound({ route: invalidRoute }))
+        assertValidInboundChannelMessage(inbound({ route: invalidRoute })),
     },
     {
       boundary: "send",
       validate: (invalidRoute: ChannelConversationRouteV1) =>
         assertValidSendChannelMessageCommand({
           route: invalidRoute,
-          parts: [{ type: "text", text: "hello" }]
-        })
+          parts: [{ type: "text", text: "hello" }],
+        }),
     },
     {
       boundary: "retract",
       validate: (invalidRoute: ChannelConversationRouteV1) =>
         assertValidRetractChannelMessageCommand({
           route: invalidRoute,
-          messageId: "message-1"
-        })
-    }
+          messageId: "message-1",
+        }),
+    },
   ])("rejects an invalid route at the $boundary boundary", ({ validate }) => {
     expect(() => validate(route({ conversationId: " " }))).toThrow(
-      /conversationId must be a non-empty string/
+      /conversationId must be a non-empty string/,
     );
   });
 
-  test.each([
-    "not-a-time",
-    "2026-07-22",
-    "2026-02-30T00:00:00.000Z"
-  ])("rejects an invalid inbound receivedAt %s", (receivedAt) => {
-    expect(() =>
-      assertValidInboundChannelMessage(inbound({ receivedAt }))
-    ).toThrow(/receivedAt must be a UTC ISO-8601 timestamp/);
-  });
+  test.each(["not-a-time", "2026-07-22", "2026-02-30T00:00:00.000Z"])(
+    "rejects an invalid inbound receivedAt %s",
+    (receivedAt) => {
+      expect(() =>
+        assertValidInboundChannelMessage(inbound({ receivedAt })),
+      ).toThrow(/receivedAt must be a UTC ISO-8601 timestamp/);
+    },
+  );
 
-  test.each([
-    "2026-07-22T00:00:00Z",
-    "2026-07-22T00:00:00.123Z"
-  ])("accepts a valid UTC ISO-8601 receivedAt %s", (receivedAt) => {
-    expect(() =>
-      assertValidInboundChannelMessage(inbound({ receivedAt }))
-    ).not.toThrow();
-  });
+  test.each(["2026-07-22T00:00:00Z", "2026-07-22T00:00:00.123Z"])(
+    "accepts a valid UTC ISO-8601 receivedAt %s",
+    (receivedAt) => {
+      expect(() =>
+        assertValidInboundChannelMessage(inbound({ receivedAt })),
+      ).not.toThrow();
+    },
+  );
 
   test("returns not_supported when an adapter cannot retract messages", async () => {
     const unsupportedAdapter: ChannelAdapterV1 = {
@@ -248,32 +247,32 @@ describe("Channel Contract v1", () => {
         ...descriptor,
         capabilities: {
           ...capabilities,
-          retract: false
-        }
+          retract: false,
+        },
       },
       start: vi.fn(async () => undefined),
       close: vi.fn(async () => undefined),
       onMessage: vi.fn(() => vi.fn()),
       send: vi.fn(async () => ({
         channelId: descriptor.channelId,
-        messageId: "sent-1"
+        messageId: "sent-1",
       })),
       retract: vi.fn(async () => {
         throw new ChannelOperationError(
           "not_supported",
-          "message retraction is not supported"
+          "message retraction is not supported",
         );
-      })
+      }),
     };
 
     await expect(
       unsupportedAdapter.retract({
         route: route(),
-        messageId: "sent-1"
-      })
+        messageId: "sent-1",
+      }),
     ).rejects.toMatchObject({
       name: "ChannelOperationError",
-      code: "not_supported"
+      code: "not_supported",
     });
   });
 
@@ -282,18 +281,18 @@ describe("Channel Contract v1", () => {
 
     expect(group).toBe("channel:qq-main:group:20000");
     expect(channelSessionIdFor(route())).toBe(group);
-    expect(
-      channelSessionIdFor(route({ channelId: "qq-secondary" }))
-    ).not.toBe(group);
-    expect(
-      channelSessionIdFor(route({ conversationKind: "direct" }))
-    ).not.toBe(group);
-    expect(
-      channelSessionIdFor(route({ conversationId: "20001" }))
-    ).not.toBe(group);
-    expect(
-      channelSessionIdFor(route({ threadId: "thread:one" }))
-    ).toBe("channel:qq-main:group:20000:thread:thread%3Aone");
+    expect(channelSessionIdFor(route({ channelId: "qq-secondary" }))).not.toBe(
+      group,
+    );
+    expect(channelSessionIdFor(route({ conversationKind: "direct" }))).not.toBe(
+      group,
+    );
+    expect(channelSessionIdFor(route({ conversationId: "20001" }))).not.toBe(
+      group,
+    );
+    expect(channelSessionIdFor(route({ threadId: "thread:one" }))).toBe(
+      "channel:qq-main:group:20000:thread:thread%3Aone",
+    );
   });
 
   test("does not include the sender in a group session key", () => {
@@ -302,20 +301,20 @@ describe("Channel Contract v1", () => {
         id: "30000",
         username: "alice",
         displayName: "Alice Card",
-        isSelf: false
-      }
+        isSelf: false,
+      },
     });
     const second = inbound({
       sender: {
         id: "40000",
         username: "bob",
         displayName: "Bob Card",
-        isSelf: false
-      }
+        isSelf: false,
+      },
     });
 
     expect(channelSessionIdFor(first.route)).toBe(
-      channelSessionIdFor(second.route)
+      channelSessionIdFor(second.route),
     );
   });
 
@@ -325,15 +324,15 @@ describe("Channel Contract v1", () => {
         id: "30000",
         username: "Alice",
         displayName: "Backend-Alice",
-        isSelf: true
-      }
+        isSelf: true,
+      },
     });
 
     expect(message.sender).toEqual({
       id: "30000",
       username: "Alice",
       displayName: "Backend-Alice",
-      isSelf: true
+      isSelf: true,
     });
   });
 
@@ -345,10 +344,10 @@ describe("Channel Contract v1", () => {
           sender: {
             id: "10000",
             username: "HuanLink",
-            isSelf: true
-          }
-        })
-      )
+            isSelf: true,
+          },
+        }),
+      ),
     ).not.toThrow();
 
     const withoutIsSelf = inbound() as unknown as {
@@ -357,8 +356,8 @@ describe("Channel Contract v1", () => {
     delete withoutIsSelf.sender.isSelf;
     expect(() =>
       assertValidInboundChannelMessage(
-        withoutIsSelf as unknown as InboundChannelMessageV1
-      )
+        withoutIsSelf as unknown as InboundChannelMessageV1,
+      ),
     ).toThrow(/sender isSelf/i);
   });
 
@@ -366,7 +365,7 @@ describe("Channel Contract v1", () => {
     const content =
       "[CQ:at,qq=10000] /huanlink inspect [CQ:image,url=https://invalid.example/image.png,key=fixture-key][CQ:future,opaque=value]";
     const message = inbound({
-      content
+      content,
     });
 
     expect(() => assertValidInboundChannelMessage(message)).not.toThrow();
@@ -384,7 +383,7 @@ describe("Channel Contract v1", () => {
 
   test("rejects an actually empty inbound content string", () => {
     expect(() =>
-      assertValidInboundChannelMessage(inbound({ content: "" }))
+      assertValidInboundChannelMessage(inbound({ content: "" })),
     ).toThrow(/content must be a non-empty string/);
   });
 
@@ -392,7 +391,7 @@ describe("Channel Contract v1", () => {
     const content = "a".repeat(CHANNEL_INBOUND_CONTENT_MAX_BYTES_V1);
 
     expect(() =>
-      assertValidInboundChannelMessage(inbound({ content }))
+      assertValidInboundChannelMessage(inbound({ content })),
     ).not.toThrow();
   });
 
@@ -400,18 +399,16 @@ describe("Channel Contract v1", () => {
     const content = "a".repeat(CHANNEL_INBOUND_CONTENT_MAX_BYTES_V1 + 1);
 
     expect(() =>
-      assertValidInboundChannelMessage(inbound({ content }))
+      assertValidInboundChannelMessage(inbound({ content })),
     ).toThrow(/must not exceed 8192 UTF-8 bytes/);
   });
 
   test("measures the inbound limit in UTF-8 bytes instead of characters", () => {
     const content = "你".repeat(2731);
 
-    expect(content.length).toBeLessThan(
-      CHANNEL_INBOUND_CONTENT_MAX_BYTES_V1
-    );
+    expect(content.length).toBeLessThan(CHANNEL_INBOUND_CONTENT_MAX_BYTES_V1);
     expect(() =>
-      assertValidInboundChannelMessage(inbound({ content }))
+      assertValidInboundChannelMessage(inbound({ content })),
     ).toThrow(/must not exceed 8192 UTF-8 bytes/);
   });
 
@@ -420,8 +417,8 @@ describe("Channel Contract v1", () => {
       content: CHANNEL_INBOUND_CONTENT_TOO_LARGE_PLACEHOLDER_V1,
       contentOmitted: {
         reason: "too_large",
-        originalSizeBytes: CHANNEL_INBOUND_CONTENT_MAX_BYTES_V1 + 1
-      }
+        originalSizeBytes: CHANNEL_INBOUND_CONTENT_MAX_BYTES_V1 + 1,
+      },
     });
 
     expect(() => assertValidInboundChannelMessage(message)).not.toThrow();
@@ -431,8 +428,8 @@ describe("Channel Contract v1", () => {
     expect(() =>
       assertValidInboundChannelMessage({
         ...inbound(),
-        untrusted: "must not enter the persisted contract"
-      } as never)
+        untrusted: "must not enter the persisted contract",
+      } as never),
     ).toThrow(/unsupported field untrusted/);
   });
 
@@ -441,19 +438,19 @@ describe("Channel Contract v1", () => {
       content: "partial original content",
       contentOmitted: {
         reason: "too_large",
-        originalSizeBytes: CHANNEL_INBOUND_CONTENT_MAX_BYTES_V1 + 1
-      }
+        originalSizeBytes: CHANNEL_INBOUND_CONTENT_MAX_BYTES_V1 + 1,
+      },
     },
     {
       content: CHANNEL_INBOUND_CONTENT_TOO_LARGE_PLACEHOLDER_V1,
       contentOmitted: {
         reason: "too_large",
-        originalSizeBytes: CHANNEL_INBOUND_CONTENT_MAX_BYTES_V1
-      }
-    }
+        originalSizeBytes: CHANNEL_INBOUND_CONTENT_MAX_BYTES_V1,
+      },
+    },
   ])("rejects an invalid too-large placeholder %#", (overrides) => {
     expect(() =>
-      assertValidInboundChannelMessage(inbound(overrides as never))
+      assertValidInboundChannelMessage(inbound(overrides as never)),
     ).toThrow(/omitted content/);
   });
 
@@ -467,8 +464,8 @@ describe("Channel Contract v1", () => {
         kind: "image",
         url: "https://example.com/image.png",
         name: "image.png",
-        mimeType: "image/png"
-      }
+        mimeType: "image/png",
+      },
     ] as const;
 
     expect(() => assertValidOutboundChannelMessageParts(parts)).not.toThrow();
@@ -476,41 +473,41 @@ describe("Channel Contract v1", () => {
       "text",
       "mention",
       "mention",
-      "attachmentLink"
+      "attachmentLink",
     ]);
   });
 
-  test.each([
-    "D:\\workspace\\result.txt",
-    "/var/lib/huanlink/result.txt"
-  ])("accepts an absolute local attachment path %s", (path) => {
-    expect(() =>
-      assertValidOutboundChannelMessageParts([
-        {
-          type: "attachmentLocalPath",
-          kind: "file",
-          path,
-          name: "result.txt",
-          mimeType: "text/plain"
-        }
-      ])
-    ).not.toThrow();
-  });
+  test.each(["D:\\workspace\\result.txt", "/var/lib/huanlink/result.txt"])(
+    "accepts an absolute local attachment path %s",
+    (path) => {
+      expect(() =>
+        assertValidOutboundChannelMessageParts([
+          {
+            type: "attachmentLocalPath",
+            kind: "file",
+            path,
+            name: "result.txt",
+            mimeType: "text/plain",
+          },
+        ]),
+      ).not.toThrow();
+    },
+  );
 
   test.each([
     "result.txt",
     "../result.txt",
     "file:///tmp/result.txt",
-    "base64://aGVsbG8="
+    "base64://aGVsbG8=",
   ])("rejects a non-absolute local attachment path %s", (path) => {
     expect(() =>
       assertValidOutboundChannelMessageParts([
         {
           type: "attachmentLocalPath",
           kind: "file",
-          path
-        }
-      ])
+          path,
+        },
+      ]),
     ).toThrow(/local path must be absolute/);
   });
 
@@ -518,16 +515,16 @@ describe("Channel Contract v1", () => {
     "file:///tmp/image.png",
     "base64://aGVsbG8=",
     "ftp://example.com/image.png",
-    "C:/images/image.png"
+    "C:/images/image.png",
   ])("rejects non-HTTP remote attachment reference %s", (url) => {
     expect(() =>
       assertValidOutboundChannelMessageParts([
         {
           type: "attachmentLink",
           kind: "image",
-          url
-        }
-      ])
+          url,
+        },
+      ]),
     ).toThrow(/HTTP\(S\)/);
   });
 
@@ -537,16 +534,16 @@ describe("Channel Contract v1", () => {
         {
           type: "attachmentLink",
           kind: "image",
-          url: "https://user:password@example.com/image.png"
-        }
-      ])
+          url: "https://user:password@example.com/image.png",
+        },
+      ]),
     ).toThrow(/must not include credentials/);
   });
 
   test("exposes a stable channel failure code", () => {
     const error = new ChannelOperationError(
       "not_supported",
-      "attachments are not supported"
+      "attachments are not supported",
     );
 
     expect(error).toBeInstanceOf(Error);
@@ -558,7 +555,7 @@ describe("Channel Contract v1", () => {
   test("exposes delivery_uncertain when a dispatched send has no known result", () => {
     const error = new ChannelOperationError(
       "delivery_uncertain",
-      "the platform may have accepted the message"
+      "the platform may have accepted the message",
     );
 
     expect(error.code).toBe("delivery_uncertain");

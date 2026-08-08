@@ -8,6 +8,8 @@
     "build": "corepack pnpm -r --if-present build",
     "clean": "corepack pnpm -r --if-present run clean",
     "build:clean": "corepack pnpm run clean && corepack pnpm build",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "typecheck": "corepack pnpm -r --if-present typecheck",
     "test": "corepack pnpm -r --if-present test"
   },

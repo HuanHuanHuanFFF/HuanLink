@@ -6,7 +6,7 @@ import type { AgentEvent, AgentEventDraft } from "./types.js";
 // 根据 EventLog 分配的 seq，把 draft 补齐成完整 AgentEvent。
 export function completeAgentEvent(
   draft: AgentEventDraft,
-  seq: number
+  seq: number,
 ): AgentEvent {
   return {
     schemaVersion: CORE_SCHEMA_VERSION,
@@ -16,6 +16,6 @@ export function completeAgentEvent(
     type: draft.type,
     runId: draft.runId,
     sessionId: draft.sessionId,
-    data: draft.data
+    data: draft.data,
   } as AgentEvent;
 }

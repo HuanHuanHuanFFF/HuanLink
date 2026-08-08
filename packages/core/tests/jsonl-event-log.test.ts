@@ -5,7 +5,7 @@ import {
   readdir,
   rm,
   stat,
-  writeFile
+  writeFile,
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -16,13 +16,13 @@ import {
   CORE_SCHEMA_VERSION,
   JsonlEventLog,
   getDefaultRuntimeConfig,
-  resolveRuntimeConfig
+  resolveRuntimeConfig,
 } from "../src/index.js";
 import type {
   AgentEvent,
   AgentEventDraft,
   RunId,
-  SessionId
+  SessionId,
 } from "../src/index.js";
 
 let tempRoot: string;
@@ -50,7 +50,7 @@ describe("JsonlEventLog", () => {
       type: "main_agent.run.completed",
       runId: runA,
       sessionId,
-      data: { output: "done" }
+      data: { output: "done" },
     });
 
     expect(await eventLog.readRunEvents(runA)).toEqual([first, second]);
@@ -60,7 +60,7 @@ describe("JsonlEventLog", () => {
       seq: 1,
       type: "main_agent.run.started",
       runId: runA,
-      sessionId
+      sessionId,
     });
     expect(Object.keys(first).sort()).toEqual([
       "data",
@@ -70,7 +70,7 @@ describe("JsonlEventLog", () => {
       "seq",
       "sessionId",
       "timestamp",
-      "type"
+      "type",
     ]);
     expect(second.seq).toBe(2);
     expect(otherRun.seq).toBe(1);
@@ -78,10 +78,9 @@ describe("JsonlEventLog", () => {
     const eventFiles = await findEventsFiles(baseDir);
     expect(eventFiles).toHaveLength(2);
     const runAFile = await findFileContaining(eventFiles, '"runId":"run_a"');
-    expect((await readJsonLines(runAFile)).map((line) => JSON.parse(line))).toEqual([
-      first,
-      second
-    ]);
+    expect(
+      (await readJsonLines(runAFile)).map((line) => JSON.parse(line)),
+    ).toEqual([first, second]);
   });
 
   test("reads schema 3.0 Channel events with the V1 message contract", async () => {
@@ -96,23 +95,23 @@ describe("JsonlEventLog", () => {
           route: {
             channelId: "qq-main",
             conversationKind: "group",
-            conversationId: "20002000"
+            conversationId: "20002000",
           },
           sender: {
             id: "10001000",
             username: "Tester",
-            isSelf: false
+            isSelf: false,
           },
           receivedAt: "2026-07-15T00:00:00.000Z",
           content: "hello",
           contentFormat: "onebot11.cq",
-          trigger: { kind: "mention" }
-        }
-      }
+          trigger: { kind: "mention" },
+        },
+      },
     });
 
     await expect(eventLog.readRunEvents("run_channel_v1")).resolves.toEqual([
-      event
+      event,
     ]);
   });
 
@@ -132,23 +131,21 @@ describe("JsonlEventLog", () => {
           taskId: "task_01",
           skillId: "coding",
           executionMode: "async",
-          state: "submitted"
-        }
+          state: "submitted",
+        },
       }),
       eventLog.append({
         type: "main_agent.run.completed",
         runId,
         sessionId,
-        data: { output: "done" }
-      })
+        data: { output: "done" },
+      }),
     ]);
 
     expect(completed.map((event) => event.seq)).toEqual([1, 2, 3]);
-    expect((await eventLog.readRunEvents(runId)).map((event) => event.seq)).toEqual([
-      1,
-      2,
-      3
-    ]);
+    expect(
+      (await eventLog.readRunEvents(runId)).map((event) => event.seq),
+    ).toEqual([1, 2, 3]);
   });
 
   test("continues seq after a new instance opens an existing run file", async () => {
@@ -163,8 +160,8 @@ describe("JsonlEventLog", () => {
       data: {
         agentCallId: "agent_call_restart",
         taskId: "task_restart",
-        state: "working"
-      }
+        state: "working",
+      },
     });
 
     const restartedEventLog = new JsonlEventLog({ baseDir });
@@ -172,12 +169,12 @@ describe("JsonlEventLog", () => {
       type: "main_agent.run.completed",
       runId,
       sessionId,
-      data: { output: "after restart" }
+      data: { output: "after restart" },
     });
 
     expect(completed.seq).toBe(3);
     expect(
-      (await restartedEventLog.readRunEvents(runId)).map((event) => event.seq)
+      (await restartedEventLog.readRunEvents(runId)).map((event) => event.seq),
     ).toEqual([1, 2, 3]);
   });
 
@@ -191,30 +188,32 @@ describe("JsonlEventLog", () => {
       sessionId,
       JSON.stringify({
         ...validRawEvent(runId, Number.MAX_SAFE_INTEGER - 1),
-        sessionId
-      })
+        sessionId,
+      }),
     );
 
     const eventLog = new JsonlEventLog({ baseDir });
     const lastEvent = await eventLog.append(createDraft(runId, sessionId));
 
     expect(lastEvent.seq).toBe(Number.MAX_SAFE_INTEGER);
-    await expect(eventLog.append(createDraft(runId, sessionId))).rejects.toThrow(
+    await expect(
+      eventLog.append(createDraft(runId, sessionId)),
+    ).rejects.toThrow(
       new RegExp(
         `^Failed to append JSONL EventLog event for run "${runId}": ` +
           `Cannot allocate JSONL EventLog seq: maximum safe integer ` +
-          `${Number.MAX_SAFE_INTEGER} has been reached$`
-      )
+          `${Number.MAX_SAFE_INTEGER} has been reached$`,
+      ),
     );
 
     const [eventFile] = await findEventsFiles(baseDir);
     const storedSeqs = (await readJsonLines(eventFile)).map(
-      (line) => (JSON.parse(line) as AgentEvent).seq
+      (line) => (JSON.parse(line) as AgentEvent).seq,
     );
 
     expect(storedSeqs).toEqual([
       Number.MAX_SAFE_INTEGER - 1,
-      Number.MAX_SAFE_INTEGER
+      Number.MAX_SAFE_INTEGER,
     ]);
     expect(storedSeqs.every((seq) => Number.isSafeInteger(seq))).toBe(true);
     expect(new Set(storedSeqs).size).toBe(storedSeqs.length);
@@ -229,22 +228,24 @@ describe("JsonlEventLog", () => {
     const defaults = getDefaultRuntimeConfig();
     const configuredBaseDir = path.join(tempRoot, "runtime-config-events");
     const runtimeConfig = resolveRuntimeConfig({
-      eventLog: { baseDir: configuredBaseDir, nextSeqCacheSize: 3 }
+      eventLog: { baseDir: configuredBaseDir, nextSeqCacheSize: 3 },
     });
     const eventLog = new JsonlEventLog({ runtimeConfig });
 
-    await eventLog.append(createDraft("run_runtime_config", "session_runtime_config"));
+    await eventLog.append(
+      createDraft("run_runtime_config", "session_runtime_config"),
+    );
 
     expect(await findEventsFiles(configuredBaseDir)).toHaveLength(1);
     expect(runtimeConfig.eventLog.nextSeqCacheSize).not.toBe(
-      defaults.eventLog.nextSeqCacheSize
+      defaults.eventLog.nextSeqCacheSize,
     );
   });
 
   test("skips blank lines while reading", async () => {
     const eventLog = new JsonlEventLog({ baseDir });
     const event = await eventLog.append(
-      createDraft("run_blank_lines", "session_blank_lines")
+      createDraft("run_blank_lines", "session_blank_lines"),
     );
     const [eventFile] = await findEventsFiles(baseDir);
     await appendFile(eventFile, "\n  \n", "utf8");
@@ -254,10 +255,15 @@ describe("JsonlEventLog", () => {
 
   test("throws a clear error when a JSONL line is invalid", async () => {
     const eventLog = new JsonlEventLog({ baseDir });
-    await replaceRunFile(eventLog, "run_bad_json", "session_bad_json", "{bad json}");
+    await replaceRunFile(
+      eventLog,
+      "run_bad_json",
+      "session_bad_json",
+      "{bad json}",
+    );
 
     await expect(eventLog.readRunEvents("run_bad_json")).rejects.toThrow(
-      /Failed to parse JSONL EventLog line 1 for run "run_bad_json"/
+      /Failed to parse JSONL EventLog line 1 for run "run_bad_json"/,
     );
   });
 
@@ -266,24 +272,30 @@ describe("JsonlEventLog", () => {
     ["schema 2.0", { ...validRawEvent("run_invalid"), schemaVersion: "2.0" }],
     [
       "an invalid timestamp",
-      { ...validRawEvent("run_invalid"), timestamp: "not-a-timestamp" }
+      { ...validRawEvent("run_invalid"), timestamp: "not-a-timestamp" },
     ],
     [
       "an unsafe seq",
       {
         ...validRawEvent("run_invalid"),
-        seq: Number.MAX_SAFE_INTEGER + 1
-      }
+        seq: Number.MAX_SAFE_INTEGER + 1,
+      },
     ],
-    ["tool.requested", { ...validRawEvent("run_invalid"), type: "tool.requested" }],
-    ["policy.decided", { ...validRawEvent("run_invalid"), type: "policy.decided" }],
+    [
+      "tool.requested",
+      { ...validRawEvent("run_invalid"), type: "tool.requested" },
+    ],
+    [
+      "policy.decided",
+      { ...validRawEvent("run_invalid"), type: "policy.decided" },
+    ],
     [
       "missing main_agent.run.completed output",
       {
         ...validRawEvent("run_invalid"),
         type: "main_agent.run.completed",
-        data: {}
-      }
+        data: {},
+      },
     ],
     [
       "an invalid main_agent.run.started cause",
@@ -294,26 +306,26 @@ describe("JsonlEventLog", () => {
           cause: {
             agentCallId: "agent_call_invalid",
             taskId: "task_invalid",
-            state: "queued"
-          }
-        }
-      }
+            state: "queued",
+          },
+        },
+      },
     ],
     [
       "missing main_agent.run.failed error",
       {
         ...validRawEvent("run_invalid"),
         type: "main_agent.run.failed",
-        data: {}
-      }
+        data: {},
+      },
     ],
     [
       "missing main_agent.run.cancelled reason",
       {
         ...validRawEvent("run_invalid"),
         type: "main_agent.run.cancelled",
-        data: {}
-      }
+        data: {},
+      },
     ],
     [
       "an invalid agent_call.created executionMode",
@@ -325,9 +337,9 @@ describe("JsonlEventLog", () => {
           taskId: "task_invalid",
           skillId: "coding",
           executionMode: "parallel",
-          state: "submitted"
-        }
-      }
+          state: "submitted",
+        },
+      },
     ],
     [
       "an invalid agent_call.created state",
@@ -339,9 +351,9 @@ describe("JsonlEventLog", () => {
           taskId: "task_invalid",
           skillId: "coding",
           executionMode: "async",
-          state: "queued"
-        }
-      }
+          state: "queued",
+        },
+      },
     ],
     [
       "an invalid agent_call.state.changed state",
@@ -351,9 +363,9 @@ describe("JsonlEventLog", () => {
         data: {
           agentCallId: "agent_call_invalid",
           taskId: "task_invalid",
-          state: "queued"
-        }
-      }
+          state: "queued",
+        },
+      },
     ],
     [
       "an invalid channel.message.received trigger",
@@ -366,20 +378,20 @@ describe("JsonlEventLog", () => {
             route: {
               channelId: "qq-main",
               conversationKind: "group",
-              conversationId: "group_invalid"
+              conversationId: "group_invalid",
             },
             sender: {
               id: "user_invalid",
               username: "Invalid User",
-              isSelf: false
+              isSelf: false,
             },
             receivedAt: "2026-07-15T00:00:00.000Z",
             content: "hello",
             contentFormat: "onebot11.cq",
-            trigger: { kind: "ambient" }
-          }
-        }
-      }
+            trigger: { kind: "ambient" },
+          },
+        },
+      },
     ],
     [
       "an undeclared channel.message.received field",
@@ -392,28 +404,28 @@ describe("JsonlEventLog", () => {
             route: {
               channelId: "qq-main",
               conversationKind: "group",
-              conversationId: "group_invalid"
+              conversationId: "group_invalid",
             },
             sender: {
               id: "user_invalid",
               username: "Invalid User",
-              isSelf: false
+              isSelf: false,
             },
             receivedAt: "2026-07-15T00:00:00.000Z",
             content: "hello",
             contentFormat: "onebot11.cq",
-            untrusted: "must not enter schema 3.0"
-          }
-        }
-      }
+            untrusted: "must not enter schema 3.0",
+          },
+        },
+      },
     ],
     [
       "missing channel.reply.sent text",
       {
         ...validRawEvent("run_invalid"),
         type: "channel.reply.sent",
-        data: { conversationId: "group_invalid" }
-      }
+        data: { conversationId: "group_invalid" },
+      },
     ],
     [
       "missing channel.reply.failed error",
@@ -422,9 +434,9 @@ describe("JsonlEventLog", () => {
         type: "channel.reply.failed",
         data: {
           conversationId: "group_invalid",
-          text: "reply"
-        }
-      }
+          text: "reply",
+        },
+      },
     ],
     [
       "legacy envelope fields",
@@ -433,26 +445,28 @@ describe("JsonlEventLog", () => {
         source: "agent_loop",
         step: 0,
         toolCallId: "tool_01",
-        parentEventId: "event_00"
-      }
-    ]
+        parentEventId: "event_00",
+      },
+    ],
   ])("rejects %s JSONL events", async (_label, invalidEvent) => {
     const eventLog = new JsonlEventLog({ baseDir });
     await replaceRunFile(
       eventLog,
       "run_invalid",
       "session_invalid",
-      JSON.stringify(invalidEvent)
+      JSON.stringify(invalidEvent),
     );
 
     await expect(eventLog.readRunEvents("run_invalid")).rejects.toThrow(
-      /Invalid JSONL EventLog event envelope on line 1 for run "run_invalid"/
+      /Invalid JSONL EventLog event envelope on line 1 for run "run_invalid"/,
     );
   });
 
   test("filters out events in a run file that belong to another run", async () => {
     const eventLog = new JsonlEventLog({ baseDir });
-    const runEvent = await eventLog.append(createDraft("run_current", "session_current"));
+    const runEvent = await eventLog.append(
+      createDraft("run_current", "session_current"),
+    );
     const [eventFile] = await findEventsFiles(baseDir);
     const strayEvent = validRawEvent("run_stray", 99);
     await appendFile(eventFile, `${JSON.stringify(strayEvent)}\n`, "utf8");
@@ -463,7 +477,9 @@ describe("JsonlEventLog", () => {
   test("keeps path-like run ids inside the configured base directory", async () => {
     const eventLog = new JsonlEventLog({ baseDir });
     const runId = "../escape\\..\\run";
-    const event = await eventLog.append(createDraft(runId, "session_path_guard"));
+    const event = await eventLog.append(
+      createDraft(runId, "session_path_guard"),
+    );
 
     expect(await eventLog.readRunEvents(runId)).toEqual([event]);
     const [eventFile] = await findEventsFiles(baseDir);
@@ -480,9 +496,11 @@ describe("JsonlEventLog", () => {
     const eventLog = new JsonlEventLog({ baseDir: fileBaseDir });
 
     await expect(
-      eventLog.append(createDraft("run_write_failure", "session_write_failure"))
+      eventLog.append(
+        createDraft("run_write_failure", "session_write_failure"),
+      ),
     ).rejects.toThrow(
-      /Failed to append JSONL EventLog event for run "run_write_failure"/
+      /Failed to append JSONL EventLog event for run "run_write_failure"/,
     );
   });
 });
@@ -492,7 +510,7 @@ function createDraft(runId: RunId, sessionId: SessionId): AgentEventDraft {
     type: "main_agent.run.started",
     runId,
     sessionId,
-    data: { trigger: "user" }
+    data: { trigger: "user" },
   };
 }
 
@@ -505,7 +523,7 @@ function validRawEvent(runId: RunId, seq = 1): AgentEvent {
     type: "main_agent.run.started",
     runId,
     sessionId: "session_invalid",
-    data: { trigger: "user" }
+    data: { trigger: "user" },
   };
 }
 
@@ -513,7 +531,7 @@ async function replaceRunFile(
   eventLog: JsonlEventLog,
   runId: RunId,
   sessionId: SessionId,
-  content: string
+  content: string,
 ): Promise<void> {
   await eventLog.append(createDraft(runId, sessionId));
   const [eventFile] = await findEventsFiles(baseDir);
@@ -527,7 +545,7 @@ async function readJsonLines(filePath: string): Promise<string[]> {
 
 async function findFileContaining(
   filePaths: string[],
-  expectedContent: string
+  expectedContent: string,
 ): Promise<string> {
   for (const filePath of filePaths) {
     if ((await readFile(filePath, "utf8")).includes(expectedContent)) {

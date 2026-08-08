@@ -4,12 +4,12 @@ import { AGENT_CARD_PATH } from "@a2a-js/sdk";
 import {
   DefaultRequestHandler,
   InMemoryTaskStore,
-  type AgentExecutor
+  type AgentExecutor,
 } from "@a2a-js/sdk/server";
 import {
   UserBuilder,
   agentCardHandler,
-  jsonRpcHandler
+  jsonRpcHandler,
 } from "@a2a-js/sdk/server/express";
 import express, { type RequestHandler, type Response } from "express";
 
@@ -28,7 +28,7 @@ export interface RunningAdapterServer {
 }
 
 export async function startAdapterServer(
-  options: StartAdapterServerOptions
+  options: StartAdapterServerOptions,
 ): Promise<RunningAdapterServer> {
   const host = options.host ?? "127.0.0.1";
   const port = options.port ?? 4000;
@@ -51,24 +51,24 @@ export async function startAdapterServer(
     const requestHandler = new DefaultRequestHandler(
       agentCard,
       new InMemoryTaskStore(),
-      options.executor
+      options.executor,
     );
 
     app.use(
       `/${AGENT_CARD_PATH}`,
-      agentCardHandler({ agentCardProvider: requestHandler })
+      agentCardHandler({ agentCardProvider: requestHandler }),
     );
     app.use(
       "/a2a/jsonrpc",
       jsonRpcHandler({
         requestHandler,
-        userBuilder: UserBuilder.noAuthentication
-      })
+        userBuilder: UserBuilder.noAuthentication,
+      }),
     );
 
     return {
       origin,
-      close: () => close(httpServer)
+      close: () => close(httpServer),
     };
   } catch (error) {
     await close(httpServer);

@@ -3,19 +3,19 @@ import { watch } from "node:fs";
 import {
   NoopRuntimeLogger,
   type ChannelAdapterV1,
-  type RuntimeLogger
+  type RuntimeLogger,
 } from "@huanlink/core";
 import { createForwardWebSocketOneBot11ChannelAdapterV1 } from "@huanlink/integration-onebot11";
 
 import {
   createChannelAccessPolicyReloader,
   type ChannelAccessPolicyReloader,
-  type ChannelAccessPolicyWatchFactory
+  type ChannelAccessPolicyWatchFactory,
 } from "./channel-access-policy-reloader.js";
 import {
   createChannelRuntime,
   type ChannelRuntime,
-  type ChannelRuntimeMessage
+  type ChannelRuntimeMessage,
 } from "./channel-runtime.js";
 import { createBestEffortRuntimeLogger } from "./best-effort-runtime-logger.js";
 import type { ServerChannelRuntimeConfig } from "./local-user-config.js";
@@ -24,7 +24,7 @@ type ServerChannelConfig = ServerChannelRuntimeConfig["channels"][number];
 
 export type ServerChannelAdapterFactory = (
   config: ServerChannelConfig,
-  logger: RuntimeLogger
+  logger: RuntimeLogger,
 ) => ChannelAdapterV1;
 
 export type CreateServerRuntimeOptions = {
@@ -32,7 +32,7 @@ export type CreateServerRuntimeOptions = {
   readonly configRoot: string;
   readonly loadConfig: () => Promise<ServerChannelRuntimeConfig>;
   readonly onChannelMessage: (
-    input: ChannelRuntimeMessage
+    input: ChannelRuntimeMessage,
   ) => Promise<void> | void;
   readonly createChannelAdapter?: ServerChannelAdapterFactory;
   readonly watchFactory?: ChannelAccessPolicyWatchFactory;
@@ -52,10 +52,10 @@ export interface ServerRuntime {
 }
 
 export function createServerRuntime(
-  options: CreateServerRuntimeOptions
+  options: CreateServerRuntimeOptions,
 ): ServerRuntime {
   const logger = createBestEffortRuntimeLogger(
-    options.logger ?? new NoopRuntimeLogger()
+    options.logger ?? new NoopRuntimeLogger(),
   );
   const createAdapter =
     options.createChannelAdapter ?? createConfiguredChannelAdapter;
@@ -65,19 +65,19 @@ export function createServerRuntime(
         config,
         logger.child({
           source: "channel.adapter",
-          channelId: config.channelId
-        })
+          channelId: config.channelId,
+        }),
       ),
-      inboundPolicy: config.inboundPolicy
+      inboundPolicy: config.inboundPolicy,
     })),
     onMessage: options.onChannelMessage,
     onBackgroundError: (error, context) => {
       logger.error("channel.server.background_failed", {
         ...context,
-        errorType: error.name
+        errorType: error.name,
       });
     },
-    logger: logger.child({ source: "channel.runtime" })
+    logger: logger.child({ source: "channel.runtime" }),
   });
   const policyReloader = createChannelAccessPolicyReloader({
     configRoot: options.configRoot,
@@ -85,7 +85,7 @@ export function createServerRuntime(
     loadConfig: options.loadConfig,
     applyPolicies: (policies) => channels.replaceAccessPolicies(policies),
     watchFactory: options.watchFactory ?? nodeWatchFactory,
-    logger: logger.child({ source: "channel.access_policy" })
+    logger: logger.child({ source: "channel.access_policy" }),
   });
   let closeOperation: Promise<void> | undefined;
 
@@ -95,13 +95,13 @@ export function createServerRuntime(
     close() {
       closeOperation ??= closeServerRuntime(policyReloader, channels);
       return closeOperation;
-    }
+    },
   };
 }
 
 function createConfiguredChannelAdapter(
   config: ServerChannelConfig,
-  logger: RuntimeLogger
+  logger: RuntimeLogger,
 ): ChannelAdapterV1 {
   switch (config.type) {
     case "onebot11-forward-websocket":
@@ -113,10 +113,10 @@ function createConfiguredChannelAdapter(
           : { accessToken: config.accessToken }),
         onError: (error) => {
           logger.error("channel.adapter.background_failed", {
-            errorType: error.name
+            errorType: error.name,
           });
         },
-        logger
+        logger,
       });
   }
 }
@@ -124,12 +124,12 @@ function createConfiguredChannelAdapter(
 const nodeWatchFactory: ChannelAccessPolicyWatchFactory = (
   path,
   options,
-  listener
+  listener,
 ) => watch(path, options, listener);
 
 async function closeServerRuntime(
   reloader: ChannelAccessPolicyReloader,
-  channels: ChannelRuntime
+  channels: ChannelRuntime,
 ): Promise<void> {
   const failures: Error[] = [];
   try {

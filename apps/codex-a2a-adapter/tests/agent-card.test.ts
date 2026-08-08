@@ -4,7 +4,7 @@ import { ClientFactory } from "@a2a-js/sdk/client";
 
 import {
   startAdapterServer,
-  type RunningAdapterServer
+  type RunningAdapterServer,
 } from "../src/server.js";
 import { ControlledTaskExecutor } from "./support/controlled-task-executor.js";
 
@@ -14,7 +14,7 @@ describe("Codex A2A adapter Agent Card", () => {
   beforeAll(async () => {
     server = await startAdapterServer({
       executor: new ControlledTaskExecutor(),
-      port: 0
+      port: 0,
     });
   });
 
@@ -37,11 +37,11 @@ describe("Codex A2A adapter Agent Card", () => {
         url: `${server.origin}/a2a/jsonrpc`,
         protocolBinding: "JSONRPC",
         protocolVersion: "1.0",
-        tenant: ""
-      }
+        tenant: "",
+      },
     ]);
     expect(card.description).toBe(
-      "Runs HuanLink code tasks through the official codex app-server, treating the configured workspace folder as the working focus rather than a hard modification boundary."
+      "Runs HuanLink code tasks through the official codex app-server, treating the configured workspace folder as the working focus rather than a hard modification boundary.",
     );
     expect(card.skills.map((skill) => skill.id)).toEqual(["codex-code-task"]);
   });
@@ -52,7 +52,7 @@ describe("Codex A2A adapter Agent Card", () => {
     }
     const response = await fetch(
       `${server.origin}/.well-known/agent-card.json`,
-      { headers: { "A2A-Version": "1.0" } }
+      { headers: { "A2A-Version": "1.0" } },
     );
 
     expect(response.status).toBe(200);
@@ -63,9 +63,9 @@ describe("Codex A2A adapter Agent Card", () => {
         {
           url: `${server.origin}/a2a/jsonrpc`,
           protocolBinding: "JSONRPC",
-          protocolVersion: "1.0"
-        }
-      ]
+          protocolVersion: "1.0",
+        },
+      ],
     });
   });
 });

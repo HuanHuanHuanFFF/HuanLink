@@ -7,16 +7,16 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   createCodexAdapterRuntimeLogger,
-  resolveCodexAdapterLogPath
+  resolveCodexAdapterLogPath,
 } from "../src/adapter-runtime-logger.js";
 
 const tempDirectories: string[] = [];
 
 afterEach(async () => {
   await Promise.all(
-    tempDirectories.splice(0).map((directory) =>
-      rm(directory, { recursive: true, force: true })
-    )
+    tempDirectories
+      .splice(0)
+      .map((directory) => rm(directory, { recursive: true, force: true })),
   );
 });
 
@@ -25,17 +25,17 @@ describe("Codex adapter runtime logger", () => {
     const directory = await mkdtemp(join(tmpdir(), "huanlink-adapter-log-"));
     tempDirectories.push(directory);
     const moduleUrl = pathToFileURL(
-      join(directory, "apps", "codex-a2a-adapter", "dist", "main.js")
+      join(directory, "apps", "codex-a2a-adapter", "dist", "main.js"),
     ).href;
     const expectedPath = join(
       directory,
       ".huanlink",
       "logs",
-      "codex-a2a-adapter.jsonl"
+      "codex-a2a-adapter.jsonl",
     );
     const logger = createCodexAdapterRuntimeLogger({
       level: "debug",
-      moduleUrl
+      moduleUrl,
     });
 
     logger.info("adapter.test", { a2aTaskId: "task-1" });
@@ -47,7 +47,7 @@ describe("Codex adapter runtime logger", () => {
       level: 30,
       msg: "adapter.test",
       service: "codex-a2a-adapter",
-      a2aTaskId: "task-1"
+      a2aTaskId: "task-1",
     });
   });
 });

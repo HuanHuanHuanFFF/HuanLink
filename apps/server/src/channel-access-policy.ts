@@ -1,6 +1,6 @@
 import {
   assertValidChannelConversationRoute,
-  type ChannelConversationRouteV1
+  type ChannelConversationRouteV1,
 } from "@huanlink/core";
 
 export type ChannelAccessListMode = "allowlist" | "denylist";
@@ -18,7 +18,7 @@ export type ChannelInboundAccessPolicy = {
 
 /** 防御性校验运行时收到的策略；配置加载器之外的调用方也不能绕过边界。 */
 export function assertValidChannelInboundAccessPolicy(
-  policy: ChannelInboundAccessPolicy
+  policy: ChannelInboundAccessPolicy,
 ): void {
   assertValidAccessList(policy?.groups, "groups");
   assertValidAccessList(policy?.directs, "directs");
@@ -26,25 +26,25 @@ export function assertValidChannelInboundAccessPolicy(
 
 /** 校验并复制名单，避免调用方在注册或热更新后原地改写生效策略。 */
 export function copyChannelInboundAccessPolicy(
-  policy: ChannelInboundAccessPolicy
+  policy: ChannelInboundAccessPolicy,
 ): ChannelInboundAccessPolicy {
   assertValidChannelInboundAccessPolicy(policy);
   return {
     groups: {
       mode: policy.groups.mode,
-      ids: [...policy.groups.ids]
+      ids: [...policy.groups.ids],
     },
     directs: {
       mode: policy.directs.mode,
-      ids: [...policy.directs.ids]
-    }
+      ids: [...policy.directs.ids],
+    },
   };
 }
 
 /** 判断一条规范 Channel route 是否属于该实例允许的会话范围。 */
 export function isChannelRouteAllowed(
   policy: ChannelInboundAccessPolicy,
-  route: ChannelConversationRouteV1
+  route: ChannelConversationRouteV1,
 ): boolean {
   assertValidChannelConversationRoute(route);
   const accessList =
@@ -63,7 +63,7 @@ export function isChannelRouteAllowed(
 
 function assertValidAccessList(
   accessList: ChannelConversationAccessList | undefined,
-  label: string
+  label: string,
 ): void {
   if (
     accessList === undefined ||
@@ -77,7 +77,7 @@ function assertValidAccessList(
   for (const id of accessList.ids) {
     if (typeof id !== "string" || id.trim().length === 0) {
       throw new TypeError(
-        `Channel ${label} access policy IDs must be non-empty strings`
+        `Channel ${label} access policy IDs must be non-empty strings`,
       );
     }
     if (seen.has(id)) {

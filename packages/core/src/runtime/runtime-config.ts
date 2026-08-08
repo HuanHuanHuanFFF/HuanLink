@@ -18,11 +18,11 @@ export type RuntimeConfigInput = {
 const DEFAULT_RUNTIME_CONFIG: RuntimeConfig = freezeRuntimeConfig({
   eventLog: {
     baseDir: ".huanlink",
-    nextSeqCacheSize: 256
+    nextSeqCacheSize: 256,
   },
   logging: {
-    level: "info"
-  }
+    level: "info",
+  },
 });
 
 export function getDefaultRuntimeConfig(): RuntimeConfig {
@@ -30,18 +30,19 @@ export function getDefaultRuntimeConfig(): RuntimeConfig {
 }
 
 export function resolveRuntimeConfig(
-  input: RuntimeConfigInput = {}
+  input: RuntimeConfigInput = {},
 ): RuntimeConfig {
   return {
     eventLog: {
-      baseDir: input.eventLog?.baseDir ?? DEFAULT_RUNTIME_CONFIG.eventLog.baseDir,
+      baseDir:
+        input.eventLog?.baseDir ?? DEFAULT_RUNTIME_CONFIG.eventLog.baseDir,
       nextSeqCacheSize:
         input.eventLog?.nextSeqCacheSize ??
-        DEFAULT_RUNTIME_CONFIG.eventLog.nextSeqCacheSize
+        DEFAULT_RUNTIME_CONFIG.eventLog.nextSeqCacheSize,
     },
     logging: {
-      level: input.logging?.level ?? DEFAULT_RUNTIME_CONFIG.logging.level
-    }
+      level: input.logging?.level ?? DEFAULT_RUNTIME_CONFIG.logging.level,
+    },
   };
 }
 
@@ -49,11 +50,11 @@ function cloneRuntimeConfig(config: RuntimeConfig): RuntimeConfig {
   return {
     eventLog: {
       baseDir: config.eventLog.baseDir,
-      nextSeqCacheSize: config.eventLog.nextSeqCacheSize
+      nextSeqCacheSize: config.eventLog.nextSeqCacheSize,
     },
     logging: {
-      level: config.logging.level
-    }
+      level: config.logging.level,
+    },
   };
 }
 

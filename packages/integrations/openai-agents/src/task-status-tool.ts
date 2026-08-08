@@ -3,14 +3,14 @@ import {
   type AgentCallReader,
   type AgentCallRecord,
   type RuntimeLogFields,
-  type RuntimeLogger
+  type RuntimeLogger,
 } from "@huanlink/core";
 import { tool } from "@openai/agents";
 import { z } from "zod";
 
 import {
   bestEffortRuntimeLogger,
-  safeRuntimeErrorType
+  safeRuntimeErrorType,
 } from "./best-effort-runtime-logger.js";
 import type { OpenAiAgentsRunContext } from "./openai-agents-runtime.js";
 import { resolveTaskRecord } from "./task-record-resolution.js";
@@ -22,7 +22,7 @@ const parameters = z.object({
     .string()
     .trim()
     .min(1)
-    .describe("A HuanLink task ID or external A2A task ID to look up.")
+    .describe("A HuanLink task ID or external A2A task ID to look up."),
 });
 
 export type CreateTaskStatusToolOptions = {
@@ -53,18 +53,18 @@ export function createTaskStatusTool(options: CreateTaskStatusToolOptions) {
       const toolLogger = logger.child({
         runId: runContext.context.runId,
         sessionId: runContext.context.sessionId,
-        toolName: GET_TASK_STATUS_TOOL_NAME
+        toolName: GET_TASK_STATUS_TOOL_NAME,
       });
       toolLogger.info("main_agent.tool.started", { taskId });
 
       const complete = (
         result: TaskStatusToolResult,
-        fields: RuntimeLogFields
+        fields: RuntimeLogFields,
       ) => {
         toolLogger.info("main_agent.tool.completed", fields);
         toolLogger.debug("main_agent.tool.completed", {
           ...fields,
-          result: taskStatusLogProjection(result)
+          result: taskStatusLogProjection(result),
         });
         return JSON.stringify(result);
       };
@@ -73,40 +73,40 @@ export function createTaskStatusTool(options: CreateTaskStatusToolOptions) {
         const resolution = resolveTaskRecord(
           options.reader,
           taskId,
-          runContext.context.sessionId
+          runContext.context.sessionId,
         );
         if (resolution.status === "not-found") {
           return complete(
             { status: "not-found", taskId },
-            { taskId, resolutionStatus: "not-found" }
+            { taskId, resolutionStatus: "not-found" },
           );
         }
         if (resolution.status === "ambiguous") {
           return complete(
             { status: "ambiguous", taskId },
-            { taskId, resolutionStatus: "ambiguous" }
+            { taskId, resolutionStatus: "ambiguous" },
           );
         }
 
         const result: TaskStatusToolResult = {
           status: "found",
-          task: publicTaskStatus(resolution.record)
+          task: publicTaskStatus(resolution.record),
         };
         return complete(result, {
           taskId,
           resolutionStatus: "found",
           agentCallId: resolution.record.agentCallId,
           a2aTaskId: resolution.record.taskId,
-          state: resolution.record.state
+          state: resolution.record.state,
         });
       } catch (error) {
         toolLogger.error("main_agent.tool.failed", {
           taskId,
-          errorType: safeRuntimeErrorType(error)
+          errorType: safeRuntimeErrorType(error),
         });
         throw error;
       }
-    }
+    },
   });
 }
 
@@ -123,8 +123,8 @@ function taskStatusLogProjection(result: TaskStatusToolResult): unknown {
       ...(questions === undefined
         ? {}
         : { questions: questions.map(questionLogProjection) }),
-      artifacts: artifacts.map((artifact) => ({ ...artifact }))
-    }
+      artifacts: artifacts.map((artifact) => ({ ...artifact })),
+    },
   };
 }
 
@@ -133,7 +133,7 @@ function questionLogProjection(question: AgentCallInputQuestion): unknown {
     return {
       id: question.id,
       isOther: question.isOther,
-      isSecret: true
+      isSecret: true,
     };
   }
 
@@ -142,7 +142,7 @@ function questionLogProjection(question: AgentCallInputQuestion): unknown {
     options:
       question.options === null
         ? null
-        : question.options.map((option) => ({ ...option }))
+        : question.options.map((option) => ({ ...option })),
   };
 }
 
@@ -168,9 +168,9 @@ function publicTaskStatus(record: AgentCallRecord) {
             options:
               question.options === null
                 ? null
-                : question.options.map((option) => ({ ...option }))
-          }))
+                : question.options.map((option) => ({ ...option })),
+          })),
         }),
-    artifacts: record.artifacts.map((artifact) => ({ ...artifact }))
+    artifacts: record.artifacts.map((artifact) => ({ ...artifact })),
   };
 }

@@ -9,7 +9,7 @@ import {
   spawnCodexAppServerTransport,
   type CodexAppServerNotification,
   type CodexAppServerRequest,
-  type CodexAppServerTransport
+  type CodexAppServerTransport,
 } from "../src/codex-app-server-client.js";
 
 interface TestTransport {
@@ -35,10 +35,10 @@ function createTestTransport(): TestTransport {
       async close() {
         fromClient.end();
         toClient.end();
-      }
+      },
     },
     fromClient,
-    toClient
+    toClient,
   };
 }
 
@@ -57,7 +57,7 @@ function createWriteFailingTestTransport(): WriteFailingTestTransport {
       }
       fromClient.write(chunk, encoding);
       callback();
-    }
+    },
   });
   stdin.on("error", () => undefined);
 
@@ -71,14 +71,14 @@ function createWriteFailingTestTransport(): WriteFailingTestTransport {
         stdin.destroy();
         fromClient.end();
         toClient.end();
-      }
+      },
     },
     closeCalls: () => closeCalls,
     failNextWrite(error) {
       nextWriteError = error;
     },
     fromClient,
-    toClient
+    toClient,
   };
 }
 
@@ -100,7 +100,7 @@ describe("CodexAppServerClient", () => {
     const connecting = CodexAppServerClient.connect({
       transport: transport.client,
       expectedVersion: "0.142.5",
-      requestTimeoutMs: 1_000
+      requestTimeoutMs: 1_000,
     });
 
     const initialize = await readFromClient();
@@ -110,13 +110,13 @@ describe("CodexAppServerClient", () => {
         clientInfo: {
           name: "huanlink_codex_a2a_adapter",
           title: "HuanLink Codex A2A Adapter",
-          version: "0.2.0"
+          version: "0.2.0",
         },
         capabilities: {
           experimentalApi: false,
-          requestAttestation: false
-        }
-      }
+          requestAttestation: false,
+        },
+      },
     });
 
     transport.toClient.write(
@@ -126,9 +126,9 @@ describe("CodexAppServerClient", () => {
           userAgent: "codex-cli/0.142.5",
           codexHome: "C:/Users/demo/.codex",
           platformFamily: "windows",
-          platformOs: "windows"
-        }
-      })}\n`
+          platformOs: "windows",
+        },
+      })}\n`,
     );
 
     const initialized = await readFromClient();
@@ -144,7 +144,7 @@ describe("CodexAppServerClient", () => {
     const connecting = CodexAppServerClient.connect({
       transport: transport.client,
       expectedVersion: "0.142.5",
-      requestTimeoutMs: 1_000
+      requestTimeoutMs: 1_000,
     });
     const initialize = await readFromClient();
     transport.toClient.write(
@@ -154,9 +154,9 @@ describe("CodexAppServerClient", () => {
           userAgent: "codex-cli/0.142.5",
           codexHome: "C:/Users/demo/.codex",
           platformFamily: "windows",
-          platformOs: "windows"
-        }
-      })}\n`
+          platformOs: "windows",
+        },
+      })}\n`,
     );
     await readFromClient();
     const client = await connecting;
@@ -167,7 +167,7 @@ describe("CodexAppServerClient", () => {
     const startingThread = client.startThread({
       cwd: "D:/CodingProject/HuanLink",
       developerInstructions: "Stay on spike/demo-v0. Do not commit or push.",
-      model: "gpt-5.4-mini"
+      model: "gpt-5.4-mini",
     });
     const threadRequest = await readFromClient();
     expect(threadRequest).toMatchObject({
@@ -178,30 +178,32 @@ describe("CodexAppServerClient", () => {
         sandbox: "workspace-write",
         ephemeral: false,
         developerInstructions: "Stay on spike/demo-v0. Do not commit or push.",
-        model: "gpt-5.4-mini"
-      }
+        model: "gpt-5.4-mini",
+      },
     });
     transport.toClient.write(
       `${JSON.stringify({
         method: "thread/started",
-        params: { thread: { id: "thread-1" } }
-      })}\n`
+        params: { thread: { id: "thread-1" } },
+      })}\n`,
     );
     transport.toClient.write(
       `${JSON.stringify({
         id: threadRequest.id,
-        result: { thread: { id: "thread-1" } }
-      })}\n`
+        result: { thread: { id: "thread-1" } },
+      })}\n`,
     );
     await expect(startingThread).resolves.toEqual({ threadId: "thread-1" });
-    await expect.poll(() => notifications).toContainEqual({
-      method: "thread/started",
-      params: { thread: { id: "thread-1" } }
-    });
+    await expect
+      .poll(() => notifications)
+      .toContainEqual({
+        method: "thread/started",
+        params: { thread: { id: "thread-1" } },
+      });
 
     const startingTurn = client.startTurn({
       threadId: "thread-1",
-      prompt: "Implement the focused task"
+      prompt: "Implement the focused task",
     });
     const turnRequest = await readFromClient();
     expect(turnRequest).toMatchObject({
@@ -212,30 +214,30 @@ describe("CodexAppServerClient", () => {
           {
             type: "text",
             text: "Implement the focused task",
-            text_elements: []
-          }
-        ]
-      }
+            text_elements: [],
+          },
+        ],
+      },
     });
     transport.toClient.write(
       `${JSON.stringify({
         id: turnRequest.id,
-        result: { turn: { id: "turn-1", status: "inProgress", items: [] } }
-      })}\n`
+        result: { turn: { id: "turn-1", status: "inProgress", items: [] } },
+      })}\n`,
     );
     await expect(startingTurn).resolves.toEqual({ turnId: "turn-1" });
 
     const interrupting = client.interruptTurn({
       threadId: "thread-1",
-      turnId: "turn-1"
+      turnId: "turn-1",
     });
     const interruptRequest = await readFromClient();
     expect(interruptRequest).toMatchObject({
       method: "turn/interrupt",
-      params: { threadId: "thread-1", turnId: "turn-1" }
+      params: { threadId: "thread-1", turnId: "turn-1" },
     });
     transport.toClient.write(
-      `${JSON.stringify({ id: interruptRequest.id, result: {} })}\n`
+      `${JSON.stringify({ id: interruptRequest.id, result: {} })}\n`,
     );
     await interrupting;
 
@@ -244,22 +246,23 @@ describe("CodexAppServerClient", () => {
 
   it("owns the lifecycle of a spawned stdio app-server process", async () => {
     const scriptFixture = fileURLToPath(
-      new URL("./fixtures/scripted-app-server.mjs", import.meta.url)
+      new URL("./fixtures/scripted-app-server.mjs", import.meta.url),
     );
     const commandFixture = fileURLToPath(
-      new URL("./fixtures/scripted-app-server.cmd", import.meta.url)
+      new URL("./fixtures/scripted-app-server.cmd", import.meta.url),
     );
     const transport = spawnCodexAppServerTransport({
-      executable: process.platform === "win32" ? commandFixture : process.execPath,
+      executable:
+        process.platform === "win32" ? commandFixture : process.execPath,
       args: process.platform === "win32" ? [] : [scriptFixture],
       cwd: process.cwd(),
-      shutdownTimeoutMs: 1_000
+      shutdownTimeoutMs: 1_000,
     });
 
     const client = await CodexAppServerClient.connect({
       transport,
       expectedVersion: "0.142.5",
-      requestTimeoutMs: 1_000
+      requestTimeoutMs: 1_000,
     });
 
     await expect(client.close()).resolves.toBeUndefined();
@@ -272,7 +275,7 @@ describe("CodexAppServerClient", () => {
     const connecting = CodexAppServerClient.connect({
       transport: transport.client,
       expectedVersion: "0.142.5",
-      requestTimeoutMs: 1_000
+      requestTimeoutMs: 1_000,
     });
     const initialize = await readFromClient();
     transport.toClient.write(
@@ -282,9 +285,9 @@ describe("CodexAppServerClient", () => {
           userAgent: "codex-cli/0.142.5",
           codexHome: "C:/Users/demo/.codex",
           platformFamily: "windows",
-          platformOs: "windows"
-        }
-      })}\n`
+          platformOs: "windows",
+        },
+      })}\n`,
     );
     await readFromClient();
     const client = await connecting;
@@ -297,8 +300,8 @@ describe("CodexAppServerClient", () => {
     transport.toClient.write(
       `${JSON.stringify({
         method: "item/started",
-        params: { threadId: "thread-1", turnId: "turn-1" }
-      })}\n`
+        params: { threadId: "thread-1", turnId: "turn-1" },
+      })}\n`,
     );
     transport.toClient.write(
       `${JSON.stringify({
@@ -318,22 +321,22 @@ describe("CodexAppServerClient", () => {
               options: [
                 {
                   label: "Adapter only",
-                  description: "Limit changes to the Codex adapter."
-                }
-              ]
-            }
+                  description: "Limit changes to the Codex adapter.",
+                },
+              ],
+            },
           ],
-          autoResolutionMs: null
-        }
-      })}\n`
+          autoResolutionMs: null,
+        },
+      })}\n`,
     );
 
     await expect.poll(() => requests).toHaveLength(1);
     expect(notifications).toEqual([
       {
         method: "item/started",
-        params: { threadId: "thread-1", turnId: "turn-1" }
-      }
+        params: { threadId: "thread-1", turnId: "turn-1" },
+      },
     ]);
     expect(requests[0]).toMatchObject({
       id: "input-1",
@@ -343,17 +346,20 @@ describe("CodexAppServerClient", () => {
         turnId: "turn-1",
         itemId: "item-1",
         questions: [
-          expect.objectContaining({ id: "scope", question: "Which files may be changed?" })
-        ]
-      }
+          expect.objectContaining({
+            id: "scope",
+            question: "Which files may be changed?",
+          }),
+        ],
+      },
     });
 
     await client.respondToServerRequest("input-1", {
-      answers: { scope: { answers: ["Adapter only"] } }
+      answers: { scope: { answers: ["Adapter only"] } },
     });
     await expect(readFromClient()).resolves.toEqual({
       id: "input-1",
-      result: { answers: { scope: { answers: ["Adapter only"] } } }
+      result: { answers: { scope: { answers: ["Adapter only"] } } },
     });
 
     await client.close();
@@ -365,7 +371,7 @@ describe("CodexAppServerClient", () => {
     const connecting = CodexAppServerClient.connect({
       transport: transport.client,
       expectedVersion: "0.142.5",
-      requestTimeoutMs: 1_000
+      requestTimeoutMs: 1_000,
     });
     const initialize = await readFromClient();
     transport.toClient.write(
@@ -375,9 +381,9 @@ describe("CodexAppServerClient", () => {
           userAgent: "codex-cli/0.142.5",
           codexHome: "C:/Users/demo/.codex",
           platformFamily: "windows",
-          platformOs: "windows"
-        }
-      })}\n`
+          platformOs: "windows",
+        },
+      })}\n`,
     );
     await readFromClient();
     const client = await connecting;
@@ -399,12 +405,12 @@ describe("CodexAppServerClient", () => {
               question: "Which files may be changed?",
               isOther: false,
               isSecret: false,
-              options: null
-            }
+              options: null,
+            },
           ],
-          autoResolutionMs: null
-        }
-      })}\n`
+          autoResolutionMs: null,
+        },
+      })}\n`,
     );
     await expect.poll(() => requests).toHaveLength(1);
 
@@ -412,8 +418,8 @@ describe("CodexAppServerClient", () => {
 
     await expect(
       client.respondToServerRequest("input-discard", {
-        answers: { scope: { answers: ["Adapter only"] } }
-      })
+        answers: { scope: { answers: ["Adapter only"] } },
+      }),
     ).rejects.toThrow(/Unknown or already answered/);
     await client.close();
   });
@@ -424,7 +430,7 @@ describe("CodexAppServerClient", () => {
     const connecting = CodexAppServerClient.connect({
       transport: transport.client,
       expectedVersion: "0.142.5",
-      requestTimeoutMs: 1_000
+      requestTimeoutMs: 1_000,
     });
     const initialize = await readFromClient();
     transport.toClient.write(
@@ -434,9 +440,9 @@ describe("CodexAppServerClient", () => {
           userAgent: "codex-cli/0.142.5",
           codexHome: "C:/Users/demo/.codex",
           platformFamily: "windows",
-          platformOs: "windows"
-        }
-      })}\n`
+          platformOs: "windows",
+        },
+      })}\n`,
     );
     await readFromClient();
     const client = await connecting;
@@ -462,12 +468,12 @@ describe("CodexAppServerClient", () => {
                 question: "Which files may be changed?",
                 isOther: false,
                 isSecret: false,
-                options: null
-              }
+                options: null,
+              },
             ],
-            autoResolutionMs: null
-          }
-        })}\n`
+            autoResolutionMs: null,
+          },
+        })}\n`,
       );
     }
     await expect.poll(() => requests).toHaveLength(2);
@@ -478,16 +484,16 @@ describe("CodexAppServerClient", () => {
 
     try {
       await expect(
-        client.respondToServerRequest("input-write-failure", answer)
+        client.respondToServerRequest("input-write-failure", answer),
       ).rejects.toBe(writeFailure);
       await expect.poll(() => executorFailures).toHaveLength(2);
       expect(executorFailures).toEqual([writeFailure, writeFailure]);
       expect(transport.closeCalls()).toBe(1);
       await expect(
-        client.respondToServerRequest("input-still-pending", answer)
+        client.respondToServerRequest("input-still-pending", answer),
       ).rejects.toThrow(/Unknown or already answered/);
       await expect(
-        client.respondToServerRequest("input-write-failure", answer)
+        client.respondToServerRequest("input-write-failure", answer),
       ).rejects.toThrow(/Unknown or already answered/);
     } finally {
       await client.close();
@@ -500,7 +506,7 @@ describe("CodexAppServerClient", () => {
     const connecting = CodexAppServerClient.connect({
       transport: transport.client,
       expectedVersion: "0.142.5",
-      requestTimeoutMs: 1_000
+      requestTimeoutMs: 1_000,
     });
     const initialize = await readFromClient();
     transport.toClient.write(
@@ -510,9 +516,9 @@ describe("CodexAppServerClient", () => {
           userAgent: "codex-cli/0.142.5",
           codexHome: "C:/Users/demo/.codex",
           platformFamily: "windows",
-          platformOs: "windows"
-        }
-      })}\n`
+          platformOs: "windows",
+        },
+      })}\n`,
     );
     await readFromClient();
     const client = await connecting;
@@ -525,9 +531,9 @@ describe("CodexAppServerClient", () => {
           threadId: "thread-1",
           turnId: "turn-1",
           itemId: "item-1",
-          startedAtMs: 1
-        }
-      })}\n`
+          startedAtMs: 1,
+        },
+      })}\n`,
     );
 
     await expect(readFromClient()).resolves.toEqual({
@@ -535,8 +541,8 @@ describe("CodexAppServerClient", () => {
       error: {
         code: -32601,
         message:
-          "Unsupported Codex app-server request: item/commandExecution/requestApproval"
-      }
+          "Unsupported Codex app-server request: item/commandExecution/requestApproval",
+      },
     });
 
     await client.close();
@@ -548,7 +554,7 @@ describe("CodexAppServerClient", () => {
     const connecting = CodexAppServerClient.connect({
       transport: transport.client,
       expectedVersion: "0.142.5",
-      requestTimeoutMs: 1_000
+      requestTimeoutMs: 1_000,
     });
     const initialize = await readFromClient();
     transport.toClient.write(
@@ -558,13 +564,13 @@ describe("CodexAppServerClient", () => {
           userAgent: "codex-cli/0.142.50",
           codexHome: "C:/Users/demo/.codex",
           platformFamily: "windows",
-          platformOs: "windows"
-        }
-      })}\n`
+          platformOs: "windows",
+        },
+      })}\n`,
     );
 
     await expect(connecting).rejects.toThrow(
-      "Unexpected Codex app-server version: codex-cli/0.142.50; expected 0.142.5"
+      "Unexpected Codex app-server version: codex-cli/0.142.50; expected 0.142.5",
     );
   });
 
@@ -574,7 +580,7 @@ describe("CodexAppServerClient", () => {
     const connecting = CodexAppServerClient.connect({
       transport: transport.client,
       expectedVersion: "0.142.5",
-      requestTimeoutMs: 1_000
+      requestTimeoutMs: 1_000,
     });
     const initialize = await readFromClient();
     transport.toClient.write(
@@ -584,9 +590,9 @@ describe("CodexAppServerClient", () => {
           userAgent: "codex-cli/0.142.5",
           codexHome: "C:/Users/demo/.codex",
           platformFamily: "windows",
-          platformOs: "windows"
-        }
-      })}\n`
+          platformOs: "windows",
+        },
+      })}\n`,
     );
     await readFromClient();
     const client = await connecting;
@@ -598,7 +604,7 @@ describe("CodexAppServerClient", () => {
     await expect.poll(() => closes).toHaveLength(1);
     expect(closes[0]).toBeInstanceOf(Error);
     expect((closes[0] as Error).message).toContain(
-      "Codex app-server stdout closed"
+      "Codex app-server stdout closed",
     );
     await expect(client.close()).resolves.toBeUndefined();
   });

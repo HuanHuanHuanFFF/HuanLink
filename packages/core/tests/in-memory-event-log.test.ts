@@ -15,20 +15,20 @@ describe("InMemoryEventLog", () => {
       runId: runA,
       sessionId,
       data: {
-        message: channelMessage()
-      }
+        message: channelMessage(),
+      },
     });
     const otherRun = eventLog.append({
       type: "main_agent.run.started",
       runId: runB,
       sessionId,
-      data: { trigger: "user" }
+      data: { trigger: "user" },
     });
     const second = eventLog.append({
       type: "main_agent.run.completed",
       runId: runA,
       sessionId,
-      data: { output: "done" }
+      data: { output: "done" },
     });
 
     expect(eventLog.readRunEvents(runA)).toEqual([first, second]);
@@ -39,7 +39,7 @@ describe("InMemoryEventLog", () => {
       type: "channel.message.received",
       runId: runA,
       sessionId,
-      data: { message: { content: "@bot start" } }
+      data: { message: { content: "@bot start" } },
     });
     expect(Object.keys(first).sort()).toEqual([
       "data",
@@ -49,7 +49,7 @@ describe("InMemoryEventLog", () => {
       "seq",
       "sessionId",
       "timestamp",
-      "type"
+      "type",
     ]);
     expect(second.seq).toBe(2);
     expect(otherRun.seq).toBe(1);
@@ -66,7 +66,7 @@ describe("InMemoryEventLog", () => {
       type: "main_agent.run.started",
       runId,
       sessionId,
-      data: { trigger: "user" }
+      data: { trigger: "user" },
     });
     eventLog.append({
       type: "agent_call.created",
@@ -77,20 +77,18 @@ describe("InMemoryEventLog", () => {
         taskId: "task_seq",
         skillId: "coding",
         executionMode: "async",
-        state: "submitted"
-      }
+        state: "submitted",
+      },
     });
     eventLog.append({
       type: "main_agent.run.completed",
       runId,
       sessionId,
-      data: { output: "done" }
+      data: { output: "done" },
     });
 
     expect(eventLog.readRunEvents(runId).map((event) => event.seq)).toEqual([
-      1,
-      2,
-      3
+      1, 2, 3,
     ]);
   });
 
@@ -105,18 +103,18 @@ function channelMessage() {
     route: {
       channelId: "qq-main",
       conversationKind: "group" as const,
-      conversationId: "group_01"
+      conversationId: "group_01",
     },
     messageId: "message_01",
     sender: {
       id: "user_01",
       username: "User One",
       displayName: "User One",
-      isSelf: false
+      isSelf: false,
     },
     content: "@bot start",
     contentFormat: "onebot11.cq",
     receivedAt: "2026-07-15T00:00:00.000Z",
-    trigger: { kind: "mention" as const }
+    trigger: { kind: "mention" as const },
   };
 }

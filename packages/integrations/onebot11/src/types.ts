@@ -3,7 +3,7 @@ import type { RuntimeLogger } from "@huanlink/core";
 import type { OneBot11Action, OneBot11JsonObject } from "./codec.js";
 import type {
   OneBot11FileUploadExtension,
-  OneBot11ForwardMessageExtension
+  OneBot11ForwardMessageExtension,
 } from "./operation-contracts.js";
 
 /** 接收 OneBot Channel 或 Transport 非致命运行错误的观察者。 */
@@ -25,7 +25,7 @@ export type ForwardWebSocketOneBot11TransportOptions = {
 
 /** 接收 OneBot 主动上报事件的监听器。 */
 export type OneBot11EventListener = (
-  event: OneBot11JsonObject
+  event: OneBot11JsonObject,
 ) => Promise<void> | void;
 
 /** 为 Action 日志和错误提供目标会话，不参与协议编码。 */
@@ -44,7 +44,7 @@ export interface OneBot11Transport {
   /** 发送带唯一 echo 的 Action，并等待对应完整响应。 */
   sendAction(
     action: OneBot11Action,
-    context: OneBot11ActionContext
+    context: OneBot11ActionContext,
   ): Promise<OneBot11JsonObject>;
 }
 

@@ -1,7 +1,4 @@
-import type {
-  RuntimeLogFields,
-  RuntimeLogger
-} from "@huanlink/core";
+import type { RuntimeLogFields, RuntimeLogger } from "@huanlink/core";
 
 export class ThrowingMutatingRuntimeLogger implements RuntimeLogger {
   debug(_message: string, fields?: RuntimeLogFields): void {

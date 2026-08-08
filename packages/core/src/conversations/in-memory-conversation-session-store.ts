@@ -2,7 +2,7 @@ import {
   assertValidChannelConversationRoute,
   assertValidInboundChannelMessage,
   type ChannelConversationRouteV1,
-  type InboundChannelMessageV1
+  type InboundChannelMessageV1,
 } from "../channels/contract-v1.js";
 import type { SessionId } from "../shared/ids.js";
 
@@ -15,7 +15,7 @@ import type {
   ConversationSession,
   ConversationSessionMetadata,
   ConversationTimelineEntry,
-  RecordConversationOutboundDelivery
+  RecordConversationOutboundDelivery,
 } from "./conversation-session.js";
 import {
   cloneChannelConversationRoute,
@@ -23,13 +23,13 @@ import {
   cloneConversationJsonValue,
   cloneConversationSession,
   cloneConversationSessionMetadata,
-  cloneInboundChannelMessage
+  cloneInboundChannelMessage,
 } from "./conversation-session-copy.js";
 import {
   isSameConversationRoute,
   requireConversationIdentifier,
   requireConversationUtcTimestamp,
-  validateConversationToolIdentity
+  validateConversationToolIdentity,
 } from "./conversation-session-validation.js";
 
 type MutableConversationSession = {
@@ -66,7 +66,7 @@ export class InMemoryConversationSessionStore {
   /** 追加平台观测消息；完全相同的重复事实幂等，冲突事实拒绝覆盖。 */
   appendChannelMessage(
     sessionId: SessionId,
-    message: InboundChannelMessageV1
+    message: InboundChannelMessageV1,
   ): "appended" | "duplicate" | "associated" {
     assertValidInboundChannelMessage(message);
     const key = channelMessageKey(message.route.channelId, message.messageId);
@@ -79,7 +79,7 @@ export class InMemoryConversationSessionStore {
         !isSameInboundChannelMessage(existing.entry.observed, message)
       ) {
         throw new Error(
-          `Channel message ${message.messageId} conflicts with existing observed facts`
+          `Channel message ${message.messageId} conflicts with existing observed facts`,
         );
       }
       if (pending !== undefined) {
@@ -88,7 +88,7 @@ export class InMemoryConversationSessionStore {
           key,
           sessionId,
           message.route,
-          message.contentFormat
+          message.contentFormat,
         );
       }
       if (
@@ -96,7 +96,7 @@ export class InMemoryConversationSessionStore {
         !message.sender.isSelf
       ) {
         throw new Error(
-          `Channel message ${key} has a HuanLink outbound delivery but the observed sender is not self`
+          `Channel message ${key} has a HuanLink outbound delivery but the observed sender is not self`,
         );
       }
       if (pending !== undefined) {
@@ -105,7 +105,7 @@ export class InMemoryConversationSessionStore {
           !isSameOutboundDelivery(existing.entry.outbound, pending.outbound)
         ) {
           throw new Error(
-            `Channel message ${message.messageId} already has a different outbound association`
+            `Channel message ${message.messageId} already has a different outbound association`,
           );
         }
         if (existing.entry.outbound === undefined) {
@@ -125,18 +125,18 @@ export class InMemoryConversationSessionStore {
         key,
         sessionId,
         message.route,
-        message.contentFormat
+        message.contentFormat,
       );
       if (!message.sender.isSelf) {
         throw new Error(
-          `Channel message ${key} has a HuanLink outbound delivery but the observed sender is not self`
+          `Channel message ${key} has a HuanLink outbound delivery but the observed sender is not self`,
         );
       }
     }
     const session = this.ensureSession(
       sessionId,
       message.route,
-      message.contentFormat
+      message.contentFormat,
     );
 
     const entry: ConversationChannelMessageEntry = {
@@ -144,7 +144,7 @@ export class InMemoryConversationSessionStore {
       channelId: message.route.channelId,
       messageId: message.messageId,
       observed: cloneInboundChannelMessage(message),
-      ...(pending === undefined ? {} : { outbound: pending.outbound })
+      ...(pending === undefined ? {} : { outbound: pending.outbound }),
     };
     session.timeline.push(entry);
     this.messageLocations.set(key, { sessionId, entry });
@@ -159,38 +159,41 @@ export class InMemoryConversationSessionStore {
    */
   recordOutboundDelivery(
     targetSessionId: SessionId,
-    delivery: RecordConversationOutboundDelivery
+    delivery: RecordConversationOutboundDelivery,
   ): void {
     requireConversationIdentifier(
       targetSessionId,
-      "Target conversation sessionId"
+      "Target conversation sessionId",
     );
     assertValidChannelConversationRoute(delivery.route);
     requireConversationIdentifier(
       delivery.contentFormat,
-      "Conversation content format"
+      "Conversation content format",
     );
     requireConversationIdentifier(
       delivery.receipt.channelId,
-      "Delivery receipt channelId"
+      "Delivery receipt channelId",
     );
     requireConversationIdentifier(
       delivery.receipt.messageId,
-      "Delivery receipt messageId"
+      "Delivery receipt messageId",
     );
-    requireConversationUtcTimestamp(delivery.sentAt, "Outbound delivery sentAt");
+    requireConversationUtcTimestamp(
+      delivery.sentAt,
+      "Outbound delivery sentAt",
+    );
     requireConversationIdentifier(delivery.runId, "Outbound delivery runId");
     requireConversationIdentifier(
       delivery.toolCallId,
-      "Outbound delivery toolCallId"
+      "Outbound delivery toolCallId",
     );
     requireConversationIdentifier(
       delivery.sourceSessionId,
-      "Outbound delivery sourceSessionId"
+      "Outbound delivery sourceSessionId",
     );
     if (delivery.receipt.channelId !== delivery.route.channelId) {
       throw new Error(
-        "Delivery receipt channelId must match the target route channelId"
+        "Delivery receipt channelId must match the target route channelId",
       );
     }
 
@@ -201,17 +204,17 @@ export class InMemoryConversationSessionStore {
         : findToolCall(
             sourceSession.timeline,
             delivery.runId,
-            delivery.toolCallId
+            delivery.toolCallId,
           );
     if (sourceToolCall === undefined) {
       throw new Error(
-        `Outbound delivery source Tool Call ${delivery.runId} / ${delivery.toolCallId} does not exist in session ${delivery.sourceSessionId}`
+        `Outbound delivery source Tool Call ${delivery.runId} / ${delivery.toolCallId} does not exist in session ${delivery.sourceSessionId}`,
       );
     }
 
     const key = channelMessageKey(
       delivery.receipt.channelId,
-      delivery.receipt.messageId
+      delivery.receipt.messageId,
     );
     const outbound: ConversationOutboundDelivery = {
       sentAt: delivery.sentAt,
@@ -221,7 +224,7 @@ export class InMemoryConversationSessionStore {
       origin:
         delivery.sourceSessionId === targetSessionId
           ? ("current_session" as const)
-          : ("cross_session" as const)
+          : ("cross_session" as const),
     };
     const existing = this.messageLocations.get(key);
     if (existing !== undefined) {
@@ -231,20 +234,20 @@ export class InMemoryConversationSessionStore {
         targetSession,
         targetSessionId,
         delivery.route,
-        delivery.contentFormat
+        delivery.contentFormat,
       );
       if (
         existing.entry.observed !== undefined &&
         !existing.entry.observed.sender.isSelf
       ) {
         throw new Error(
-          `Channel message ${key} is not a self message and cannot receive a HuanLink outbound association`
+          `Channel message ${key} is not a self message and cannot receive a HuanLink outbound association`,
         );
       }
       if (existing.entry.outbound !== undefined) {
         if (!isSameOutboundDelivery(existing.entry.outbound, outbound)) {
           throw new Error(
-            `Channel message ${delivery.receipt.messageId} already has a different outbound association`
+            `Channel message ${delivery.receipt.messageId} already has a different outbound association`,
           );
         }
         return;
@@ -260,20 +263,20 @@ export class InMemoryConversationSessionStore {
         targetSession,
         targetSessionId,
         delivery.route,
-        delivery.contentFormat
+        delivery.contentFormat,
       );
     }
     const pending: PendingOutboundDelivery = {
       targetSessionId,
       route: cloneChannelConversationRoute(delivery.route),
       contentFormat: delivery.contentFormat,
-      outbound
+      outbound,
     };
     const previousPending = this.pendingOutboundDeliveries.get(key);
     if (previousPending !== undefined) {
       if (!isSamePendingOutboundDelivery(previousPending, pending)) {
         throw new Error(
-          `Channel message ${delivery.receipt.messageId} already has a different outbound association`
+          `Channel message ${delivery.receipt.messageId} already has a different outbound association`,
         );
       }
       return;
@@ -284,7 +287,7 @@ export class InMemoryConversationSessionStore {
   /** 追加一个结构化 Tool Call，并拒绝同一 run 内的重复调用 ID。 */
   appendAgentToolCall(
     sessionId: SessionId,
-    call: AppendConversationAgentToolCall
+    call: AppendConversationAgentToolCall,
   ): void {
     const session = this.requireSession(sessionId);
     validateConversationToolIdentity(call, "Agent Tool Call");
@@ -292,7 +295,7 @@ export class InMemoryConversationSessionStore {
       findToolCall(session.timeline, call.runId, call.toolCallId) !== undefined
     ) {
       throw new Error(
-        `Agent Tool Call ${call.runId} / ${call.toolCallId} already exists in session ${sessionId}`
+        `Agent Tool Call ${call.runId} / ${call.toolCallId} already exists in session ${sessionId}`,
       );
     }
     session.timeline.push({
@@ -302,27 +305,31 @@ export class InMemoryConversationSessionStore {
       toolName: call.toolName,
       arguments: cloneConversationJsonRecord(
         call.arguments,
-        "Agent Tool Call arguments"
-      )
+        "Agent Tool Call arguments",
+      ),
     });
   }
 
   /** 追加与已有调用严格配对的 Tool Result。 */
   appendAgentToolResult(
     sessionId: SessionId,
-    result: AppendConversationAgentToolResult
+    result: AppendConversationAgentToolResult,
   ): void {
     const session = this.requireSession(sessionId);
     validateConversationToolIdentity(result, "Agent Tool Result");
-    const call = findToolCall(session.timeline, result.runId, result.toolCallId);
+    const call = findToolCall(
+      session.timeline,
+      result.runId,
+      result.toolCallId,
+    );
     if (call === undefined) {
       throw new Error(
-        `Agent Tool Result ${result.toolCallId} has no Tool Call in session ${sessionId}`
+        `Agent Tool Result ${result.toolCallId} has no Tool Call in session ${sessionId}`,
       );
     }
     if (call.runId !== result.runId || call.toolName !== result.toolName) {
       throw new Error(
-        `Agent Tool Result ${result.toolCallId} does not match its Tool Call`
+        `Agent Tool Result ${result.toolCallId} does not match its Tool Call`,
       );
     }
     if (
@@ -330,11 +337,11 @@ export class InMemoryConversationSessionStore {
         (entry) =>
           entry.type === "agent_tool_result" &&
           entry.runId === result.runId &&
-          entry.toolCallId === result.toolCallId
+          entry.toolCallId === result.toolCallId,
       )
     ) {
       throw new Error(
-        `Agent Tool Result ${result.toolCallId} already exists in session ${sessionId}`
+        `Agent Tool Result ${result.toolCallId} already exists in session ${sessionId}`,
       );
     }
     const callIndex = session.timeline.indexOf(call);
@@ -345,8 +352,8 @@ export class InMemoryConversationSessionStore {
       toolName: result.toolName,
       output: cloneConversationJsonValue(
         result.output,
-        "Agent Tool Result output"
-      )
+        "Agent Tool Result output",
+      ),
     });
   }
 
@@ -360,7 +367,7 @@ export class InMemoryConversationSessionStore {
 
   /** 返回固定 Session 元数据，不复制可能持续增长的时间线。 */
   getSessionMetadata(
-    sessionId: SessionId
+    sessionId: SessionId,
   ): ConversationSessionMetadata | undefined {
     const metadata = this.sessions.get(sessionId)?.metadata;
     return metadata === undefined
@@ -371,7 +378,7 @@ export class InMemoryConversationSessionStore {
   private ensureSession(
     sessionId: SessionId,
     route: ChannelConversationRouteV1,
-    contentFormat: string
+    contentFormat: string,
   ): MutableConversationSession {
     requireConversationIdentifier(sessionId, "Conversation sessionId");
     const existing = this.sessions.get(sessionId);
@@ -380,9 +387,9 @@ export class InMemoryConversationSessionStore {
         metadata: {
           kind: "external_channel" as const,
           route: cloneChannelConversationRoute(route),
-          contentFormat
+          contentFormat,
         },
-        timeline: []
+        timeline: [],
       };
       this.sessions.set(sessionId, created);
       return created;
@@ -393,7 +400,7 @@ export class InMemoryConversationSessionStore {
     }
     if (existing.metadata.contentFormat !== contentFormat) {
       throw new Error(
-        `Conversation session ${sessionId} content format cannot change`
+        `Conversation session ${sessionId} content format cannot change`,
       );
     }
     return existing;
@@ -417,19 +424,15 @@ function assertPendingTarget(
   key: string,
   sessionId: SessionId,
   route: ChannelConversationRouteV1,
-  contentFormat: string
+  contentFormat: string,
 ): void {
-  assertSameMessageSession(
-    key,
-    sessionId,
-    pending.targetSessionId
-  );
+  assertSameMessageSession(key, sessionId, pending.targetSessionId);
   if (!isSameConversationRoute(pending.route, route)) {
     throw new Error(`Conversation session ${sessionId} route cannot change`);
   }
   if (pending.contentFormat !== contentFormat) {
     throw new Error(
-      `Conversation session ${sessionId} content format cannot change`
+      `Conversation session ${sessionId} content format cannot change`,
     );
   }
 }
@@ -438,21 +441,21 @@ function assertSessionMetadata(
   session: MutableConversationSession,
   sessionId: SessionId,
   route: ChannelConversationRouteV1,
-  contentFormat: string
+  contentFormat: string,
 ): void {
   if (!isSameConversationRoute(session.metadata.route, route)) {
     throw new Error(`Conversation session ${sessionId} route cannot change`);
   }
   if (session.metadata.contentFormat !== contentFormat) {
     throw new Error(
-      `Conversation session ${sessionId} content format cannot change`
+      `Conversation session ${sessionId} content format cannot change`,
     );
   }
 }
 
 function isSameInboundChannelMessage(
   left: InboundChannelMessageV1,
-  right: InboundChannelMessageV1
+  right: InboundChannelMessageV1,
 ): boolean {
   return (
     left.messageId === right.messageId &&
@@ -474,7 +477,7 @@ function isSameInboundChannelMessage(
 
 function isSameOutboundDelivery(
   left: ConversationOutboundDelivery,
-  right: ConversationOutboundDelivery
+  right: ConversationOutboundDelivery,
 ): boolean {
   return (
     left.sentAt === right.sentAt &&
@@ -487,7 +490,7 @@ function isSameOutboundDelivery(
 
 function isSamePendingOutboundDelivery(
   left: PendingOutboundDelivery,
-  right: PendingOutboundDelivery
+  right: PendingOutboundDelivery,
 ): boolean {
   return (
     left.targetSessionId === right.targetSessionId &&
@@ -500,24 +503,24 @@ function isSamePendingOutboundDelivery(
 function assertSameMessageSession(
   key: string,
   incomingSessionId: SessionId,
-  existingSessionId: SessionId
+  existingSessionId: SessionId,
 ): void {
   if (incomingSessionId !== existingSessionId) {
     throw new Error(
-      `Channel message ${key} belongs to session ${existingSessionId}, not ${incomingSessionId}`
+      `Channel message ${key} belongs to session ${existingSessionId}, not ${incomingSessionId}`,
     );
   }
 }
 
 function replaceTimelineEntry(
   timeline: ConversationTimelineEntry[],
-  replacement: ConversationChannelMessageEntry
+  replacement: ConversationChannelMessageEntry,
 ): void {
   const index = timeline.findIndex(
     (entry) =>
       entry.type === "channel_message" &&
       entry.channelId === replacement.channelId &&
-      entry.messageId === replacement.messageId
+      entry.messageId === replacement.messageId,
   );
   if (index < 0) {
     throw new Error("Conversation message index is inconsistent");
@@ -528,12 +531,12 @@ function replaceTimelineEntry(
 function findToolCall(
   timeline: readonly ConversationTimelineEntry[],
   runId: string,
-  toolCallId: string
+  toolCallId: string,
 ): ConversationAgentToolCallEntry | undefined {
   return timeline.find(
     (entry): entry is ConversationAgentToolCallEntry =>
       entry.type === "agent_tool_call" &&
       entry.runId === runId &&
-      entry.toolCallId === toolCallId
+      entry.toolCallId === toolCallId,
   );
 }

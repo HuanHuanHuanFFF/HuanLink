@@ -38,6 +38,9 @@ jobs:
       - name: Install dependencies
         run: corepack pnpm install --frozen-lockfile
 
+      - name: Check formatting
+        run: corepack pnpm format:check
+
       - name: Run build
         run: corepack pnpm build
 

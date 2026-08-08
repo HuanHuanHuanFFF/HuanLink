@@ -6,7 +6,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 import {
   createJsonlFileRuntimeLogger,
-  type FlushableRuntimeLogger
+  type FlushableRuntimeLogger,
 } from "../src/index.js";
 
 const tempDirectories = new Set<string>();
@@ -16,8 +16,8 @@ afterEach(async () => {
 
   await Promise.all(
     [...tempDirectories].map((directory) =>
-      rm(directory, { recursive: true, force: true })
-    )
+      rm(directory, { recursive: true, force: true }),
+    ),
   );
   tempDirectories.clear();
 });
@@ -31,7 +31,7 @@ describe("createJsonlFileRuntimeLogger", () => {
 
     const logger = createJsonlFileRuntimeLogger(logPath, {
       level: "debug",
-      base: { service: "core-runtime" }
+      base: { service: "core-runtime" },
     });
 
     logger.info("first", { sequence: 1 });
@@ -49,14 +49,14 @@ describe("createJsonlFileRuntimeLogger", () => {
         level: 30,
         service: "core-runtime",
         sequence: 1,
-        msg: "first"
+        msg: "first",
       }),
       expect.objectContaining({
         level: 20,
         service: "core-runtime",
         sequence: 2,
-        msg: "second"
-      })
+        msg: "second",
+      }),
     ]);
   });
 
@@ -70,7 +70,7 @@ describe("createJsonlFileRuntimeLogger", () => {
 
     expect(parseLine((await readFile(logPath, "utf8")).trim())).toMatchObject({
       ready: true,
-      msg: "created"
+      msg: "created",
     });
   });
 
@@ -81,13 +81,13 @@ describe("createJsonlFileRuntimeLogger", () => {
       level: "debug",
       base: {
         service: "core-runtime",
-        API_KEY: "base-api-key"
-      }
+        API_KEY: "base-api-key",
+      },
     });
     const child = logger.child({
       Authorization: "Bearer child-secret",
       client_secret: "child-client-secret",
-      module: "gateway"
+      module: "gateway",
     });
 
     child.debug("secret coverage", {
@@ -96,17 +96,17 @@ describe("createJsonlFileRuntimeLogger", () => {
           token: "nested-token",
           nested: {
             access_token: "nested-access-token",
-            refresh_token: "nested-refresh-token"
-          }
+            refresh_token: "nested-refresh-token",
+          },
         },
         {
           Cookie: "session=cookie-secret",
           "Set-Cookie": "session=set-cookie-secret",
           password: "nested-password",
           PASSWD: "nested-passwd",
-          secret: "nested-secret"
-        }
-      ]
+          secret: "nested-secret",
+        },
+      ],
     });
     await logger.close();
 
@@ -123,7 +123,7 @@ describe("createJsonlFileRuntimeLogger", () => {
       "set-cookie-secret",
       "nested-password",
       "nested-passwd",
-      "nested-secret"
+      "nested-secret",
     ]) {
       expect(rawLine).not.toContain(secret);
     }
@@ -138,17 +138,17 @@ describe("createJsonlFileRuntimeLogger", () => {
           token: "[Redacted]",
           nested: {
             access_token: "[Redacted]",
-            refresh_token: "[Redacted]"
-          }
+            refresh_token: "[Redacted]",
+          },
         },
         {
           Cookie: "[Redacted]",
           "Set-Cookie": "[Redacted]",
           password: "[Redacted]",
           PASSWD: "[Redacted]",
-          secret: "[Redacted]"
-        }
-      ]
+          secret: "[Redacted]",
+        },
+      ],
     });
   });
 
@@ -160,13 +160,13 @@ describe("createJsonlFileRuntimeLogger", () => {
 
     logger.info(longText, {
       payload: {
-        text: longText
-      }
+        text: longText,
+      },
     });
     logger.debug(longText, {
       payload: {
-        text: longText
-      }
+        text: longText,
+      },
     });
     await logger.close();
 
@@ -179,53 +179,50 @@ describe("createJsonlFileRuntimeLogger", () => {
     expect(String(infoLine?.msg)).toMatch(/\[truncated \d+ chars\]$/);
     expect(String(infoLine?.msg).length).toBeLessThan(longText.length);
     expect(infoLine?.payload).toEqual({
-      text: expect.stringMatching(/\[truncated \d+ chars\]$/)
+      text: expect.stringMatching(/\[truncated \d+ chars\]$/),
     });
     expect(debugLine).toMatchObject({
       msg: longText,
       payload: {
-        text: longText
-      }
+        text: longText,
+      },
     });
   });
 
-  test(
-    "redacts configured credential values from messages and ordinary string fields at every level",
-    async () => {
-      const directory = await createTempDirectory();
-      const logPath = join(directory, "runtime.jsonl");
-      const apiKey = "deepseek-key-that-must-never-leak";
-      const oneBotToken = "onebot-token-that-must-never-leak";
-      const logger = createJsonlFileRuntimeLogger(logPath, {
-        level: "debug",
-        redactValues: [apiKey, oneBotToken]
-      });
+  test("redacts configured credential values from messages and ordinary string fields at every level", async () => {
+    const directory = await createTempDirectory();
+    const logPath = join(directory, "runtime.jsonl");
+    const apiKey = "deepseek-key-that-must-never-leak";
+    const oneBotToken = "onebot-token-that-must-never-leak";
+    const logger = createJsonlFileRuntimeLogger(logPath, {
+      level: "debug",
+      redactValues: [apiKey, oneBotToken],
+    });
 
-      logger.debug(`debug credential ${apiKey}`, {
-        ordinary: `token value ${oneBotToken}`
-      });
-      logger.info(`info credential ${apiKey}`, {
-        nested: [{ text: `value=${oneBotToken}` }]
-      });
-      logger.warn(`warn credential ${apiKey}`, {
-        ordinary: oneBotToken
-      });
-      logger.error(`error credential ${apiKey}`, {
-        errorMessage: `provider rejected ${oneBotToken}`
-      });
-      await logger.close();
+    logger.debug(`debug credential ${apiKey}`, {
+      ordinary: `token value ${oneBotToken}`,
+    });
+    logger.info(`info credential ${apiKey}`, {
+      nested: [{ text: `value=${oneBotToken}` }],
+    });
+    logger.warn(`warn credential ${apiKey}`, {
+      ordinary: oneBotToken,
+    });
+    logger.error(`error credential ${apiKey}`, {
+      errorMessage: `provider rejected ${oneBotToken}`,
+    });
+    await logger.close();
 
-      const raw = await readFile(logPath, "utf8");
-      expect(raw).not.toContain(apiKey);
-      expect(raw).not.toContain(oneBotToken);
+    const raw = await readFile(logPath, "utf8");
+    expect(raw).not.toContain(apiKey);
+    expect(raw).not.toContain(oneBotToken);
 
-      const lines = raw.trimEnd().split("\n").map(parseLine);
-      expect(lines).toHaveLength(4);
-      for (const line of lines) {
-        expect(JSON.stringify(line)).toContain("[Redacted]");
-      }
+    const lines = raw.trimEnd().split("\n").map(parseLine);
+    expect(lines).toHaveLength(4);
+    for (const line of lines) {
+      expect(JSON.stringify(line)).toContain("[Redacted]");
     }
-  );
+  });
 
   test("redacts configured credential values from object keys and Error names", async () => {
     const directory = await createTempDirectory();
@@ -233,14 +230,14 @@ describe("createJsonlFileRuntimeLogger", () => {
     const apiKey = "deepseek-key-inside-metadata";
     const logger = createJsonlFileRuntimeLogger(logPath, {
       level: "debug",
-      redactValues: [apiKey]
+      redactValues: [apiKey],
     });
     const error = new Error("provider failed");
     error.name = `Provider-${apiKey}-Error`;
 
     logger.debug("metadata credential coverage", {
       [`provider-${apiKey}-field`]: "visible business value",
-      error
+      error,
     });
     await logger.close();
 
@@ -252,8 +249,8 @@ describe("createJsonlFileRuntimeLogger", () => {
       "provider-[Redacted]-field": "visible business value",
       error: {
         type: "Provider-[Redacted]-Error",
-        message: "provider failed"
-      }
+        message: "provider failed",
+      },
     });
   });
 
@@ -271,7 +268,7 @@ describe("createJsonlFileRuntimeLogger", () => {
       get() {
         getterReads += 1;
         throw new Error("disabled debug payload must stay unread");
-      }
+      },
     });
 
     expect(() => logger.debug("disabled", payload)).not.toThrow();
@@ -292,7 +289,7 @@ describe("createJsonlFileRuntimeLogger", () => {
     logger.debug("reference coverage", {
       a: shared,
       b: shared,
-      cycle
+      cycle,
     });
     await logger.close();
 
@@ -301,8 +298,8 @@ describe("createJsonlFileRuntimeLogger", () => {
       b: { text: "complete shared content" },
       cycle: {
         label: "cycle",
-        self: "[Circular]"
-      }
+        self: "[Circular]",
+      },
     });
   });
 
@@ -320,14 +317,16 @@ describe("createJsonlFileRuntimeLogger", () => {
     await child.close();
     await expect(logger.flush()).resolves.toBeUndefined();
     await expect(logger.close()).resolves.toBeUndefined();
-    expect(() => logger.info("ignored after close", { sequence: 2 })).not.toThrow();
+    expect(() =>
+      logger.info("ignored after close", { sequence: 2 }),
+    ).not.toThrow();
 
     const lines = (await readFile(logPath, "utf8")).trimEnd().split("\n");
     expect(lines).toHaveLength(1);
     expect(parseLine(lines[0] ?? "")).toMatchObject({
       module: "child",
       sequence: 1,
-      msg: "before flush"
+      msg: "before flush",
     });
   });
 
@@ -341,7 +340,7 @@ describe("createJsonlFileRuntimeLogger", () => {
       .spyOn(process.stderr, "write")
       .mockImplementation((() => true) as typeof process.stderr.write);
     const logger = createJsonlFileRuntimeLogger(logPath, {
-      redactValues: ["prefix", credential]
+      redactValues: ["prefix", credential],
     });
 
     expect(() => logger.info("mkdir failure", { sequence: 1 })).not.toThrow();
@@ -366,14 +365,14 @@ describe("createJsonlFileRuntimeLogger", () => {
 
     expect(stderr).toHaveBeenCalled();
     expect(stderr.mock.calls.flat().join(" ")).toContain(
-      "HuanLink runtime log sink error"
+      "HuanLink runtime log sink error",
     );
   });
 
   test("returns a flushable logger contract from root and child", async () => {
     const directory = await createTempDirectory();
     const logger: FlushableRuntimeLogger = createJsonlFileRuntimeLogger(
-      join(directory, "runtime.jsonl")
+      join(directory, "runtime.jsonl"),
     );
     const child: FlushableRuntimeLogger = logger.child({ module: "child" });
 

@@ -118,11 +118,7 @@ export function createGetStrangerInfoAction(
     "get_stranger_info",
     {
       user_id: parsePositiveIdParameter(raw.userId, "OneBot 11 user ID"),
-      no_cache: optionalBoolean(
-        raw.noCache,
-        false,
-        "OneBot 11 noCache",
-      ),
+      no_cache: optionalBoolean(raw.noCache, false, "OneBot 11 noCache"),
     },
     echo,
   );
@@ -145,11 +141,7 @@ export function createGetGroupInfoAction(
     "get_group_info",
     {
       group_id: parsePositiveIdParameter(raw.groupId, "OneBot 11 group ID"),
-      no_cache: optionalBoolean(
-        raw.noCache,
-        false,
-        "OneBot 11 noCache",
-      ),
+      no_cache: optionalBoolean(raw.noCache, false, "OneBot 11 noCache"),
     },
     echo,
   );
@@ -173,11 +165,7 @@ export function createGetGroupMemberInfoAction(
     {
       group_id: parsePositiveIdParameter(raw.groupId, "OneBot 11 group ID"),
       user_id: parsePositiveIdParameter(raw.userId, "OneBot 11 user ID"),
-      no_cache: optionalBoolean(
-        raw.noCache,
-        false,
-        "OneBot 11 noCache",
-      ),
+      no_cache: optionalBoolean(raw.noCache, false, "OneBot 11 noCache"),
     },
     echo,
   );
@@ -187,11 +175,7 @@ export function createGetGroupMemberListAction(
   input: OneBot11GroupInput,
   echo: string,
 ): OneBot11Action {
-  const raw = assertExactObject(
-    input,
-    ["groupId"],
-    "getGroupMemberList input",
-  );
+  const raw = assertExactObject(input, ["groupId"], "getGroupMemberList input");
   return createAction(
     "get_group_member_list",
     {
@@ -228,11 +212,7 @@ export function createSendLikeAction(
   input: OneBot11SendLikeInput,
   echo: string,
 ): OneBot11Action {
-  const raw = assertExactObject(
-    input,
-    ["userId", "times"],
-    "sendLike input",
-  );
+  const raw = assertExactObject(input, ["userId", "times"], "sendLike input");
   return createAction(
     "send_like",
     {
@@ -313,11 +293,7 @@ export function createDeleteMessageOperationAction(
   input: OneBot11MessageInput,
   echo: string,
 ): OneBot11Action {
-  const raw = assertExactObject(
-    input,
-    ["messageId"],
-    "deleteMessage input",
-  );
+  const raw = assertExactObject(input, ["messageId"], "deleteMessage input");
   return createAction(
     "delete_msg",
     {
@@ -468,11 +444,7 @@ export function createSetGroupLeaveAction(
     "set_group_leave",
     {
       group_id: parsePositiveIdParameter(raw.groupId, "OneBot 11 group ID"),
-      is_dismiss: optionalBoolean(
-        raw.dismiss,
-        false,
-        "OneBot 11 dismiss",
-      ),
+      is_dismiss: optionalBoolean(raw.dismiss, false, "OneBot 11 dismiss"),
     },
     echo,
   );

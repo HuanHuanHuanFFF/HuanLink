@@ -1,7 +1,4 @@
-import type {
-  RuntimeLogFields,
-  RuntimeLogger
-} from "@huanlink/core";
+import type { RuntimeLogFields, RuntimeLogger } from "@huanlink/core";
 
 export type RecordedRuntimeLog = {
   level: "debug" | "info" | "warn" | "error";
@@ -14,7 +11,7 @@ export class RecordingRuntimeLogger implements RuntimeLogger {
 
   constructor(
     entries: RecordedRuntimeLog[] = [],
-    private readonly bindings: RuntimeLogFields = {}
+    private readonly bindings: RuntimeLogFields = {},
   ) {
     this.entries = entries;
   }
@@ -38,7 +35,7 @@ export class RecordingRuntimeLogger implements RuntimeLogger {
   child(bindings: RuntimeLogFields): RuntimeLogger {
     return new RecordingRuntimeLogger(this.entries, {
       ...this.bindings,
-      ...bindings
+      ...bindings,
     });
   }
 
@@ -53,12 +50,12 @@ export class RecordingRuntimeLogger implements RuntimeLogger {
   private record(
     level: RecordedRuntimeLog["level"],
     message: string,
-    fields: RuntimeLogFields
+    fields: RuntimeLogFields,
   ): void {
     this.entries.push({
       level,
       message,
-      fields: { ...this.bindings, ...fields }
+      fields: { ...this.bindings, ...fields },
     });
   }
 }

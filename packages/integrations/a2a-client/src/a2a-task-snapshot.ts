@@ -1,14 +1,9 @@
-import {
-  TaskState,
-  type Artifact,
-  type Message,
-  type Task
-} from "@a2a-js/sdk";
+import { TaskState, type Artifact, type Message, type Task } from "@a2a-js/sdk";
 import {
   type AgentCallArtifact,
   type AgentCallInputQuestion,
   type AgentCallTaskSnapshot,
-  type AgentCallTaskState
+  type AgentCallTaskState,
 } from "@huanlink/core";
 
 export function snapshotFromTask(task: Task): AgentCallTaskSnapshot {
@@ -17,14 +12,14 @@ export function snapshotFromTask(task: Task): AgentCallTaskSnapshot {
     contextId: task.contextId,
     state: stateFromTaskState(task.status?.state),
     artifacts: task.artifacts.map(artifactFromA2a),
-    ...messageFields(task.status?.message)
+    ...messageFields(task.status?.message),
   };
 }
 
 function artifactFromA2a(artifact: Artifact): AgentCallArtifact {
   const text = artifact.parts
     .flatMap((part) =>
-      part.content?.$case === "text" ? [part.content.value] : []
+      part.content?.$case === "text" ? [part.content.value] : [],
     )
     .join("\n");
 
@@ -34,29 +29,27 @@ function artifactFromA2a(artifact: Artifact): AgentCallArtifact {
     ...(artifact.description === ""
       ? {}
       : { description: artifact.description }),
-    ...(text === "" ? {} : { text })
+    ...(text === "" ? {} : { text }),
   };
 }
 
 export function messageFields(
-  message: Message | undefined
+  message: Message | undefined,
 ): Pick<AgentCallTaskSnapshot, "statusMessage" | "questions"> {
   if (!message) {
     return {};
   }
   const text = message.parts
     .flatMap((part) =>
-      part.content?.$case === "text" ? [part.content.value] : []
+      part.content?.$case === "text" ? [part.content.value] : [],
     )
     .join("\n");
   const questions = message.parts.flatMap((part) =>
-    part.content?.$case === "data"
-      ? questionsFromData(part.content.value)
-      : []
+    part.content?.$case === "data" ? questionsFromData(part.content.value) : [],
   );
   return {
     ...(text === "" ? {} : { statusMessage: text }),
-    ...(questions.length === 0 ? {} : { questions })
+    ...(questions.length === 0 ? {} : { questions }),
   };
 }
 
@@ -101,12 +94,12 @@ function questionFromData(value: unknown): AgentCallInputQuestion | undefined {
     isOther: question.isOther === true,
     isSecret: question.isSecret === true,
     options: options as AgentCallInputQuestion["options"],
-    question: question.question
+    question: question.question,
   };
 }
 
 function optionFromData(
-  value: unknown
+  value: unknown,
 ): NonNullable<AgentCallInputQuestion["options"]>[number] | undefined {
   const option = asRecord(value);
   return option &&
@@ -123,7 +116,7 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 }
 
 export function stateFromTaskState(
-  state: TaskState | undefined
+  state: TaskState | undefined,
 ): AgentCallTaskState {
   switch (state) {
     case TaskState.TASK_STATE_SUBMITTED:

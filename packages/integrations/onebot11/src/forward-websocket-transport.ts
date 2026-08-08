@@ -17,9 +17,7 @@ import type {
   OneBot11EventListener,
   OneBot11Transport,
 } from "./types.js";
-import {
-  sanitizeOneBot11ConnectionErrorMessage,
-} from "./connection-error-sanitizer.js";
+import { sanitizeOneBot11ConnectionErrorMessage } from "./connection-error-sanitizer.js";
 import {
   OneBot11DeliveryUncertainError,
   OneBot11RemoteActionError,
@@ -65,8 +63,12 @@ export class ForwardWebSocketOneBot11Transport implements OneBot11Transport {
   constructor(options: ForwardWebSocketOneBot11TransportOptions) {
     this.url = options.url;
     this.accessToken = nonEmptyString(options.accessToken);
-    this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
-    if (!Number.isInteger(this.requestTimeoutMs) || this.requestTimeoutMs <= 0) {
+    this.requestTimeoutMs =
+      options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    if (
+      !Number.isInteger(this.requestTimeoutMs) ||
+      this.requestTimeoutMs <= 0
+    ) {
       throw new Error("requestTimeoutMs must be a positive integer");
     }
 
@@ -510,10 +512,7 @@ export class ForwardWebSocketOneBot11Transport implements OneBot11Transport {
   }
 
   /** 记录在创建待处理 Action 前即可确定的请求失败。 */
-  private rejectRequest(
-    conversationId: string,
-    error: Error,
-  ): Promise<never> {
+  private rejectRequest(conversationId: string, error: Error): Promise<never> {
     const aborted = this.closing;
     this.writeLog(
       aborted ? "debug" : "error",

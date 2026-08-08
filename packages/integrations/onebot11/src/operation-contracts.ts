@@ -69,8 +69,7 @@ export type OneBot11CachedGroupInput = OneBot11GroupInput & {
   readonly noCache?: boolean;
 };
 
-export type OneBot11GroupMemberInput = OneBot11GroupInput &
-  OneBot11UserInput;
+export type OneBot11GroupMemberInput = OneBot11GroupInput & OneBot11UserInput;
 
 export type OneBot11CachedGroupMemberInput = OneBot11GroupMemberInput & {
   readonly noCache?: boolean;
@@ -181,16 +180,12 @@ export interface OneBot11StandardOperations {
     input: OneBot11CachedUserInput,
   ): Promise<OneBot11OperationData>;
   getFriendList(): Promise<OneBot11OperationData>;
-  getGroupInfo(
-    input: OneBot11CachedGroupInput,
-  ): Promise<OneBot11OperationData>;
+  getGroupInfo(input: OneBot11CachedGroupInput): Promise<OneBot11OperationData>;
   getGroupList(): Promise<OneBot11OperationData>;
   getGroupMemberInfo(
     input: OneBot11CachedGroupMemberInput,
   ): Promise<OneBot11OperationData>;
-  getGroupMemberList(
-    input: OneBot11GroupInput,
-  ): Promise<OneBot11OperationData>;
+  getGroupMemberList(input: OneBot11GroupInput): Promise<OneBot11OperationData>;
   getGroupHonorInfo(
     input: OneBot11GroupHonorInput,
   ): Promise<OneBot11OperationData>;
@@ -209,9 +204,7 @@ export interface OneBot11PrivilegedOperations {
   setGroupKick(
     input: OneBot11SetGroupKickInput,
   ): Promise<OneBot11OperationData>;
-  setGroupBan(
-    input: OneBot11SetGroupBanInput,
-  ): Promise<OneBot11OperationData>;
+  setGroupBan(input: OneBot11SetGroupBanInput): Promise<OneBot11OperationData>;
   setGroupWholeBan(
     input: OneBot11SetGroupWholeBanInput,
   ): Promise<OneBot11OperationData>;

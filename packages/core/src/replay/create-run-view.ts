@@ -5,7 +5,7 @@ import type {
   ReplyView,
   RunView,
   RunViewCause,
-  RunViewStatus
+  RunViewStatus,
 } from "./types.js";
 
 type MutableAgentCallView = {
@@ -44,7 +44,7 @@ export function createRunView(events: AgentEvent[]): RunView | null {
             : { contentOmitted: { ...event.data.message.contentOmitted } }),
           ...(event.data.message.trigger === undefined
             ? {}
-            : { trigger: { ...event.data.message.trigger } })
+            : { trigger: { ...event.data.message.trigger } }),
         };
         break;
       case "main_agent.run.started":
@@ -80,7 +80,7 @@ export function createRunView(events: AgentEvent[]): RunView | null {
           agentCalls,
           agentCallOrder,
           event.data,
-          event.timestamp
+          event.timestamp,
         );
         break;
       case "agent_call.state.changed": {
@@ -97,7 +97,7 @@ export function createRunView(events: AgentEvent[]): RunView | null {
           status: "sent",
           conversationId: event.data.conversationId,
           text: event.data.text,
-          sentAt: event.timestamp
+          sentAt: event.timestamp,
         };
         break;
       case "channel.reply.failed":
@@ -106,7 +106,7 @@ export function createRunView(events: AgentEvent[]): RunView | null {
           conversationId: event.data.conversationId,
           text: event.data.text,
           error: event.data.error,
-          failedAt: event.timestamp
+          failedAt: event.timestamp,
         };
         break;
     }
@@ -130,9 +130,9 @@ export function createRunView(events: AgentEvent[]): RunView | null {
     output,
     error,
     agentCalls: agentCallOrder.map((agentCallId) => ({
-      ...agentCalls.get(agentCallId)!
+      ...agentCalls.get(agentCallId)!,
     })),
-    reply
+    reply,
   };
 }
 
@@ -140,7 +140,7 @@ function mergeCreatedAgentCall(
   agentCalls: Map<string, MutableAgentCallView>,
   agentCallOrder: string[],
   data: Extract<AgentEvent, { type: "agent_call.created" }>["data"],
-  timestamp: string
+  timestamp: string,
 ): void {
   const existing = agentCalls.get(data.agentCallId);
 
@@ -152,7 +152,7 @@ function mergeCreatedAgentCall(
       executionMode: data.executionMode,
       state: data.state,
       createdAt: timestamp,
-      updatedAt: timestamp
+      updatedAt: timestamp,
     });
     agentCallOrder.push(data.agentCallId);
     return;

@@ -9,18 +9,18 @@ import {
   TaskState,
   type SendMessageResult,
   type StreamResponse,
-  type Task
+  type Task,
 } from "@a2a-js/sdk";
 import { ClientFactory, type Client } from "@a2a-js/sdk/client";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
   startAdapterServer,
-  type RunningAdapterServer
+  type RunningAdapterServer,
 } from "../src/server.js";
 import {
   CONTROLLED_RESPONSE,
-  ControlledTaskExecutor
+  ControlledTaskExecutor,
 } from "./support/controlled-task-executor.js";
 
 const runningServers: RunningAdapterServer[] = [];
@@ -30,9 +30,9 @@ function createSendRequest(text: string, returnImmediately: boolean) {
     message: {
       messageId: randomUUID(),
       role: "ROLE_USER",
-      parts: [{ text }]
+      parts: [{ text }],
     },
-    configuration: { returnImmediately }
+    configuration: { returnImmediately },
   });
 }
 
@@ -54,7 +54,7 @@ function taskStateFrom(event: StreamResponse): TaskState | undefined {
 }
 
 async function startClient(
-  executor = new ControlledTaskExecutor()
+  executor = new ControlledTaskExecutor(),
 ): Promise<{ client: Client; server: RunningAdapterServer }> {
   const server = await startAdapterServer({ executor, port: 0 });
   runningServers.push(server);
@@ -65,7 +65,7 @@ async function startClient(
 async function waitForTaskState(
   client: Client,
   taskId: string,
-  expected: TaskState
+  expected: TaskState,
 ): Promise<Task> {
   const deadline = Date.now() + 2_000;
   do {
@@ -88,15 +88,17 @@ describe("Codex A2A adapter task lifecycle", () => {
     const events: StreamResponse[] = [];
 
     for await (const event of client.sendMessageStream(
-      createSendRequest("run the Phase 1 fixed task", false)
+      createSendRequest("run the Phase 1 fixed task", false),
     )) {
       events.push(event);
     }
 
-    expect(events.map(taskStateFrom).filter((state) => state !== undefined)).toEqual([
+    expect(
+      events.map(taskStateFrom).filter((state) => state !== undefined),
+    ).toEqual([
       TaskState.TASK_STATE_SUBMITTED,
       TaskState.TASK_STATE_WORKING,
-      TaskState.TASK_STATE_COMPLETED
+      TaskState.TASK_STATE_COMPLETED,
     ]);
 
     const taskEvent = events.find((event) => event.payload?.$case === "task");
@@ -106,19 +108,19 @@ describe("Codex A2A adapter task lifecycle", () => {
     }
 
     const artifactEvent = events.find(
-      (event) => event.payload?.$case === "artifactUpdate"
+      (event) => event.payload?.$case === "artifactUpdate",
     );
     expect(artifactEvent?.payload?.$case).toBe("artifactUpdate");
 
     const persisted = await client.getTask(
-      GetTaskRequest.fromJSON({ id: taskEvent.payload.value.id })
+      GetTaskRequest.fromJSON({ id: taskEvent.payload.value.id }),
     );
     expect(persisted.status?.state).toBe(TaskState.TASK_STATE_COMPLETED);
     expect(persisted.status?.message).toBeUndefined();
     expect(persisted.artifacts).toHaveLength(1);
     expect(persisted.artifacts[0]?.parts[0]?.content).toEqual({
       $case: "text",
-      value: CONTROLLED_RESPONSE
+      value: CONTROLLED_RESPONSE,
     });
   });
 
@@ -128,17 +130,19 @@ describe("Codex A2A adapter task lifecycle", () => {
       release = resolve;
     });
     const executor = new ControlledTaskExecutor({
-      waitBeforeComplete: async () => gate
+      waitBeforeComplete: async () => gate,
     });
     const { client } = await startClient(executor);
 
     const submitted = requireTask(
-      await client.sendMessage(createSendRequest("wait for subscription", true))
+      await client.sendMessage(
+        createSendRequest("wait for subscription", true),
+      ),
     );
     await waitForTaskState(client, submitted.id, TaskState.TASK_STATE_WORKING);
 
     const subscription = client.resubscribeTask(
-      SubscribeToTaskRequest.fromJSON({ id: submitted.id })
+      SubscribeToTaskRequest.fromJSON({ id: submitted.id }),
     );
     const first = await subscription.next();
 
@@ -148,7 +152,7 @@ describe("Codex A2A adapter task lifecycle", () => {
       throw new Error("Expected subscription to begin with the full Task");
     }
     expect(first.value.payload.value.status?.state).toBe(
-      TaskState.TASK_STATE_WORKING
+      TaskState.TASK_STATE_WORKING,
     );
 
     release();
@@ -157,11 +161,11 @@ describe("Codex A2A adapter task lifecycle", () => {
       remaining.push(event);
     }
 
-    expect(remaining.some((event) => event.payload?.$case === "artifactUpdate")).toBe(
-      true
-    );
+    expect(
+      remaining.some((event) => event.payload?.$case === "artifactUpdate"),
+    ).toBe(true);
     expect(remaining.map(taskStateFrom)).toContain(
-      TaskState.TASK_STATE_COMPLETED
+      TaskState.TASK_STATE_COMPLETED,
     );
   });
 
@@ -171,17 +175,17 @@ describe("Codex A2A adapter task lifecycle", () => {
       release = resolve;
     });
     const executor = new ControlledTaskExecutor({
-      waitBeforeComplete: async () => gate
+      waitBeforeComplete: async () => gate,
     });
     const server = await startAdapterServer({
       executor,
       heartbeatIntervalMs: 10,
-      port: 0
+      port: 0,
     });
     runningServers.push(server);
     const client = await new ClientFactory().createFromUrl(server.origin);
     const submitted = requireTask(
-      await client.sendMessage(createSendRequest("wait for heartbeat", true))
+      await client.sendMessage(createSendRequest("wait for heartbeat", true)),
     );
     await waitForTaskState(client, submitted.id, TaskState.TASK_STATE_WORKING);
     const controller = new AbortController();
@@ -194,21 +198,21 @@ describe("Codex A2A adapter task lifecycle", () => {
         headers: {
           accept: "text/event-stream",
           "a2a-version": A2A_PROTOCOL_VERSION,
-          "content-type": "application/json"
+          "content-type": "application/json",
         },
         body: JSON.stringify({
           jsonrpc: "2.0",
           id: "heartbeat-test",
           method: "SubscribeToTask",
           params: SubscribeToTaskRequest.toJSON(
-            SubscribeToTaskRequest.fromJSON({ id: submitted.id })
-          )
+            SubscribeToTaskRequest.fromJSON({ id: submitted.id }),
+          ),
         }),
-        signal: controller.signal
+        signal: controller.signal,
       });
       expect(response.status).toBe(200);
       expect(response.headers.get("content-type")).toContain(
-        "text/event-stream"
+        "text/event-stream",
       );
       const reader = response.body?.getReader();
       if (!reader) {
@@ -243,17 +247,17 @@ describe("Codex A2A adapter task lifecycle", () => {
     const { client } = await startClient();
 
     const submitted = requireTask(
-      await client.sendMessage(createSendRequest("cancel this task", true))
+      await client.sendMessage(createSendRequest("cancel this task", true)),
     );
     expect(submitted.status?.state).toBe(TaskState.TASK_STATE_SUBMITTED);
 
     const canceled = await client.cancelTask(
-      CancelTaskRequest.fromJSON({ id: submitted.id })
+      CancelTaskRequest.fromJSON({ id: submitted.id }),
     );
 
     expect(canceled.status?.state).toBe(TaskState.TASK_STATE_CANCELED);
     const persisted = await client.getTask(
-      GetTaskRequest.fromJSON({ id: submitted.id })
+      GetTaskRequest.fromJSON({ id: submitted.id }),
     );
     expect(persisted.status?.state).toBe(TaskState.TASK_STATE_CANCELED);
     expect(persisted.artifacts).toEqual([]);
@@ -264,20 +268,20 @@ describe("Codex A2A adapter task lifecycle", () => {
       waitBeforeComplete: (signal) =>
         new Promise<void>((resolve) => {
           signal.addEventListener("abort", () => resolve(), { once: true });
-        })
+        }),
     });
     const { client } = await startClient(executor);
 
     const submitted = requireTask(
-      await client.sendMessage(createSendRequest("hold until canceled", true))
+      await client.sendMessage(createSendRequest("hold until canceled", true)),
     );
     const canceled = await client.cancelTask(
-      CancelTaskRequest.fromJSON({ id: submitted.id })
+      CancelTaskRequest.fromJSON({ id: submitted.id }),
     );
 
     expect(canceled.status?.state).toBe(TaskState.TASK_STATE_CANCELED);
     const persisted = await client.getTask(
-      GetTaskRequest.fromJSON({ id: submitted.id })
+      GetTaskRequest.fromJSON({ id: submitted.id }),
     );
     expect(persisted.status?.state).toBe(TaskState.TASK_STATE_CANCELED);
     expect(persisted.artifacts).toEqual([]);

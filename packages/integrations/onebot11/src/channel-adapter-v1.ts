@@ -114,9 +114,7 @@ export class OneBot11ChannelAdapterV1 implements ChannelAdapterV1 {
    * 发送一条 V1 Channel 消息，并返回 OneBot 分配的消息 ID。
    * 所有协议和传输异常都会转换为稳定的 ChannelOperationError。
    */
-  async send(
-    command: SendChannelMessageCommandV1,
-  ): Promise<DeliveryReceiptV1> {
+  async send(command: SendChannelMessageCommandV1): Promise<DeliveryReceiptV1> {
     const conversationId = command.route?.conversationId ?? "unknown";
     try {
       const action = await createOneBot11SendMessageActionV1(
@@ -256,18 +254,14 @@ function normalizeOperationError(
     return error;
   }
   if (error instanceof OneBot11DeliveryUncertainError) {
-    return new ChannelOperationError(
-      "delivery_uncertain",
-      error.message,
-      { cause: error },
-    );
+    return new ChannelOperationError("delivery_uncertain", error.message, {
+      cause: error,
+    });
   }
   if (error instanceof OneBot11TransportUnavailableError) {
-    return new ChannelOperationError(
-      "temporarily_unavailable",
-      error.message,
-      { cause: error },
-    );
+    return new ChannelOperationError("temporarily_unavailable", error.message, {
+      cause: error,
+    });
   }
   if (error instanceof OneBot11RemoteActionError) {
     const code = mapRemoteActionErrorCode(error.retcode);

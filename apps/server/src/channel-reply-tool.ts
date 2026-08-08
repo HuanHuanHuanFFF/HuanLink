@@ -3,7 +3,7 @@ import type {
   ChannelOutboundMessagePartV1,
   ConversationJsonValue,
   InMemoryConversationSessionStore,
-  RuntimeLogger
+  RuntimeLogger,
 } from "@huanlink/core";
 import { ChannelOperationError, NoopRuntimeLogger } from "@huanlink/core";
 import type { OpenAiAgentsRunContext } from "@huanlink/integration-openai-agents";
@@ -17,34 +17,34 @@ export const CHANNEL_REPLY_TOOL_NAME = "reply" as const;
 const attachmentKind = z.enum(["image", "audio", "video", "file"]);
 const optionalAttachmentMetadata = {
   name: z.string().min(1).optional(),
-  mimeType: z.string().min(1).optional()
+  mimeType: z.string().min(1).optional(),
 };
 const outboundPart = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("text"),
-    text: z.string().min(1)
+    text: z.string().min(1),
   }),
   z.object({
     type: z.literal("mention"),
     targetId: z.string().min(1),
-    displayName: z.string().min(1).optional()
+    displayName: z.string().min(1).optional(),
   }),
   z.object({
     type: z.literal("attachmentLink"),
     kind: attachmentKind,
     url: z.string().min(1),
-    ...optionalAttachmentMetadata
+    ...optionalAttachmentMetadata,
   }),
   z.object({
     type: z.literal("attachmentLocalPath"),
     kind: attachmentKind,
     path: z.string().min(1),
-    ...optionalAttachmentMetadata
-  })
+    ...optionalAttachmentMetadata,
+  }),
 ]);
 const parameters = z.object({
   parts: z.array(outboundPart).min(1),
-  replyToMessageId: z.string().min(1).optional()
+  replyToMessageId: z.string().min(1).optional(),
 });
 
 type ChannelReplyToolInput = z.infer<typeof parameters>;
@@ -72,7 +72,7 @@ export type CreateChannelReplyToolOptions = {
 /** 创建只向显式外部 Channel Session 提供的当前会话回复 Tool。 */
 export function createChannelReplyTool(options: CreateChannelReplyToolOptions) {
   const logger = createBestEffortRuntimeLogger(
-    options.logger ?? new NoopRuntimeLogger()
+    options.logger ?? new NoopRuntimeLogger(),
   );
 
   return tool<typeof parameters, OpenAiAgentsRunContext>({
@@ -81,8 +81,8 @@ export function createChannelReplyTool(options: CreateChannelReplyToolOptions) {
       "Send one message to the current external Channel session. The target is fixed by trusted session metadata; omit this tool to stay silent.",
     parameters,
     isEnabled: ({ runContext }) =>
-      options.sessions.getSessionMetadata(runContext.context.sessionId)?.kind ===
-      "external_channel",
+      options.sessions.getSessionMetadata(runContext.context.sessionId)
+        ?.kind === "external_channel",
     errorFunction: (_context, error) =>
       JSON.stringify(replyError("error", error, options.redactValues)),
     execute: async (input, runContext, details) => {
@@ -92,8 +92,8 @@ export function createChannelReplyTool(options: CreateChannelReplyToolOptions) {
           replyError(
             "error",
             new Error("reply requires a HuanLink RunContext"),
-            options.redactValues
-          )
+            options.redactValues,
+          ),
         );
       }
 
@@ -103,10 +103,10 @@ export function createChannelReplyTool(options: CreateChannelReplyToolOptions) {
           replyError(
             "error",
             new Error(
-              `Session ${context.sessionId} is not an external Channel session`
+              `Session ${context.sessionId} is not an external Channel session`,
             ),
-            options.redactValues
-          )
+            options.redactValues,
+          ),
         );
       }
 
@@ -116,8 +116,8 @@ export function createChannelReplyTool(options: CreateChannelReplyToolOptions) {
           replyError(
             "error",
             new Error("reply requires the SDK Tool Call ID"),
-            options.redactValues
-          )
+            options.redactValues,
+          ),
         );
       }
 
@@ -127,7 +127,7 @@ export function createChannelReplyTool(options: CreateChannelReplyToolOptions) {
         toolName: CHANNEL_REPLY_TOOL_NAME,
         channelId: metadata.route.channelId,
         conversationKind: metadata.route.conversationKind,
-        conversationId: metadata.route.conversationId
+        conversationId: metadata.route.conversationId,
       });
       const storedArguments = replyArguments(input);
       try {
@@ -135,15 +135,13 @@ export function createChannelReplyTool(options: CreateChannelReplyToolOptions) {
           runId: context.runId,
           toolCallId,
           toolName: CHANNEL_REPLY_TOOL_NAME,
-          arguments: storedArguments
+          arguments: storedArguments,
         });
       } catch (error) {
         toolLogger.error("channel.reply.tool_call_record_failed", {
-          errorType: safeErrorType(error)
+          errorType: safeErrorType(error),
         });
-        return JSON.stringify(
-          replyError("error", error, options.redactValues)
-        );
+        return JSON.stringify(replyError("error", error, options.redactValues));
       }
 
       const complete = (result: ChannelReplyToolResult): string => {
@@ -153,20 +151,20 @@ export function createChannelReplyTool(options: CreateChannelReplyToolOptions) {
             runId: context.runId,
             toolCallId,
             toolName: CHANNEL_REPLY_TOOL_NAME,
-            output
+            output,
           });
         } catch (error) {
           toolLogger.error("channel.reply.tool_result_record_failed", {
             status: result.status,
-            errorType: safeErrorType(error)
+            errorType: safeErrorType(error),
           });
           if (result.status === "success") {
             output = {
               ...result,
               warning: appendWarning(
                 result.warning,
-                formatReplyError(error, options.redactValues)
-              )
+                formatReplyError(error, options.redactValues),
+              ),
             };
           }
         }
@@ -174,7 +172,7 @@ export function createChannelReplyTool(options: CreateChannelReplyToolOptions) {
           status: output.status,
           ...(output.status === "success"
             ? { messageId: output.messageId }
-            : {})
+            : {}),
         });
         return JSON.stringify(output);
       };
@@ -190,10 +188,10 @@ export function createChannelReplyTool(options: CreateChannelReplyToolOptions) {
           replyError(
             "error",
             new Error(
-              `No Channel Adapter is registered for ${metadata.route.channelId}`
+              `No Channel Adapter is registered for ${metadata.route.channelId}`,
             ),
-            options.redactValues
-          )
+            options.redactValues,
+          ),
         );
       }
 
@@ -205,7 +203,7 @@ export function createChannelReplyTool(options: CreateChannelReplyToolOptions) {
           parts: input.parts as readonly ChannelOutboundMessagePartV1[],
           ...(input.replyToMessageId === undefined
             ? {}
-            : { replyToMessageId: input.replyToMessageId })
+            : { replyToMessageId: input.replyToMessageId }),
         });
       } catch (error) {
         const status =
@@ -225,10 +223,10 @@ export function createChannelReplyTool(options: CreateChannelReplyToolOptions) {
           replyError(
             "uncertain",
             new Error(
-              "Channel send returned an invalid delivery receipt; the message may have been sent"
+              "Channel send returned an invalid delivery receipt; the message may have been sent",
             ),
-            options.redactValues
-          )
+            options.redactValues,
+          ),
         );
       }
 
@@ -242,13 +240,13 @@ export function createChannelReplyTool(options: CreateChannelReplyToolOptions) {
           sentAt,
           runId: context.runId,
           toolCallId,
-          sourceSessionId: context.sessionId
+          sourceSessionId: context.sessionId,
         });
       } catch (error) {
         warning = formatReplyError(error, options.redactValues);
         toolLogger.warn("channel.reply.session_association_failed", {
           messageId: receipt.messageId,
-          errorType: safeErrorType(error)
+          errorType: safeErrorType(error),
         });
       }
 
@@ -256,14 +254,14 @@ export function createChannelReplyTool(options: CreateChannelReplyToolOptions) {
         status: "success",
         tool: CHANNEL_REPLY_TOOL_NAME,
         messageId: receipt.messageId,
-        ...(warning === undefined ? {} : { warning })
+        ...(warning === undefined ? {} : { warning }),
       });
-    }
+    },
   });
 }
 
 function replyArguments(
-  input: ChannelReplyToolInput
+  input: ChannelReplyToolInput,
 ): Readonly<Record<string, ConversationJsonValue>> {
   return input as unknown as Readonly<Record<string, ConversationJsonValue>>;
 }
@@ -271,26 +269,27 @@ function replyArguments(
 function replyError(
   status: "error" | "uncertain",
   error: unknown,
-  redactValues: readonly string[] | undefined
+  redactValues: readonly string[] | undefined,
 ): ChannelReplyToolResult {
   return {
     status,
     tool: CHANNEL_REPLY_TOOL_NAME,
-    error: formatReplyError(error, redactValues)
+    error: formatReplyError(error, redactValues),
   };
 }
 
 /** 保留原始错误因果文本，仅移除明确配置的凭证和常见 Bearer 值。 */
 function formatReplyError(
   error: unknown,
-  redactValues: readonly string[] | undefined
+  redactValues: readonly string[] | undefined,
 ): string {
   const messages: string[] = [];
   const seen = new Set<unknown>();
   let current: unknown = error;
   while (current !== undefined && current !== null && !seen.has(current)) {
     seen.add(current);
-    const message = current instanceof Error ? current.message : String(current);
+    const message =
+      current instanceof Error ? current.message : String(current);
     const previous = messages.at(-1);
     if (
       message.length > 0 &&

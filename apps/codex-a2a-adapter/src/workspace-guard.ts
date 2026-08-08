@@ -11,24 +11,26 @@ export interface ValidatedDemoWorkspace {
 
 export async function validateDemoWorkspace(
   workspace: string,
-  expectedBranch: string
+  expectedBranch: string,
 ): Promise<ValidatedDemoWorkspace> {
   const canonicalWorkspace = await realpath(workspace);
   const gitRoot = await runGit(canonicalWorkspace, [
     "rev-parse",
-    "--show-toplevel"
+    "--show-toplevel",
   ]);
   const canonicalGitRoot = await realpath(gitRoot);
 
   if (pathKey(canonicalGitRoot) !== pathKey(canonicalWorkspace)) {
     throw new Error(
-      `Configured workspace must be the Git root: ${canonicalWorkspace}; found ${canonicalGitRoot}`
+      `Configured workspace must be the Git root: ${canonicalWorkspace}; found ${canonicalGitRoot}`,
     );
   }
 
   const branch = await runGit(canonicalWorkspace, ["branch", "--show-current"]);
   if (branch !== expectedBranch) {
-    throw new Error(`Expected branch ${expectedBranch}, found ${branch || "detached HEAD"}`);
+    throw new Error(
+      `Expected branch ${expectedBranch}, found ${branch || "detached HEAD"}`,
+    );
   }
 
   return { branch, workspace: canonicalWorkspace };
@@ -37,7 +39,7 @@ export async function validateDemoWorkspace(
 async function runGit(cwd: string, args: string[]): Promise<string> {
   const result = await execFileAsync("git", ["-C", cwd, ...args], {
     encoding: "utf8",
-    windowsHide: true
+    windowsHide: true,
   });
   return result.stdout.trim();
 }

@@ -8,12 +8,12 @@ import {
   type DeliveryReceiptV1,
   type InboundChannelMessageV1,
   type RetractChannelMessageCommandV1,
-  type SendChannelMessageCommandV1
+  type SendChannelMessageCommandV1,
 } from "@huanlink/core";
 
 import {
   createChannelRuntime,
-  type ChannelRuntimeMessage
+  type ChannelRuntimeMessage,
 } from "../src/channel-runtime.js";
 
 class FakeChannelAdapter implements ChannelAdapterV1 {
@@ -24,8 +24,8 @@ class FakeChannelAdapter implements ChannelAdapterV1 {
     channelId: string,
     conversationKinds: readonly ChannelConversationKindV1[] = [
       "direct",
-      "group"
-    ]
+      "group",
+    ],
   ) {
     this.descriptor = {
       channelId,
@@ -40,8 +40,8 @@ class FakeChannelAdapter implements ChannelAdapterV1 {
         retract: true,
         reaction: false,
         typing: false,
-        streaming: false
-      }
+        streaming: false,
+      },
     };
   }
 
@@ -61,7 +61,7 @@ class FakeChannelAdapter implements ChannelAdapterV1 {
   send(_command: SendChannelMessageCommandV1): Promise<DeliveryReceiptV1> {
     return Promise.resolve({
       channelId: this.descriptor.channelId,
-      messageId: "sent-1"
+      messageId: "sent-1",
     });
   }
 
@@ -89,19 +89,19 @@ function inboundMessage(input: {
     route: {
       channelId: input.channelId ?? "qq-main",
       conversationKind: input.conversationKind ?? "group",
-      conversationId: input.conversationId
+      conversationId: input.conversationId,
     },
     sender: {
       id: "20002",
       username: "Alice",
-      isSelf: input.isSelf ?? false
+      isSelf: input.isSelf ?? false,
     },
     receivedAt: "2026-08-07T00:00:00.000Z",
     content: "hello",
     contentFormat: "onebot11.cq",
     ...(input.trigger === undefined
       ? {}
-      : { trigger: { kind: input.trigger } })
+      : { trigger: { kind: input.trigger } }),
   };
 }
 
@@ -115,38 +115,44 @@ describe("ChannelRuntime", () => {
           adapter,
           inboundPolicy: {
             groups: { mode: "allowlist", ids: ["10001"] },
-            directs: { mode: "allowlist", ids: [] }
-          }
-        }
+            directs: { mode: "allowlist", ids: [] },
+          },
+        },
       ],
-      onMessage
+      onMessage,
     });
     await runtime.start();
 
-    adapter.emit(inboundMessage({ messageId: "plain", conversationId: "10001" }));
+    adapter.emit(
+      inboundMessage({ messageId: "plain", conversationId: "10001" }),
+    );
     adapter.emit(
       inboundMessage({
         messageId: "mention",
         conversationId: "10001",
-        trigger: "mention"
-      })
+        trigger: "mention",
+      }),
     );
     adapter.emit(
       inboundMessage({
         messageId: "command",
         conversationId: "10001",
-        trigger: "command"
-      })
+        trigger: "command",
+      }),
     );
     adapter.emit(
       inboundMessage({
         messageId: "self",
         conversationId: "10001",
-        isSelf: true
-      })
+        isSelf: true,
+      }),
     );
-    adapter.emit(inboundMessage({ messageId: "plain", conversationId: "10001" }));
-    adapter.emit(inboundMessage({ messageId: "blocked", conversationId: "99999" }));
+    adapter.emit(
+      inboundMessage({ messageId: "plain", conversationId: "10001" }),
+    );
+    adapter.emit(
+      inboundMessage({ messageId: "blocked", conversationId: "99999" }),
+    );
     await vi.waitFor(() => expect(onMessage).toHaveBeenCalledTimes(5));
 
     expect(
@@ -156,40 +162,40 @@ describe("ChannelRuntime", () => {
           sessionId: input.sessionId,
           messageId: input.message.messageId,
           isSelf: input.message.sender.isSelf,
-          trigger: input.message.trigger?.kind
+          trigger: input.message.trigger?.kind,
         };
-      })
+      }),
     ).toEqual([
       {
         sessionId: "channel:qq-main:group:10001",
         messageId: "plain",
         isSelf: false,
-        trigger: undefined
+        trigger: undefined,
       },
       {
         sessionId: "channel:qq-main:group:10001",
         messageId: "mention",
         isSelf: false,
-        trigger: "mention"
+        trigger: "mention",
       },
       {
         sessionId: "channel:qq-main:group:10001",
         messageId: "command",
         isSelf: false,
-        trigger: "command"
+        trigger: "command",
       },
       {
         sessionId: "channel:qq-main:group:10001",
         messageId: "self",
         isSelf: true,
-        trigger: undefined
+        trigger: undefined,
       },
       {
         sessionId: "channel:qq-main:group:10001",
         messageId: "plain",
         isSelf: false,
-        trigger: undefined
-      }
+        trigger: undefined,
+      },
     ]);
     expect("sessions" in runtime).toBe(false);
 
@@ -205,23 +211,23 @@ describe("ChannelRuntime", () => {
           adapter,
           inboundPolicy: {
             groups: { mode: "allowlist", ids: ["team-alpha"] },
-            directs: { mode: "allowlist", ids: ["-100987"] }
-          }
-        }
+            directs: { mode: "allowlist", ids: ["-100987"] },
+          },
+        },
       ],
-      onMessage
+      onMessage,
     });
     await runtime.start();
 
     adapter.emit(
-      inboundMessage({ messageId: "group", conversationId: "team-alpha" })
+      inboundMessage({ messageId: "group", conversationId: "team-alpha" }),
     );
     adapter.emit(
       inboundMessage({
         messageId: "direct",
         conversationKind: "direct",
-        conversationId: "-100987"
-      })
+        conversationId: "-100987",
+      }),
     );
 
     await vi.waitFor(() => expect(onMessage).toHaveBeenCalledTimes(2));
@@ -237,38 +243,46 @@ describe("ChannelRuntime", () => {
           adapter,
           inboundPolicy: {
             groups: { mode: "allowlist", ids: ["10001"] },
-            directs: { mode: "allowlist", ids: [] }
-          }
-        }
+            directs: { mode: "allowlist", ids: [] },
+          },
+        },
       ],
-      onMessage
+      onMessage,
     });
     await runtime.start();
 
-    adapter.emit(inboundMessage({ messageId: "before", conversationId: "10001" }));
+    adapter.emit(
+      inboundMessage({ messageId: "before", conversationId: "10001" }),
+    );
     await vi.waitFor(() => expect(onMessage).toHaveBeenCalledOnce());
 
     runtime.replaceAccessPolicy("qq-main", {
       groups: { mode: "denylist", ids: ["10001"] },
-      directs: { mode: "denylist", ids: [] }
+      directs: { mode: "denylist", ids: [] },
     });
-    adapter.emit(inboundMessage({ messageId: "now-blocked", conversationId: "10001" }));
-    adapter.emit(inboundMessage({ messageId: "now-allowed", conversationId: "other" }));
+    adapter.emit(
+      inboundMessage({ messageId: "now-blocked", conversationId: "10001" }),
+    );
+    adapter.emit(
+      inboundMessage({ messageId: "now-allowed", conversationId: "other" }),
+    );
     await vi.waitFor(() => expect(onMessage).toHaveBeenCalledTimes(2));
 
     expect(() =>
       runtime.replaceAccessPolicy("qq-main", {
         groups: { mode: "allowlist", ids: [" "] },
-        directs: { mode: "denylist", ids: [] }
-      })
+        directs: { mode: "denylist", ids: [] },
+      }),
     ).toThrow(/groups.*non-empty/i);
-    adapter.emit(inboundMessage({ messageId: "still-allowed", conversationId: "other" }));
+    adapter.emit(
+      inboundMessage({ messageId: "still-allowed", conversationId: "other" }),
+    );
     await vi.waitFor(() => expect(onMessage).toHaveBeenCalledTimes(3));
 
     expect(
       onMessage.mock.calls.map(
-        (call) => (call[0] as ChannelRuntimeMessage).message.messageId
-      )
+        (call) => (call[0] as ChannelRuntimeMessage).message.messageId,
+      ),
     ).toEqual(["before", "now-allowed", "still-allowed"]);
     await runtime.close();
   });
@@ -281,9 +295,9 @@ describe("ChannelRuntime", () => {
         adapter,
         inboundPolicy: {
           groups: { mode: "allowlist" as const, ids: ["before"] },
-          directs: { mode: "denylist" as const, ids: [] }
-        }
-      }))
+          directs: { mode: "denylist" as const, ids: [] },
+        },
+      })),
     });
 
     runtime.replaceAccessPolicies(
@@ -292,32 +306,32 @@ describe("ChannelRuntime", () => {
           "qq-main",
           {
             groups: { mode: "allowlist", ids: ["after-main"] },
-            directs: { mode: "denylist", ids: [] }
-          }
+            directs: { mode: "denylist", ids: [] },
+          },
         ],
         [
           "qq-secondary",
           {
             groups: { mode: "allowlist", ids: ["after-secondary"] },
-            directs: { mode: "denylist", ids: [] }
-          }
-        ]
-      ])
+            directs: { mode: "denylist", ids: [] },
+          },
+        ],
+      ]),
     );
 
     expect(
       runtime.isRouteAllowed({
         channelId: "qq-main",
         conversationKind: "group",
-        conversationId: "after-main"
-      })
+        conversationId: "after-main",
+      }),
     ).toBe(true);
     expect(
       runtime.isRouteAllowed({
         channelId: "qq-secondary",
         conversationKind: "group",
-        conversationId: "after-secondary"
-      })
+        conversationId: "after-secondary",
+      }),
     ).toBe(true);
 
     expect(() =>
@@ -327,33 +341,33 @@ describe("ChannelRuntime", () => {
             "qq-main",
             {
               groups: { mode: "allowlist", ids: ["must-not-apply"] },
-              directs: { mode: "denylist", ids: [] }
-            }
+              directs: { mode: "denylist", ids: [] },
+            },
           ],
           [
             "qq-secondary",
             {
               groups: { mode: "allowlist", ids: [" "] },
-              directs: { mode: "denylist", ids: [] }
-            }
-          ]
-        ])
-      )
+              directs: { mode: "denylist", ids: [] },
+            },
+          ],
+        ]),
+      ),
     ).toThrow(/groups.*non-empty/i);
 
     expect(
       runtime.isRouteAllowed({
         channelId: "qq-main",
         conversationKind: "group",
-        conversationId: "after-main"
-      })
+        conversationId: "after-main",
+      }),
     ).toBe(true);
     expect(
       runtime.isRouteAllowed({
         channelId: "qq-main",
         conversationKind: "group",
-        conversationId: "must-not-apply"
-      })
+        conversationId: "must-not-apply",
+      }),
     ).toBe(false);
   });
 
@@ -367,29 +381,29 @@ describe("ChannelRuntime", () => {
           adapter: first,
           inboundPolicy: {
             groups: { mode: "denylist", ids: [] },
-            directs: { mode: "allowlist", ids: [] }
-          }
+            directs: { mode: "allowlist", ids: [] },
+          },
         },
         {
           adapter: second,
           inboundPolicy: {
             groups: { mode: "denylist", ids: [] },
-            directs: { mode: "allowlist", ids: [] }
-          }
-        }
+            directs: { mode: "allowlist", ids: [] },
+          },
+        },
       ],
-      onMessage
+      onMessage,
     });
     await runtime.start();
 
     const firstMessage = inboundMessage({
       messageId: "same-message",
-      conversationId: "10001"
+      conversationId: "10001",
     });
     const secondMessage = inboundMessage({
       messageId: "same-message",
       conversationId: "10001",
-      channelId: "qq-secondary"
+      channelId: "qq-secondary",
     });
     first.emit(firstMessage);
     second.emit(secondMessage);
@@ -397,17 +411,17 @@ describe("ChannelRuntime", () => {
 
     expect(
       onMessage.mock.calls.map(
-        (call) => (call[0] as ChannelRuntimeMessage).sessionId
-      )
+        (call) => (call[0] as ChannelRuntimeMessage).sessionId,
+      ),
     ).toEqual([
       "channel:qq-main:group:10001",
-      "channel:qq-secondary:group:10001"
+      "channel:qq-secondary:group:10001",
     ]);
     expect(runtime.resolveAdapter("qq-main")?.descriptor.channelId).toBe(
-      "qq-main"
+      "qq-main",
     );
     expect(runtime.resolveAdapter("qq-secondary")?.descriptor.channelId).toBe(
-      "qq-secondary"
+      "qq-secondary",
     );
     await runtime.close();
   });
@@ -428,42 +442,44 @@ describe("ChannelRuntime", () => {
           adapter,
           inboundPolicy: {
             groups: { mode: "denylist", ids: [] },
-            directs: { mode: "denylist", ids: [] }
-          }
-        }
+            directs: { mode: "denylist", ids: [] },
+          },
+        },
       ],
-      onMessage
+      onMessage,
     });
     await runtime.start();
 
-    adapter.emit(inboundMessage({ messageId: "first", conversationId: "10001" }));
+    adapter.emit(
+      inboundMessage({ messageId: "first", conversationId: "10001" }),
+    );
     adapter.emit(
       inboundMessage({
         messageId: "same-route-self",
         conversationId: "10001",
-        isSelf: true
-      })
+        isSelf: true,
+      }),
     );
     adapter.emit(
       inboundMessage({
         messageId: "other-route",
         conversationKind: "direct",
-        conversationId: "20002"
-      })
+        conversationId: "20002",
+      }),
     );
 
     await vi.waitFor(() => expect(onMessage).toHaveBeenCalledTimes(2));
     expect(
       onMessage.mock.calls.map(
-        (call) => (call[0] as ChannelRuntimeMessage).message.messageId
-      )
+        (call) => (call[0] as ChannelRuntimeMessage).message.messageId,
+      ),
     ).toEqual(["first", "other-route"]);
 
     releaseFirst();
     await vi.waitFor(() => expect(onMessage).toHaveBeenCalledTimes(3));
     expect(onMessage.mock.calls[2]?.[0].message).toMatchObject({
       messageId: "same-route-self",
-      sender: { isSelf: true }
+      sender: { isSelf: true },
     });
     await runtime.close();
   });
@@ -480,11 +496,11 @@ describe("ChannelRuntime", () => {
       .mockImplementationOnce(() => firstPending)
       .mockResolvedValueOnce({
         channelId: "qq-main",
-        messageId: "sent-other-session"
+        messageId: "sent-other-session",
       })
       .mockResolvedValueOnce({
         channelId: "qq-main",
-        messageId: "sent-second"
+        messageId: "sent-second",
       });
     const runtime = createChannelRuntime({
       channels: [
@@ -492,10 +508,10 @@ describe("ChannelRuntime", () => {
           adapter,
           inboundPolicy: {
             groups: { mode: "denylist", ids: [] },
-            directs: { mode: "denylist", ids: [] }
-          }
-        }
-      ]
+            directs: { mode: "denylist", ids: [] },
+          },
+        },
+      ],
     });
     await runtime.start();
     const ordered = runtime.resolveAdapter("qq-main")!;
@@ -503,21 +519,21 @@ describe("ChannelRuntime", () => {
       route: {
         channelId: "qq-main",
         conversationKind: "group",
-        conversationId: "10001"
+        conversationId: "10001",
       },
-      parts: [{ type: "text", text: "first" }]
+      parts: [{ type: "text", text: "first" }],
     };
     const secondCommand: SendChannelMessageCommandV1 = {
       ...firstCommand,
-      parts: [{ type: "text", text: "second" }]
+      parts: [{ type: "text", text: "second" }],
     };
     const otherSessionCommand: SendChannelMessageCommandV1 = {
       route: {
         channelId: "qq-main",
         conversationKind: "direct",
-        conversationId: "20002"
+        conversationId: "20002",
       },
-      parts: [{ type: "text", text: "other" }]
+      parts: [{ type: "text", text: "other" }],
     };
 
     const first = ordered.send(firstCommand);
@@ -526,21 +542,21 @@ describe("ChannelRuntime", () => {
     await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(2));
     expect(send.mock.calls.map(([command]) => command)).toEqual([
       firstCommand,
-      otherSessionCommand
+      otherSessionCommand,
     ]);
 
     releaseFirst();
     await expect(first).resolves.toEqual({
       channelId: "qq-main",
-      messageId: "sent-first"
+      messageId: "sent-first",
     });
     await expect(second).resolves.toEqual({
       channelId: "qq-main",
-      messageId: "sent-second"
+      messageId: "sent-second",
     });
     await expect(otherSession).resolves.toEqual({
       channelId: "qq-main",
-      messageId: "sent-other-session"
+      messageId: "sent-other-session",
     });
     expect(send).toHaveBeenCalledTimes(3);
     await runtime.close();
@@ -554,7 +570,7 @@ describe("ChannelRuntime", () => {
         new Promise<DeliveryReceiptV1>((resolve) => {
           releaseFirst = () =>
             resolve({ channelId: "qq-main", messageId: "sent-first" });
-        })
+        }),
     );
     const runtime = createChannelRuntime({
       channels: [
@@ -562,10 +578,10 @@ describe("ChannelRuntime", () => {
           adapter,
           inboundPolicy: {
             groups: { mode: "allowlist", ids: ["10001"] },
-            directs: { mode: "denylist", ids: [] }
-          }
-        }
-      ]
+            directs: { mode: "denylist", ids: [] },
+          },
+        },
+      ],
     });
     await runtime.start();
     const ordered = runtime.resolveAdapter("qq-main")!;
@@ -573,9 +589,9 @@ describe("ChannelRuntime", () => {
       route: {
         channelId: "qq-main",
         conversationKind: "group",
-        conversationId: "10001"
+        conversationId: "10001",
       },
-      parts: [{ type: "text", text: "hello" }]
+      parts: [{ type: "text", text: "hello" }],
     };
 
     const first = ordered.send(command);
@@ -583,7 +599,7 @@ describe("ChannelRuntime", () => {
     await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
     runtime.replaceAccessPolicy("qq-main", {
       groups: { mode: "allowlist", ids: [] },
-      directs: { mode: "denylist", ids: [] }
+      directs: { mode: "denylist", ids: [] },
     });
     releaseFirst();
 
@@ -591,7 +607,7 @@ describe("ChannelRuntime", () => {
     await expect(queued).rejects.toMatchObject({
       name: "ChannelOperationError",
       code: "invalid_target",
-      message: "Channel target is outside the allowed scope"
+      message: "Channel target is outside the allowed scope",
     });
     expect(send).toHaveBeenCalledOnce();
     await runtime.close();
@@ -604,7 +620,7 @@ describe("ChannelRuntime", () => {
       () =>
         new Promise<void>((resolve) => {
           releaseStart = resolve;
-        })
+        }),
     );
     const send = vi.spyOn(adapter, "send");
     const operation = vi.fn(async () => "operation-result");
@@ -615,52 +631,52 @@ describe("ChannelRuntime", () => {
           adapter,
           inboundPolicy: {
             groups: { mode: "denylist", ids: [] },
-            directs: { mode: "denylist", ids: [] }
-          }
-        }
+            directs: { mode: "denylist", ids: [] },
+          },
+        },
       ],
-      onMessage
+      onMessage,
     });
     const ordered = runtime.resolveAdapter("qq-main")!;
     const command: SendChannelMessageCommandV1 = {
       route: {
         channelId: "qq-main",
         conversationKind: "group",
-        conversationId: "10001"
+        conversationId: "10001",
       },
-      parts: [{ type: "text", text: "hello" }]
+      parts: [{ type: "text", text: "hello" }],
     };
 
     await expect(ordered.send(command)).rejects.toThrow(
-      "ChannelRuntime is not started"
+      "ChannelRuntime is not started",
     );
-    await expect(
-      runtime.runOperation("qq-main", operation)
-    ).rejects.toThrow("ChannelRuntime is not started");
+    await expect(runtime.runOperation("qq-main", operation)).rejects.toThrow(
+      "ChannelRuntime is not started",
+    );
     const starting = runtime.start();
     await vi.waitFor(() => expect(adapter.start).toHaveBeenCalledOnce());
     adapter.emit(
-      inboundMessage({ messageId: "during-start", conversationId: "10001" })
+      inboundMessage({ messageId: "during-start", conversationId: "10001" }),
     );
     await vi.waitFor(() => expect(onMessage).toHaveBeenCalledOnce());
     await expect(ordered.send(command)).rejects.toThrow(
-      "ChannelRuntime is not started"
+      "ChannelRuntime is not started",
     );
     expect(send).not.toHaveBeenCalled();
 
     releaseStart();
     await starting;
     await expect(ordered.send(command)).resolves.toMatchObject({
-      messageId: "sent-1"
+      messageId: "sent-1",
     });
     await expect(runtime.runOperation("qq-main", operation)).resolves.toBe(
-      "operation-result"
+      "operation-result",
     );
     expect(send).toHaveBeenCalledOnce();
     expect(operation).toHaveBeenCalledOnce();
     await runtime.close();
     await expect(runtime.runOperation("qq-main", operation)).rejects.toThrow(
-      "ChannelRuntime is closed"
+      "ChannelRuntime is closed",
     );
   });
 
@@ -672,7 +688,7 @@ describe("ChannelRuntime", () => {
       () =>
         new Promise<void>((resolve) => {
           releaseStart = resolve;
-        })
+        }),
     );
     const secondStart = vi.spyOn(second, "start");
     const runtime = createChannelRuntime({
@@ -680,9 +696,9 @@ describe("ChannelRuntime", () => {
         adapter,
         inboundPolicy: {
           groups: { mode: "denylist" as const, ids: [] },
-          directs: { mode: "denylist" as const, ids: [] }
-        }
-      }))
+          directs: { mode: "denylist" as const, ids: [] },
+        },
+      })),
     });
 
     const starting = runtime.start();
@@ -709,7 +725,7 @@ describe("ChannelRuntime", () => {
         new Promise<DeliveryReceiptV1>((resolve) => {
           releaseFirst = () =>
             resolve({ channelId: "qq-main", messageId: "sent-first" });
-        })
+        }),
     );
     const runtime = createChannelRuntime({
       channels: [
@@ -717,10 +733,10 @@ describe("ChannelRuntime", () => {
           adapter,
           inboundPolicy: {
             groups: { mode: "denylist", ids: [] },
-            directs: { mode: "denylist", ids: [] }
-          }
-        }
-      ]
+            directs: { mode: "denylist", ids: [] },
+          },
+        },
+      ],
     });
     await runtime.start();
     const ordered = runtime.resolveAdapter("qq-main")!;
@@ -728,9 +744,9 @@ describe("ChannelRuntime", () => {
       route: {
         channelId: "qq-main",
         conversationKind: "group",
-        conversationId: "10001"
+        conversationId: "10001",
       },
-      parts: [{ type: "text", text: "hello" }]
+      parts: [{ type: "text", text: "hello" }],
     };
 
     const first = ordered.send(command);
@@ -752,7 +768,7 @@ describe("ChannelRuntime", () => {
       () =>
         new Promise<void>((resolve) => {
           releaseFirst = resolve;
-        })
+        }),
     );
     const runtime = createChannelRuntime({
       channels: [
@@ -760,16 +776,20 @@ describe("ChannelRuntime", () => {
           adapter,
           inboundPolicy: {
             groups: { mode: "denylist", ids: [] },
-            directs: { mode: "denylist", ids: [] }
-          }
-        }
+            directs: { mode: "denylist", ids: [] },
+          },
+        },
       ],
-      onMessage
+      onMessage,
     });
     await runtime.start();
 
-    adapter.emit(inboundMessage({ messageId: "first", conversationId: "10001" }));
-    adapter.emit(inboundMessage({ messageId: "queued", conversationId: "10001" }));
+    adapter.emit(
+      inboundMessage({ messageId: "first", conversationId: "10001" }),
+    );
+    adapter.emit(
+      inboundMessage({ messageId: "queued", conversationId: "10001" }),
+    );
     await vi.waitFor(() => expect(onMessage).toHaveBeenCalledOnce());
 
     const closing = runtime.close();
@@ -792,21 +812,23 @@ describe("ChannelRuntime", () => {
           adapter,
           inboundPolicy: {
             groups: { mode: "denylist", ids: [] },
-            directs: { mode: "denylist", ids: [] }
-          }
-        }
+            directs: { mode: "denylist", ids: [] },
+          },
+        },
       ],
-      onMessage
+      onMessage,
     });
     await runtime.start();
-    adapter.emit(inboundMessage({ messageId: "hanging", conversationId: "10001" }));
+    adapter.emit(
+      inboundMessage({ messageId: "hanging", conversationId: "10001" }),
+    );
     await vi.waitFor(() => expect(onMessage).toHaveBeenCalledOnce());
 
     const signal = onMessage.mock.calls[0]?.[0].signal;
     const closing = runtime.close();
     const settledPromptly = await Promise.race([
       closing.then(() => true),
-      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 100))
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 100)),
     ]);
     releaseHandler();
     await closing;
@@ -824,17 +846,17 @@ describe("ChannelRuntime", () => {
           adapter,
           inboundPolicy: {
             groups: { mode: "denylist", ids: [] },
-            directs: { mode: "denylist", ids: [] }
-          }
-        }
+            directs: { mode: "denylist", ids: [] },
+          },
+        },
       ],
-      onMessage
+      onMessage,
     });
     await runtime.start();
     const direct = inboundMessage({
       messageId: "direct-unsupported",
       conversationKind: "direct",
-      conversationId: "20002"
+      conversationId: "20002",
     });
 
     adapter.emit(direct);
@@ -845,8 +867,8 @@ describe("ChannelRuntime", () => {
     await expect(
       runtime.resolveAdapter("qq-main")!.send({
         route: direct.route,
-        parts: [{ type: "text", text: "unsupported" }]
-      })
+        parts: [{ type: "text", text: "unsupported" }],
+      }),
     ).rejects.toThrow("outside the allowed scope");
     await runtime.close();
   });

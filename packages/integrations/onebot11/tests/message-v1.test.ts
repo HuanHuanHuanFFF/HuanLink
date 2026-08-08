@@ -1,13 +1,11 @@
 import { describe, expect, test } from "vitest";
 
-import {
-  CHANNEL_INBOUND_CONTENT_TOO_LARGE_PLACEHOLDER_V1
-} from "@huanlink/core";
+import { CHANNEL_INBOUND_CONTENT_TOO_LARGE_PLACEHOLDER_V1 } from "@huanlink/core";
 
 import { parseOneBot11MessageV1 } from "../src/index.js";
 
 const options = {
-  channelId: "qq-main"
+  channelId: "qq-main",
 };
 
 describe("parseOneBot11MessageV1", () => {
@@ -28,16 +26,16 @@ describe("parseOneBot11MessageV1", () => {
             type: "image",
             data: {
               file: "fixture.jpg",
-              url: "https://example.invalid/a.jpg?x=1&y=2"
-            }
-          }
+              url: "https://example.invalid/a.jpg?x=1&y=2",
+            },
+          },
         ],
         sender: {
           nickname: "Alice",
-          card: "Alice Card"
-        }
+          card: "Alice Card",
+        },
       },
-      options
+      options,
     );
 
     expect(message).toEqual({
@@ -45,20 +43,20 @@ describe("parseOneBot11MessageV1", () => {
       route: {
         channelId: "qq-main",
         conversationKind: "group",
-        conversationId: "20002"
+        conversationId: "20002",
       },
       sender: {
         id: "30003",
         username: "Alice",
         displayName: "Alice Card",
-        isSelf: false
+        isSelf: false,
       },
       receivedAt: "2024-01-01T00:00:00.000Z",
       content:
         "[CQ:reply,id=99]/huanlink inspect [CQ:image,file=fixture.jpg,url=https://example.invalid/a.jpg?x=1&amp;y=2]",
       contentFormat: "onebot11.cq",
       replyToMessageId: "99",
-      trigger: { kind: "command" }
+      trigger: { kind: "command" },
     });
   });
 
@@ -75,9 +73,9 @@ describe("parseOneBot11MessageV1", () => {
         user_id: "10001",
         target_id: "40004",
         message: content,
-        sender: { nickname: "HuanLink" }
+        sender: { nickname: "HuanLink" },
       },
-      options
+      options,
     );
 
     expect(message).toMatchObject({
@@ -85,15 +83,15 @@ describe("parseOneBot11MessageV1", () => {
       route: {
         channelId: "qq-main",
         conversationKind: "direct",
-        conversationId: "40004"
+        conversationId: "40004",
       },
       sender: {
         id: "10001",
         username: "HuanLink",
-        isSelf: true
+        isSelf: true,
       },
       content,
-      contentFormat: "onebot11.cq"
+      contentFormat: "onebot11.cq",
     });
   });
 
@@ -108,17 +106,17 @@ describe("parseOneBot11MessageV1", () => {
         group_id: "20002",
         user_id: "30003",
         message: [{ type: "text", data: { text: "x".repeat(8193) } }],
-        sender: { nickname: "Alice" }
+        sender: { nickname: "Alice" },
       },
-      options
+      options,
     );
 
     expect(message).toMatchObject({
       content: CHANNEL_INBOUND_CONTENT_TOO_LARGE_PLACEHOLDER_V1,
       contentOmitted: {
         reason: "too_large",
-        originalSizeBytes: 8193
-      }
+        originalSizeBytes: 8193,
+      },
     });
   });
 
@@ -134,25 +132,25 @@ describe("parseOneBot11MessageV1", () => {
         message_id: "12348",
         user_id: "40004",
         message: content,
-        sender: { nickname: "Bob" }
+        sender: { nickname: "Bob" },
       },
-      options
+      options,
     );
 
     expect(message).toMatchObject({
       route: {
         channelId: "qq-main",
         conversationKind: "direct",
-        conversationId: "40004"
+        conversationId: "40004",
       },
       sender: {
         id: "40004",
         username: "Bob",
-        isSelf: false
+        isSelf: false,
       },
       content,
       replyToMessageId: "77",
-      trigger: { kind: "mention" }
+      trigger: { kind: "mention" },
     });
   });
 
@@ -169,16 +167,14 @@ describe("parseOneBot11MessageV1", () => {
         message: [
           { type: "text", data: { text: "/" } },
           { type: "image", data: { file: "separator.jpg" } },
-          { type: "text", data: { text: "model run" } }
+          { type: "text", data: { text: "model run" } },
         ],
-        sender: { nickname: "Alice" }
+        sender: { nickname: "Alice" },
       },
-      options
+      options,
     );
 
-    expect(message?.content).toBe(
-      "/[CQ:image,file=separator.jpg]model run"
-    );
+    expect(message?.content).toBe("/[CQ:image,file=separator.jpg]model run");
     expect(message?.trigger).toBeUndefined();
   });
 
@@ -193,9 +189,9 @@ describe("parseOneBot11MessageV1", () => {
         group_id: "20002",
         user_id: "30003",
         message: [{ type: "text", data: { text: "/model gpt-5" } }],
-        sender: { nickname: "Alice" }
+        sender: { nickname: "Alice" },
       },
-      options
+      options,
     );
 
     expect(message?.trigger).toEqual({ kind: "command" });
@@ -213,11 +209,11 @@ describe("parseOneBot11MessageV1", () => {
         user_id: "30003",
         message: [
           { type: "at", data: { qq: "10001" } },
-          { type: "text", data: { text: "  /model gpt-5" } }
+          { type: "text", data: { text: "  /model gpt-5" } },
         ],
-        sender: { nickname: "Alice" }
+        sender: { nickname: "Alice" },
       },
-      options
+      options,
     );
 
     expect(message?.trigger).toEqual({ kind: "command" });
@@ -235,11 +231,11 @@ describe("parseOneBot11MessageV1", () => {
         user_id: "30003",
         message: [
           { type: "text", data: { text: "/模型 qwen " } },
-          { type: "at", data: { qq: "10001" } }
+          { type: "at", data: { qq: "10001" } },
         ],
-        sender: { nickname: "Alice" }
+        sender: { nickname: "Alice" },
       },
-      options
+      options,
     );
 
     expect(message?.trigger).toEqual({ kind: "command" });
@@ -257,11 +253,11 @@ describe("parseOneBot11MessageV1", () => {
         user_id: "30003",
         message: [
           { type: "at", data: { qq: "40004" } },
-          { type: "text", data: { text: " /model gpt-5" } }
+          { type: "text", data: { text: " /model gpt-5" } },
         ],
-        sender: { nickname: "Alice" }
+        sender: { nickname: "Alice" },
       },
-      options
+      options,
     );
 
     expect(message?.trigger).toBeUndefined();
@@ -281,11 +277,11 @@ describe("parseOneBot11MessageV1", () => {
           { type: "at", data: { qq: "10001" } },
           { type: "text", data: { text: " " } },
           { type: "at", data: { qq: "10001" } },
-          { type: "text", data: { text: "   /agent-status" } }
+          { type: "text", data: { text: "   /agent-status" } },
         ],
-        sender: { nickname: "Alice" }
+        sender: { nickname: "Alice" },
       },
-      options
+      options,
     );
 
     expect(message?.trigger).toEqual({ kind: "command" });
@@ -298,8 +294,8 @@ describe("parseOneBot11MessageV1", () => {
         { type: "at", data: { qq: "10001" } },
         { type: "text", data: { text: " " } },
         { type: "at", data: { qq: "40004" } },
-        { type: "text", data: { text: " /model gpt-5" } }
-      ]
+        { type: "text", data: { text: " /model gpt-5" } },
+      ],
     ],
     [
       "other then self",
@@ -307,9 +303,9 @@ describe("parseOneBot11MessageV1", () => {
         { type: "at", data: { qq: "40004" } },
         { type: "text", data: { text: " " } },
         { type: "at", data: { qq: "10001" } },
-        { type: "text", data: { text: " /model gpt-5" } }
-      ]
-    ]
+        { type: "text", data: { text: " /model gpt-5" } },
+      ],
+    ],
   ])(
     "blocks a command when mentioning another user first: %s",
     (_name, segments) => {
@@ -323,13 +319,13 @@ describe("parseOneBot11MessageV1", () => {
           group_id: "20002",
           user_id: "30003",
           message: segments,
-          sender: { nickname: "Alice" }
+          sender: { nickname: "Alice" },
         },
-        options
+        options,
       );
 
       expect(message?.trigger).toEqual({ kind: "mention" });
-    }
+    },
   );
 
   test("keeps a parameterless message segment whose OneBot data is null", () => {
@@ -345,11 +341,11 @@ describe("parseOneBot11MessageV1", () => {
         message: [
           { type: "text", data: { text: "before" } },
           { type: "shake", data: null },
-          { type: "text", data: { text: "after" } }
+          { type: "text", data: { text: "after" } },
         ],
-        sender: { nickname: "Alice" }
+        sender: { nickname: "Alice" },
       },
-      options
+      options,
     );
 
     expect(message?.content).toBe("before[CQ:shake]after");
@@ -366,15 +362,15 @@ describe("parseOneBot11MessageV1", () => {
         group_id: "20002",
         user_id: "30003",
         message: " ",
-        sender: { nickname: " ", card: " " }
+        sender: { nickname: " ", card: " " },
       },
-      options
+      options,
     );
 
     expect(message?.sender).toEqual({
       id: "30003",
       username: "30003",
-      isSelf: false
+      isSelf: false,
     });
     expect(message?.content).toBe(" ");
   });

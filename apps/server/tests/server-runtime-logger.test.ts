@@ -22,35 +22,33 @@ const tempDirectories = new Set<string>();
 afterEach(async () => {
   await Promise.all(
     [...tempDirectories].map((directory) =>
-      rm(directory, { recursive: true, force: true })
-    )
+      rm(directory, { recursive: true, force: true }),
+    ),
   );
   tempDirectories.clear();
 });
 
 describe("server runtime logger", () => {
   test("is exported from the server package", () => {
-    expect(typeof runtimeLogging().createServerRuntimeLogger).toBe(
-      "function"
-    );
+    expect(typeof runtimeLogging().createServerRuntimeLogger).toBe("function");
     expect(typeof runtimeLogging().resolveServerLogPath).toBe("function");
   });
 
   test("writes the shutdown tail under the repository log path with configured secrets redacted", async () => {
     const directory = await createTempDirectory();
     const moduleUrl = pathToFileURL(
-      join(directory, "apps", "server", "dist", "main.js")
+      join(directory, "apps", "server", "dist", "main.js"),
     ).href;
     const logPath = join(directory, ".huanlink", "logs", "server.jsonl");
     const oneBotToken = "onebot-server-secret";
     const logger = runtimeLogging().createServerRuntimeLogger({
       moduleUrl,
-      config: serverConfig(oneBotToken)
+      config: serverConfig(oneBotToken),
     });
 
     expect(runtimeLogging().resolveServerLogPath(moduleUrl)).toBe(logPath);
     logger.info("shutdown tail", {
-      gatewayCredential: oneBotToken
+      gatewayCredential: oneBotToken,
     });
     await logger.close();
 
@@ -62,7 +60,7 @@ describe("server runtime logger", () => {
   test("redacts configured URL credentials and query values from error logs", async () => {
     const directory = await createTempDirectory();
     const moduleUrl = pathToFileURL(
-      join(directory, "apps", "server", "dist", "main.js")
+      join(directory, "apps", "server", "dist", "main.js"),
     ).href;
     const logPath = join(directory, ".huanlink", "logs", "server.jsonl");
     const config = serverConfig("onebot-token");
@@ -72,13 +70,13 @@ describe("server runtime logger", () => {
       "https://deepseek-user-secret:deepseek-password-secret@api.deepseek.com/beta?session=deepseek-query-secret";
     const logger = runtimeLogging().createServerRuntimeLogger({
       moduleUrl,
-      config
+      config,
     });
 
     logger.error("provider connection failed", {
       error: new Error(
-        `${config.channels[0]!.url} ${config.mainAgent!.baseURL}`
-      )
+        `${config.channels[0]!.url} ${config.mainAgent!.baseURL}`,
+      ),
     });
     await logger.close();
 
@@ -89,7 +87,7 @@ describe("server runtime logger", () => {
       "onebot-query-secret",
       "deepseek-user-secret",
       "deepseek-password-secret",
-      "deepseek-query-secret"
+      "deepseek-query-secret",
     ]) {
       expect(raw).not.toContain(secret);
     }
@@ -112,7 +110,7 @@ function serverConfig(oneBotToken: string): ServerChannelRuntimeConfig {
       provider: "deepseek",
       modelId: "deepseek-v4-flash",
       baseURL: "https://api.deepseek.com/beta",
-      apiKeyEnv: "DEEPSEEK_API_KEY"
+      apiKeyEnv: "DEEPSEEK_API_KEY",
     },
     channels: [
       {
@@ -121,11 +119,11 @@ function serverConfig(oneBotToken: string): ServerChannelRuntimeConfig {
         url: "ws://127.0.0.1:3001/",
         inboundPolicy: {
           groups: { mode: "allowlist", ids: ["20002"] },
-          directs: { mode: "denylist", ids: [] }
+          directs: { mode: "denylist", ids: [] },
         },
         enableUnsafePrivilegedOperations: false,
-        accessToken: oneBotToken
-      }
+        accessToken: oneBotToken,
+      },
     ],
     agents: [
       {
@@ -134,13 +132,13 @@ function serverConfig(oneBotToken: string): ServerChannelRuntimeConfig {
         transport: "a2a",
         origin: "http://127.0.0.1:4000",
         skillId: "codex-code-task",
-        enabled: true
-      }
+        enabled: true,
+      },
     ],
     sources: {
       mainAgent: "server/main-agent.json",
       channels: ["server/channels/onebot11.json"],
-      agents: ["server/agents/codex-local.json"]
-    }
+      agents: ["server/agents/codex-local.json"],
+    },
   };
 }

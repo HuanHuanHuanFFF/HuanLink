@@ -2,7 +2,7 @@ import type {
   AgentCallContinuator,
   AgentCallInvoker,
   AgentCallReader,
-  RuntimeLogger
+  RuntimeLogger,
 } from "@huanlink/core";
 import { NoopRuntimeLogger } from "@huanlink/core";
 import {
@@ -11,19 +11,19 @@ import {
   createTaskContinuationTool,
   createTaskStatusTool,
   type OpenAiAgentsRunContext,
-  type OpenAiAgentsRunner
+  type OpenAiAgentsRunner,
 } from "@huanlink/integration-openai-agents";
 import {
   Agent,
   type Model,
   type ModelSettings,
-  type Tool
+  type Tool,
 } from "@openai/agents";
 
 import { createBestEffortRuntimeLogger } from "./best-effort-runtime-logger.js";
 import {
   createChannelReplyTool,
-  type CreateChannelReplyToolOptions
+  type CreateChannelReplyToolOptions,
 } from "./channel-reply-tool.js";
 
 export type MainAgentModelBinding = {
@@ -46,31 +46,31 @@ export type CreatePhase3MainAgentRuntimeOptions = {
 };
 
 export function createPhase3MainAgentRuntime(
-  options: CreatePhase3MainAgentRuntimeOptions
+  options: CreatePhase3MainAgentRuntimeOptions,
 ): OpenAiAgentsRuntime {
   const logger = createBestEffortRuntimeLogger(
-    options.logger ?? new NoopRuntimeLogger()
+    options.logger ?? new NoopRuntimeLogger(),
   );
   const submitTool = createCodexAgentCallTool({
     invoker: options.invoker,
     skillId: options.codexSkillId,
-    logger: logger.child({ source: "main_agent.tool.submit" })
+    logger: logger.child({ source: "main_agent.tool.submit" }),
   });
   const taskStatusTool = createTaskStatusTool({
     reader: options.taskReader,
-    logger: logger.child({ source: "main_agent.tool.status" })
+    logger: logger.child({ source: "main_agent.tool.status" }),
   });
   const taskContinuationTool = createTaskContinuationTool({
     reader: options.taskReader,
     continuator: options.taskContinuator,
-    logger: logger.child({ source: "main_agent.tool.continue" })
+    logger: logger.child({ source: "main_agent.tool.continue" }),
   });
   const channelReplyTool =
     options.channelReply === undefined
       ? undefined
       : createChannelReplyTool({
           ...options.channelReply,
-          logger: logger.child({ source: "main_agent.tool.reply" })
+          logger: logger.child({ source: "main_agent.tool.reply" }),
         });
   const agent = new Agent<OpenAiAgentsRunContext>({
     name: "HuanLink MainAgent",
@@ -89,7 +89,7 @@ export function createPhase3MainAgentRuntime(
       "When receiving an AgentCall terminal notification, summarize that result with the supplied latest context.",
       "If the latest context contains an explicit, unambiguous follow-up that the user already authorized and no confirmation is required, submit that next task as a new async AgentCall in the same session.",
       "Never repeat the completed task or invent a follow-up; a task already accepted or completed in the supplied result or context is not pending and must not be submitted again.",
-      "Include the completed result and any newly accepted task ID in the user-facing response; if an authorized follow-up needs a material choice, ask the QQ user instead."
+      "Include the completed result and any newly accepted task ID in the user-facing response; if an authorized follow-up needs a material choice, ask the QQ user instead.",
     ].join(" "),
     model: options.modelBinding?.model ?? "gpt-5.4-mini",
     ...(options.modelBinding?.modelSettings === undefined
@@ -100,12 +100,12 @@ export function createPhase3MainAgentRuntime(
       taskStatusTool,
       taskContinuationTool,
       ...(channelReplyTool === undefined ? [] : [channelReplyTool]),
-      ...(options.additionalTools ?? [])
-    ]
+      ...(options.additionalTools ?? []),
+    ],
   });
 
   return new OpenAiAgentsRuntime({
     agent,
-    ...(options.runner === undefined ? {} : { runner: options.runner })
+    ...(options.runner === undefined ? {} : { runner: options.runner }),
   });
 }

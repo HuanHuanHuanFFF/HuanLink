@@ -1,12 +1,9 @@
-import type {
-  RuntimeLogFields,
-  RuntimeLogger
-} from "@huanlink/core";
+import type { RuntimeLogFields, RuntimeLogger } from "@huanlink/core";
 
 class BestEffortRuntimeLogger implements RuntimeLogger {
   constructor(
     private readonly target: RuntimeLogger,
-    private readonly bindings: RuntimeLogFields = {}
+    private readonly bindings: RuntimeLogFields = {},
   ) {}
 
   debug(message: string, fields?: RuntimeLogFields): void {
@@ -28,19 +25,19 @@ class BestEffortRuntimeLogger implements RuntimeLogger {
   child(bindings: RuntimeLogFields): RuntimeLogger {
     return new BestEffortRuntimeLogger(this.target, {
       ...snapshotFields(this.bindings),
-      ...snapshotFields(bindings)
+      ...snapshotFields(bindings),
     });
   }
 
   private write(
     level: "debug" | "info" | "warn" | "error",
     message: string,
-    fields?: RuntimeLogFields
+    fields?: RuntimeLogFields,
   ): void {
     try {
       this.target[level](
         message,
-        snapshotFields({ ...this.bindings, ...(fields ?? {}) })
+        snapshotFields({ ...this.bindings, ...(fields ?? {}) }),
       );
     } catch {
       // Runtime logging must never change the business operation.
@@ -49,7 +46,7 @@ class BestEffortRuntimeLogger implements RuntimeLogger {
 }
 
 export function createBestEffortRuntimeLogger(
-  logger: RuntimeLogger
+  logger: RuntimeLogger,
 ): RuntimeLogger {
   return logger instanceof BestEffortRuntimeLogger
     ? logger
@@ -67,7 +64,7 @@ function snapshotFields(fields: RuntimeLogFields): RuntimeLogFields {
 
 function snapshotValue(
   value: unknown,
-  seen: WeakMap<object, unknown>
+  seen: WeakMap<object, unknown>,
 ): unknown {
   if (value === null || typeof value !== "object") {
     return value;
@@ -90,7 +87,7 @@ function snapshotValue(
     for (const [key, nested] of Object.entries(value)) {
       (snapshot as unknown as Record<string, unknown>)[key] = snapshotValue(
         nested,
-        seen
+        seen,
       );
     }
     return snapshot;

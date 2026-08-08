@@ -9,7 +9,7 @@ import type { ForwardWebSocketOneBot11ChannelV1Options } from "./types.js";
  * 这里只创建 Transport 并注入 Adapter；连接状态与协议映射仍在各自模块内。
  */
 export function createForwardWebSocketOneBot11ChannelAdapterV1(
-  options: ForwardWebSocketOneBot11ChannelV1Options
+  options: ForwardWebSocketOneBot11ChannelV1Options,
 ): OneBot11ChannelAdapterV1 {
   const logger = options.logger ?? new NoopRuntimeLogger();
   const transport = new ForwardWebSocketOneBot11Transport({
@@ -24,11 +24,13 @@ export function createForwardWebSocketOneBot11ChannelAdapterV1(
       ? {}
       : { reconnectDelaysMs: options.reconnectDelaysMs }),
     ...(options.onError === undefined ? {} : { onError: options.onError }),
-    logger
+    logger,
   });
   return new OneBot11ChannelAdapterV1({
     channelId: options.channelId,
-    ...(options.accountId === undefined ? {} : { accountId: options.accountId }),
+    ...(options.accountId === undefined
+      ? {}
+      : { accountId: options.accountId }),
     transport,
     ...(options.fileUpload === undefined
       ? {}
@@ -37,6 +39,6 @@ export function createForwardWebSocketOneBot11ChannelAdapterV1(
       ? {}
       : { forwardMessages: options.forwardMessages }),
     ...(options.onError === undefined ? {} : { onError: options.onError }),
-    logger
+    logger,
   });
 }

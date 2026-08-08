@@ -1,6 +1,6 @@
 import {
   TaskNotCancelableError,
-  UnsupportedOperationError
+  UnsupportedOperationError,
 } from "@a2a-js/sdk/client";
 import { type RuntimeLogFields } from "@huanlink/core";
 
@@ -19,31 +19,30 @@ const NETWORK_ERROR_CODES = new Set([
   "UND_ERR_BODY_TIMEOUT",
   "UND_ERR_CONNECT_TIMEOUT",
   "UND_ERR_HEADERS_TIMEOUT",
-  "UND_ERR_SOCKET"
+  "UND_ERR_SOCKET",
 ]);
 const ABORT_ERROR_CODES = new Set(["ABORT_ERR", "ERR_CANCELED"]);
 const RETRYABLE_FETCH_TYPE_ERROR_MESSAGES = new Set([
   "fetch failed",
-  "terminated"
+  "terminated",
 ]);
 
 export function errorLogFields(
   error: unknown,
-  categoryOverride?: ErrorCategory
+  categoryOverride?: ErrorCategory,
 ): RuntimeLogFields {
   const errorCode = safeErrorCode(error);
   return {
     errorType: safeErrorType(error),
     errorMessageLength: safeOwnStringLength(error, "message"),
-    errorCategory:
-      categoryOverride ?? classifyErrorCategory(error, errorCode),
-    ...(errorCode === undefined ? {} : { errorCode })
+    errorCategory: categoryOverride ?? classifyErrorCategory(error, errorCode),
+    ...(errorCode === undefined ? {} : { errorCode }),
   };
 }
 
 function classifyErrorCategory(
   error: unknown,
-  errorCode: string | undefined
+  errorCode: string | undefined,
 ): ErrorCategory {
   if (errorCode !== undefined && ABORT_ERROR_CODES.has(errorCode)) {
     return "abort";
@@ -99,14 +98,14 @@ function safeOwnDataValue(value: unknown, key: string): unknown {
 export function isUnsupportedOperation(error: unknown): boolean {
   return hasCause(
     error,
-    (candidate) => candidate instanceof UnsupportedOperationError
+    (candidate) => candidate instanceof UnsupportedOperationError,
   );
 }
 
 export function isTaskNotCancelable(error: unknown): boolean {
   return hasCause(
     error,
-    (candidate) => candidate instanceof TaskNotCancelableError
+    (candidate) => candidate instanceof TaskNotCancelableError,
   );
 }
 
@@ -127,11 +126,15 @@ export function isRetryableObservationError(error: unknown): boolean {
 
 function hasCause(
   error: unknown,
-  predicate: (candidate: unknown) => boolean
+  predicate: (candidate: unknown) => boolean,
 ): boolean {
   let candidate = error;
   const seen = new Set<unknown>();
-  while (candidate !== undefined && candidate !== null && !seen.has(candidate)) {
+  while (
+    candidate !== undefined &&
+    candidate !== null &&
+    !seen.has(candidate)
+  ) {
     if (predicate(candidate)) {
       return true;
     }
