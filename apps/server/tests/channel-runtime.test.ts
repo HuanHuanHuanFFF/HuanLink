@@ -588,9 +588,11 @@ describe("ChannelRuntime", () => {
     releaseFirst();
 
     await expect(first).resolves.toMatchObject({ messageId: "sent-first" });
-    await expect(queued).rejects.toThrow(
-      "Channel target is outside the allowed scope"
-    );
+    await expect(queued).rejects.toMatchObject({
+      name: "ChannelOperationError",
+      code: "invalid_target",
+      message: "Channel target is outside the allowed scope"
+    });
     expect(send).toHaveBeenCalledOnce();
     await runtime.close();
   });

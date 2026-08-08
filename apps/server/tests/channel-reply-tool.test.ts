@@ -11,6 +11,7 @@ import { Agent, RunContext, tool } from "@openai/agents";
 import { z } from "zod";
 
 import { createChannelReplyTool } from "../src/channel-reply-tool.js";
+import { createChannelRuntime } from "../src/channel-runtime.js";
 import { createPhase3MainAgentRuntime } from "../src/main-agent-runtime.js";
 
 function inboundMessage(
@@ -243,6 +244,45 @@ describe("current-session reply Tool", () => {
           "OneBot 11 WebSocket is not connected: connection closed before dispatch"
       }
     });
+  });
+
+  test("returns error when ChannelRuntime rejects the send before platform dispatch", async () => {
+    const sessions = new InMemoryConversationSessionStore();
+    sessions.appendChannelMessage("session-channel", inboundMessage("message-1"));
+    const adapter = fakeAdapter();
+    const runtime = createChannelRuntime({
+      channels: [
+        {
+          adapter,
+          inboundPolicy: {
+            groups: { mode: "allowlist", ids: ["10001"] },
+            directs: { mode: "denylist", ids: [] }
+          }
+        }
+      ]
+    });
+    await runtime.start();
+    const replyTool = createChannelReplyTool({
+      sessions,
+      resolveAdapter: (channelId) => runtime.resolveAdapter(channelId)
+    });
+    await runtime.close();
+    const argumentsJson = JSON.stringify({
+      parts: [{ type: "text", text: "must not be sent" }]
+    });
+
+    const output = await replyTool.invoke(
+      runContext("session-channel"),
+      argumentsJson,
+      { toolCall: toolCall("call-runtime-closed", argumentsJson) }
+    );
+
+    expect(JSON.parse(String(output))).toEqual({
+      status: "error",
+      tool: "reply",
+      error: "ChannelRuntime is closed"
+    });
+    expect(adapter.send).not.toHaveBeenCalled();
   });
 
   test("does not duplicate a safe transport summary already contained in the Adapter error", async () => {

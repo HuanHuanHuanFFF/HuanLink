@@ -400,27 +400,51 @@ export function createChannelRuntime(
     const registration = registrations.get(route.channelId);
     if (registration === undefined) {
       return Promise.reject(
-        new Error(`No Channel Adapter is registered for ${route.channelId}`)
+        new ChannelOperationError(
+          "invalid_target",
+          `No Channel Adapter is registered for ${route.channelId}`
+        )
       );
     }
     if (closed) {
-      return Promise.reject(new Error("ChannelRuntime is closed"));
+      return Promise.reject(
+        new ChannelOperationError(
+          "temporarily_unavailable",
+          "ChannelRuntime is closed"
+        )
+      );
     }
     if (!started) {
-      return Promise.reject(new Error("ChannelRuntime is not started"));
+      return Promise.reject(
+        new ChannelOperationError(
+          "temporarily_unavailable",
+          "ChannelRuntime is not started"
+        )
+      );
     }
     if (!isRegisteredRouteAllowed(registration, route)) {
-      return Promise.reject(new Error("Channel target is outside the allowed scope"));
+      return Promise.reject(
+        new ChannelOperationError(
+          "invalid_target",
+          "Channel target is outside the allowed scope"
+        )
+      );
     }
 
     const sessionId = channelSessionIdFor(route);
     const previous = egressTails.get(sessionId) ?? Promise.resolve();
     const current = previous.catch(() => undefined).then(() => {
       if (closed) {
-        throw new Error("ChannelRuntime is closed");
+        throw new ChannelOperationError(
+          "temporarily_unavailable",
+          "ChannelRuntime is closed"
+        );
       }
       if (!isRegisteredRouteAllowed(registration, route)) {
-        throw new Error("Channel target is outside the allowed scope");
+        throw new ChannelOperationError(
+          "invalid_target",
+          "Channel target is outside the allowed scope"
+        );
       }
       return operation();
     });
