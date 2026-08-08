@@ -69,7 +69,7 @@ export type ConversationTimelineEntry =
   | ConversationAgentToolCallEntry
   | ConversationAgentToolResultEntry;
 
-/** 进程存活期间的一份完整 Channel Conversation Session。 */
+/** 一份完整的 Channel Conversation Session；生命周期由 Store 实现决定。 */
 export type ConversationSession = {
   readonly metadata: ConversationSessionMetadata;
   readonly timeline: readonly ConversationTimelineEntry[];

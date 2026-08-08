@@ -1,5 +1,4 @@
 import {
-  assertValidChannelConversationRoute,
   assertValidInboundChannelMessage,
   type ChannelConversationRouteV1,
   type InboundChannelMessageV1,
@@ -11,12 +10,23 @@ import type {
   AppendConversationAgentToolResult,
   ConversationAgentToolCallEntry,
   ConversationChannelMessageEntry,
-  ConversationOutboundDelivery,
   ConversationSession,
   ConversationSessionMetadata,
   ConversationTimelineEntry,
   RecordConversationOutboundDelivery,
 } from "./conversation-session.js";
+import {
+  assertPendingConversationTarget,
+  assertSameChannelMessageSession,
+  channelMessageKey,
+  createPendingConversationOutboundDelivery,
+  isSameConversationOutboundDelivery,
+  isSameInboundChannelMessage,
+  isSamePendingConversationOutboundDelivery,
+  type PendingConversationOutboundDelivery,
+  validateConversationOutboundDeliveryRecord,
+} from "./conversation-session-facts.js";
+import type { ConversationSessionStore } from "./conversation-session-store.js";
 import {
   cloneChannelConversationRoute,
   cloneConversationJsonRecord,
@@ -28,7 +38,6 @@ import {
 import {
   isSameConversationRoute,
   requireConversationIdentifier,
-  requireConversationUtcTimestamp,
   validateConversationToolIdentity,
 } from "./conversation-session-validation.js";
 
@@ -42,25 +51,18 @@ type MessageLocation = {
   entry: ConversationChannelMessageEntry;
 };
 
-type PendingOutboundDelivery = {
-  targetSessionId: SessionId;
-  route: ChannelConversationRouteV1;
-  contentFormat: string;
-  outbound: ConversationOutboundDelivery;
-};
-
 /**
  * B07 的进程内结构化 Conversation Session 存储。
  *
  * 它只保存和合并事实，不负责把时间线投影成特定模型的输入，也不提供
  * 跨进程持久化。
  */
-export class InMemoryConversationSessionStore {
+export class InMemoryConversationSessionStore implements ConversationSessionStore {
   private readonly sessions = new Map<SessionId, MutableConversationSession>();
   private readonly messageLocations = new Map<string, MessageLocation>();
   private readonly pendingOutboundDeliveries = new Map<
     string,
-    PendingOutboundDelivery
+    PendingConversationOutboundDelivery
   >();
 
   /** 追加平台观测消息；完全相同的重复事实幂等，冲突事实拒绝覆盖。 */
@@ -73,7 +75,7 @@ export class InMemoryConversationSessionStore {
     const pending = this.pendingOutboundDeliveries.get(key);
     const existing = this.messageLocations.get(key);
     if (existing !== undefined) {
-      assertSameMessageSession(key, sessionId, existing.sessionId);
+      assertSameChannelMessageSession(key, sessionId, existing.sessionId);
       if (
         existing.entry.observed === undefined ||
         !isSameInboundChannelMessage(existing.entry.observed, message)
@@ -83,7 +85,7 @@ export class InMemoryConversationSessionStore {
         );
       }
       if (pending !== undefined) {
-        assertPendingTarget(
+        assertPendingConversationTarget(
           pending,
           key,
           sessionId,
@@ -102,7 +104,10 @@ export class InMemoryConversationSessionStore {
       if (pending !== undefined) {
         if (
           existing.entry.outbound !== undefined &&
-          !isSameOutboundDelivery(existing.entry.outbound, pending.outbound)
+          !isSameConversationOutboundDelivery(
+            existing.entry.outbound,
+            pending.outbound,
+          )
         ) {
           throw new Error(
             `Channel message ${message.messageId} already has a different outbound association`,
@@ -120,7 +125,7 @@ export class InMemoryConversationSessionStore {
     }
 
     if (pending !== undefined) {
-      assertPendingTarget(
+      assertPendingConversationTarget(
         pending,
         key,
         sessionId,
@@ -161,41 +166,7 @@ export class InMemoryConversationSessionStore {
     targetSessionId: SessionId,
     delivery: RecordConversationOutboundDelivery,
   ): void {
-    requireConversationIdentifier(
-      targetSessionId,
-      "Target conversation sessionId",
-    );
-    assertValidChannelConversationRoute(delivery.route);
-    requireConversationIdentifier(
-      delivery.contentFormat,
-      "Conversation content format",
-    );
-    requireConversationIdentifier(
-      delivery.receipt.channelId,
-      "Delivery receipt channelId",
-    );
-    requireConversationIdentifier(
-      delivery.receipt.messageId,
-      "Delivery receipt messageId",
-    );
-    requireConversationUtcTimestamp(
-      delivery.sentAt,
-      "Outbound delivery sentAt",
-    );
-    requireConversationIdentifier(delivery.runId, "Outbound delivery runId");
-    requireConversationIdentifier(
-      delivery.toolCallId,
-      "Outbound delivery toolCallId",
-    );
-    requireConversationIdentifier(
-      delivery.sourceSessionId,
-      "Outbound delivery sourceSessionId",
-    );
-    if (delivery.receipt.channelId !== delivery.route.channelId) {
-      throw new Error(
-        "Delivery receipt channelId must match the target route channelId",
-      );
-    }
+    validateConversationOutboundDeliveryRecord(targetSessionId, delivery);
 
     const sourceSession = this.sessions.get(delivery.sourceSessionId);
     const sourceToolCall =
@@ -216,19 +187,14 @@ export class InMemoryConversationSessionStore {
       delivery.receipt.channelId,
       delivery.receipt.messageId,
     );
-    const outbound: ConversationOutboundDelivery = {
-      sentAt: delivery.sentAt,
-      runId: delivery.runId,
-      toolCallId: delivery.toolCallId,
-      sourceSessionId: delivery.sourceSessionId,
-      origin:
-        delivery.sourceSessionId === targetSessionId
-          ? ("current_session" as const)
-          : ("cross_session" as const),
-    };
+    const pending = createPendingConversationOutboundDelivery(
+      targetSessionId,
+      delivery,
+    );
+    const outbound = pending.outbound;
     const existing = this.messageLocations.get(key);
     if (existing !== undefined) {
-      assertSameMessageSession(key, targetSessionId, existing.sessionId);
+      assertSameChannelMessageSession(key, targetSessionId, existing.sessionId);
       const targetSession = this.requireSession(targetSessionId);
       assertSessionMetadata(
         targetSession,
@@ -245,7 +211,9 @@ export class InMemoryConversationSessionStore {
         );
       }
       if (existing.entry.outbound !== undefined) {
-        if (!isSameOutboundDelivery(existing.entry.outbound, outbound)) {
+        if (
+          !isSameConversationOutboundDelivery(existing.entry.outbound, outbound)
+        ) {
           throw new Error(
             `Channel message ${delivery.receipt.messageId} already has a different outbound association`,
           );
@@ -266,15 +234,11 @@ export class InMemoryConversationSessionStore {
         delivery.contentFormat,
       );
     }
-    const pending: PendingOutboundDelivery = {
-      targetSessionId,
-      route: cloneChannelConversationRoute(delivery.route),
-      contentFormat: delivery.contentFormat,
-      outbound,
-    };
     const previousPending = this.pendingOutboundDeliveries.get(key);
     if (previousPending !== undefined) {
-      if (!isSamePendingOutboundDelivery(previousPending, pending)) {
+      if (
+        !isSamePendingConversationOutboundDelivery(previousPending, pending)
+      ) {
         throw new Error(
           `Channel message ${delivery.receipt.messageId} already has a different outbound association`,
         );
@@ -415,28 +379,6 @@ export class InMemoryConversationSessionStore {
   }
 }
 
-function channelMessageKey(channelId: string, messageId: string): string {
-  return JSON.stringify([channelId, messageId]);
-}
-
-function assertPendingTarget(
-  pending: PendingOutboundDelivery,
-  key: string,
-  sessionId: SessionId,
-  route: ChannelConversationRouteV1,
-  contentFormat: string,
-): void {
-  assertSameMessageSession(key, sessionId, pending.targetSessionId);
-  if (!isSameConversationRoute(pending.route, route)) {
-    throw new Error(`Conversation session ${sessionId} route cannot change`);
-  }
-  if (pending.contentFormat !== contentFormat) {
-    throw new Error(
-      `Conversation session ${sessionId} content format cannot change`,
-    );
-  }
-}
-
 function assertSessionMetadata(
   session: MutableConversationSession,
   sessionId: SessionId,
@@ -449,65 +391,6 @@ function assertSessionMetadata(
   if (session.metadata.contentFormat !== contentFormat) {
     throw new Error(
       `Conversation session ${sessionId} content format cannot change`,
-    );
-  }
-}
-
-function isSameInboundChannelMessage(
-  left: InboundChannelMessageV1,
-  right: InboundChannelMessageV1,
-): boolean {
-  return (
-    left.messageId === right.messageId &&
-    isSameConversationRoute(left.route, right.route) &&
-    left.sender.id === right.sender.id &&
-    left.sender.username === right.sender.username &&
-    left.sender.displayName === right.sender.displayName &&
-    left.sender.isSelf === right.sender.isSelf &&
-    left.receivedAt === right.receivedAt &&
-    left.content === right.content &&
-    left.contentFormat === right.contentFormat &&
-    left.contentOmitted?.reason === right.contentOmitted?.reason &&
-    left.contentOmitted?.originalSizeBytes ===
-      right.contentOmitted?.originalSizeBytes &&
-    left.replyToMessageId === right.replyToMessageId &&
-    left.trigger?.kind === right.trigger?.kind
-  );
-}
-
-function isSameOutboundDelivery(
-  left: ConversationOutboundDelivery,
-  right: ConversationOutboundDelivery,
-): boolean {
-  return (
-    left.sentAt === right.sentAt &&
-    left.runId === right.runId &&
-    left.toolCallId === right.toolCallId &&
-    left.sourceSessionId === right.sourceSessionId &&
-    left.origin === right.origin
-  );
-}
-
-function isSamePendingOutboundDelivery(
-  left: PendingOutboundDelivery,
-  right: PendingOutboundDelivery,
-): boolean {
-  return (
-    left.targetSessionId === right.targetSessionId &&
-    isSameConversationRoute(left.route, right.route) &&
-    left.contentFormat === right.contentFormat &&
-    isSameOutboundDelivery(left.outbound, right.outbound)
-  );
-}
-
-function assertSameMessageSession(
-  key: string,
-  incomingSessionId: SessionId,
-  existingSessionId: SessionId,
-): void {
-  if (incomingSessionId !== existingSessionId) {
-    throw new Error(
-      `Channel message ${key} belongs to session ${existingSessionId}, not ${incomingSessionId}`,
     );
   }
 }
