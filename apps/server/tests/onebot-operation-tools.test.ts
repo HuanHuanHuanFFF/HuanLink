@@ -102,7 +102,8 @@ function operationsFixture() {
 }
 
 function createFixture(input: {
-  enableUnsafePrivilegedOperations?: boolean;
+  unsafePrivilegedChannelIds?: readonly string[];
+  operationChannelIds?: readonly string[];
   runtime?: Pick<
     ChannelRuntime,
     | "isRouteAllowed"
@@ -114,7 +115,21 @@ function createFixture(input: {
   const sessions = new InMemoryConversationSessionStore();
   sessions.appendChannelMessage(SOURCE_SESSION_ID, inboundMessage("101"));
   const operationFixture = operationsFixture();
+  const operationChannelIds = input.operationChannelIds ?? ["qq-main"];
   const outboundSpy = vi.fn();
+  const resolveOperations = vi.fn((channelId: string) =>
+    operationChannelIds.includes(channelId)
+      ? operationFixture.operations
+      : undefined
+  );
+  const runOperationSpy = vi.fn((_channelId: string) => undefined);
+  const runOperation = async <T>(
+    channelId: string,
+    operation: () => Promise<T>
+  ): Promise<T> => {
+    runOperationSpy(channelId);
+    return await operation();
+  };
   const logger = new RecordingRuntimeLogger();
   const runOutbound = async <T>(
     candidate: ChannelConversationRouteV1,
@@ -125,21 +140,32 @@ function createFixture(input: {
   };
   const tools = createOneBot11OperationTools({
     sessions,
-    resolveOperations: (channelId) =>
-      channelId === "qq-main" ? operationFixture.operations : undefined,
+    resolveOperations,
     isRouteAllowed: input.runtime?.isRouteAllowed ?? ((candidate) =>
       candidate.channelId === "qq-main" &&
       candidate.conversationKind === "group" &&
       candidate.conversationId !== "99999"),
     sessionIdForRoute: input.runtime?.sessionIdForRoute ?? ((candidate) =>
       `session:${candidate.channelId}:${candidate.conversationKind}:${candidate.conversationId}`),
-    runOperation: input.runtime?.runOperation ?? (async (_channelId, operation) =>
-      await operation()),
+    runOperation: input.runtime?.runOperation ?? runOperation,
     runOutbound: input.runtime?.runOutbound ?? runOutbound,
     logger,
-    enableUnsafePrivilegedOperations: input.enableUnsafePrivilegedOperations
+    ...(input.unsafePrivilegedChannelIds === undefined
+      ? {}
+      : {
+          isUnsafePrivilegedOperationsEnabled: (channelId: string) =>
+            input.unsafePrivilegedChannelIds!.includes(channelId)
+        })
   });
-  return { sessions, ...operationFixture, outboundSpy, logger, tools };
+  return {
+    sessions,
+    ...operationFixture,
+    outboundSpy,
+    resolveOperations,
+    runOperationSpy,
+    logger,
+    tools
+  };
 }
 
 function createTestChannelRuntime(input: {
@@ -192,7 +218,9 @@ describe("OneBot 11 operation Tools", () => {
   });
 
   test("exposes explicitly enabled privileged operations without claiming approval protection", async () => {
-    const { logger, tools } = createFixture({ enableUnsafePrivilegedOperations: true });
+    const { logger, tools } = createFixture({
+      unsafePrivilegedChannelIds: ["qq-main"]
+    });
     const agent = new Agent<OpenAiAgentsRunContext>({
       name: "OneBot privileged Tool availability test",
       instructions: "Test privileged tool availability.",
@@ -496,7 +524,7 @@ describe("OneBot 11 operation Tools", () => {
       directs: { mode: "allowlist", ids: [] }
     });
     const { setGroupBan, tools } = createFixture({
-      enableUnsafePrivilegedOperations: true,
+      unsafePrivilegedChannelIds: ["qq-main"],
       runtime
     });
     const input = {
@@ -524,5 +552,74 @@ describe("OneBot 11 operation Tools", () => {
     expect(JSON.parse(String(output))).toEqual({ ok: true });
     expect(setGroupBan).toHaveBeenCalledWith(input.request.params);
     await runtime.close();
+  });
+
+  test("rejects privileged operations for a target Channel whose unsafe switch is disabled", async () => {
+    const {
+      sessions,
+      setGroupBan,
+      resolveOperations,
+      runOperationSpy,
+      logger,
+      tools
+    } = createFixture({
+      unsafePrivilegedChannelIds: ["qq-main"],
+      operationChannelIds: ["qq-main", "qq-secondary"]
+    });
+    const input = {
+      channelId: "qq-secondary",
+      request: {
+        operation: "setGroupBan",
+        params: { groupId: "99999", userId: "20002", durationSeconds: 60 }
+      }
+    };
+    const argumentsJson = JSON.stringify(input);
+
+    const output = await tools.privileged!.invoke(context(), argumentsJson, {
+      toolCall: toolCall(
+        ONEBOT11_PRIVILEGED_TOOL_NAME,
+        "call-disabled-target",
+        argumentsJson
+      )
+    });
+
+    expect(JSON.parse(String(output))).toEqual({
+      status: "error",
+      tool: ONEBOT11_PRIVILEGED_TOOL_NAME,
+      error:
+        "Unsafe privileged OneBot operations are not enabled for qq-secondary"
+    });
+    expect(resolveOperations).not.toHaveBeenCalled();
+    expect(runOperationSpy).not.toHaveBeenCalled();
+    expect(setGroupBan).not.toHaveBeenCalled();
+    expect(logger.find("onebot.operation.completed")).toMatchObject({
+      level: "info",
+      fields: {
+        channelId: "qq-secondary",
+        operation: "setGroupBan",
+        status: "error"
+      }
+    });
+    expect(sessions.getSession(SOURCE_SESSION_ID)?.timeline.slice(-2)).toEqual([
+      {
+        type: "agent_tool_call",
+        runId: "run-onebot-tools",
+        toolCallId: "call-disabled-target",
+        toolName: ONEBOT11_PRIVILEGED_TOOL_NAME,
+        arguments: input
+      },
+      {
+        type: "agent_tool_result",
+        runId: "run-onebot-tools",
+        toolCallId: "call-disabled-target",
+        toolName: ONEBOT11_PRIVILEGED_TOOL_NAME,
+        output: {
+          status: "error",
+          tool: ONEBOT11_PRIVILEGED_TOOL_NAME,
+          error:
+            "Unsafe privileged OneBot operations are not enabled for qq-secondary"
+        }
+      }
+    ]);
   });
 });

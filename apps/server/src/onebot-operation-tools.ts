@@ -166,10 +166,10 @@ export type CreateOneBot11OperationToolsOptions = {
   resolveOperations(channelId: string): OneBot11Operations | undefined;
   isRouteAllowed(route: ChannelConversationRouteV1): boolean;
   /**
-   * Exposes destructive OneBot operations without approval protection.
-   * Keep disabled unless the caller intentionally accepts that risk.
+   * Decides whether destructive OneBot operations may target a Channel.
+   * Omit the predicate unless the caller intentionally accepts that risk.
    */
-  enableUnsafePrivilegedOperations?: boolean;
+  isUnsafePrivilegedOperationsEnabled?(channelId: string): boolean;
   /** Channel Runtime owns the canonical route-to-Session mapping. */
   sessionIdForRoute(route: ChannelConversationRouteV1): SessionId;
   /** Channel Runtime owns serialization of all target-session outbound work. */
@@ -222,7 +222,7 @@ export function createOneBot11OperationTools(
         operation: async (operations) => executeStandard(options, operations, input)
       })
   });
-  const privileged = options.enableUnsafePrivilegedOperations === true
+  const privileged = options.isUnsafePrivilegedOperationsEnabled !== undefined
     ? tool<typeof privilegedParameters, OpenAiAgentsRunContext>({
         name: ONEBOT11_PRIVILEGED_TOOL_NAME,
         description:
@@ -314,6 +314,27 @@ async function executeToolCall<Input extends StandardToolInput | PrivilegedToolI
     });
     return JSON.stringify(result);
   };
+
+  if (input.toolName === ONEBOT11_PRIVILEGED_TOOL_NAME) {
+    try {
+      if (
+        input.options.isUnsafePrivilegedOperationsEnabled?.(
+          input.input.channelId
+        ) !== true
+      ) {
+        return complete(
+          errorResult(
+            input.toolName,
+            new Error(
+              `Unsafe privileged OneBot operations are not enabled for ${input.input.channelId}`
+            )
+          )
+        );
+      }
+    } catch (error) {
+      return complete(errorResult(input.toolName, error));
+    }
+  }
 
   let operations: OneBot11Operations | undefined;
   try {
