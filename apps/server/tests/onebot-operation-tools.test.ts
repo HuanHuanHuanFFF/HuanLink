@@ -445,6 +445,51 @@ describe("OneBot 11 operation Tools", () => {
     );
   });
 
+  test("keeps confirmed send data unchanged when Session association fails", async () => {
+    const { sessions, sendGroupMessage, logger, tools } = createFixture();
+    vi.spyOn(sessions, "recordOutboundDelivery").mockImplementationOnce(() => {
+      throw new Error("Session association failed");
+    });
+    const argumentsJson = JSON.stringify({
+      channelId: "qq-main",
+      request: {
+        operation: "sendGroupMessage",
+        params: {
+          groupId: "20002",
+          parts: [{ type: "text", text: "sent but untracked" }]
+        }
+      }
+    });
+
+    const output = await tools.standard.invoke(context(), argumentsJson, {
+      toolCall: toolCall(
+        ONEBOT11_STANDARD_TOOL_NAME,
+        "call-association-warning",
+        argumentsJson
+      )
+    });
+
+    expect(JSON.parse(String(output))).toEqual({ message_id: 7001 });
+    expect(sendGroupMessage).toHaveBeenCalledOnce();
+    expect(logger.entries).toContainEqual(
+      expect.objectContaining({
+        level: "warn",
+        message: "onebot.operation.session_association_failed",
+        fields: expect.objectContaining({
+          messageId: "7001",
+          errorType: "Error"
+        })
+      })
+    );
+    expect(sessions.getSession(SOURCE_SESSION_ID)?.timeline.at(-1)).toEqual({
+      type: "agent_tool_result",
+      runId: "run-onebot-tools",
+      toolCallId: "call-association-warning",
+      toolName: ONEBOT11_STANDARD_TOOL_NAME,
+      output: { message_id: 7001 }
+    });
+  });
+
   test("gates explicitly enabled privileged operations on Runtime lifecycle without route-list checks", async () => {
     const runtime = createTestChannelRuntime({
       groups: { mode: "allowlist", ids: [] },

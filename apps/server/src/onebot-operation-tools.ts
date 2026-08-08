@@ -349,10 +349,10 @@ async function executeToolCall<Input extends StandardToolInput | PrivilegedToolI
           }
         );
       } catch (error) {
-        throw new OneBot11DeliveryUncertainError(
-          `OneBot send completed but Session association failed: ${formatError(error)}`,
-          { cause: error }
-        );
+        toolLogger.warn("onebot.operation.session_association_failed", {
+          messageId: execution.delivery.messageId,
+          errorType: errorType(error)
+        });
       }
     }
     const value = asConversationJsonValue(execution.data);

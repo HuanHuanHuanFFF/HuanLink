@@ -546,6 +546,55 @@ describe("ChannelRuntime", () => {
     await runtime.close();
   });
 
+  test("rechecks the latest access policy before dispatching queued outbound work", async () => {
+    const adapter = new FakeChannelAdapter("qq-main");
+    let releaseFirst!: () => void;
+    const send = vi.spyOn(adapter, "send").mockImplementationOnce(
+      () =>
+        new Promise<DeliveryReceiptV1>((resolve) => {
+          releaseFirst = () =>
+            resolve({ channelId: "qq-main", messageId: "sent-first" });
+        })
+    );
+    const runtime = createChannelRuntime({
+      channels: [
+        {
+          adapter,
+          inboundPolicy: {
+            groups: { mode: "allowlist", ids: ["10001"] },
+            directs: { mode: "denylist", ids: [] }
+          }
+        }
+      ]
+    });
+    await runtime.start();
+    const ordered = runtime.resolveAdapter("qq-main")!;
+    const command: SendChannelMessageCommandV1 = {
+      route: {
+        channelId: "qq-main",
+        conversationKind: "group",
+        conversationId: "10001"
+      },
+      parts: [{ type: "text", text: "hello" }]
+    };
+
+    const first = ordered.send(command);
+    const queued = ordered.send(command);
+    await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
+    runtime.replaceAccessPolicy("qq-main", {
+      groups: { mode: "allowlist", ids: [] },
+      directs: { mode: "denylist", ids: [] }
+    });
+    releaseFirst();
+
+    await expect(first).resolves.toMatchObject({ messageId: "sent-first" });
+    await expect(queued).rejects.toThrow(
+      "Channel target is outside the allowed scope"
+    );
+    expect(send).toHaveBeenCalledOnce();
+    await runtime.close();
+  });
+
   test("rejects outbound work until startup completes while preserving startup events", async () => {
     const adapter = new FakeChannelAdapter("qq-main");
     let releaseStart!: () => void;

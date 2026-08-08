@@ -419,6 +419,9 @@ export function createChannelRuntime(
       if (closed) {
         throw new Error("ChannelRuntime is closed");
       }
+      if (!isRegisteredRouteAllowed(registration, route)) {
+        throw new Error("Channel target is outside the allowed scope");
+      }
       return operation();
     });
     const tail = current.then(
