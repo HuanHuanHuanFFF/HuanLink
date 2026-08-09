@@ -1,13 +1,19 @@
 import type { ConversationSessionStore } from "@huanlink/core";
 
+import type { ChannelRuntimeMessage } from "./channel-runtime.js";
+import {
+  createSessionIngressCoordinator,
+  type SessionIngressMainAgentRunner,
+} from "./session-ingress-coordinator.js";
+
 /** Channel-only Runtime contract required by the Server composition root. */
 export interface HuanLinkServerChannelRuntime {
   start(): Promise<void> | void;
   close(): Promise<void> | void;
 }
 
-/** Phase 3 lifecycle contract required by the Server composition root. */
-export interface HuanLinkServerPhase3Runtime {
+/** Phase 3 fresh-turn and lifecycle contract required by the composition root. */
+export interface HuanLinkServerPhase3Runtime extends SessionIngressMainAgentRunner {
   close(): Promise<void> | void;
 }
 
@@ -49,8 +55,9 @@ export type AssembleHuanLinkServerRuntimeOptions = {
     readonly sessionStore: ConversationSessionStore;
   }) => Awaitable<HuanLinkServerPhase3Runtime>;
   readonly createChannels: (input: {
-    readonly sessionStore: ConversationSessionStore;
-    readonly phase3: HuanLinkServerPhase3Runtime;
+    readonly onChannelMessage: (
+      input: ChannelRuntimeMessage,
+    ) => Promise<void> | void;
   }) => Awaitable<HuanLinkServerChannelRuntime>;
   readonly preflights?: readonly HuanLinkServerRuntimePreflight[];
 };
@@ -115,7 +122,13 @@ export async function assembleHuanLinkServerRuntime(
     const phase3 = await options.createPhase3({ sessionStore });
     acquired.push(phase3);
 
-    const channels = await options.createChannels({ sessionStore, phase3 });
+    const sessionIngress = createSessionIngressCoordinator({
+      sessionStore,
+      runner: phase3,
+    });
+    const channels = await options.createChannels({
+      onChannelMessage: sessionIngress.handle,
+    });
     acquired.push(channels);
 
     return createHuanLinkServerRuntime({
@@ -142,8 +155,9 @@ export async function assembleHuanLinkServerRuntime(
 /**
  * Server process lifecycle composition root.
  *
- * The Channel Runtime remains responsible only for Channel I/O. This Runtime
- * owns dependency lifecycle order but deliberately does not invoke MainAgent.
+ * The Channel Runtime remains responsible only for Channel I/O. Assembly wires
+ * its sole ingress handler through SessionIngressCoordinator; this object owns
+ * only dependency lifecycle order.
  */
 export function createHuanLinkServerRuntime(
   options: CreateHuanLinkServerRuntimeOptions,
