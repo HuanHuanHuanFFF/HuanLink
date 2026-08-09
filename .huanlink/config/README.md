@@ -25,11 +25,13 @@
 
 Server 正式入口已经只从本配置树装配 V1 Channel；旧的单群号、命令前缀和 OneBot 地址环境变量入口不再生效。环境变量只承载 JSON 明确引用的秘密值。
 
-当前 Channel-only 入口只解析实际建连所需的 Channel Token；即使声明了 MainAgent，也只校验 `apiKeyEnv` 名称而不读取对应 API Key。MainAgent 凭证会在 Agent Runtime 正式接线时再解析，因此缺少模型密钥不会阻塞纯 Channel 启动。
+仓库默认 Server 配置还显式引用 `./server/orchestration.json`。B01 的总 Runtime 静态加载器要求 `mainAgent`、`orchestration` 和 `defaultAgentId` 全部存在；默认 Agent 必须已启用且使用 A2A。它校验 MainAgent 的 `apiKeyEnv` 名称以及目标 Agent 的 `origin`、`skillId`，但不读取任何环境变量中的秘密；`agentCallPolicy.maxActiveTasksPerSession` 必须是正安全整数，仓库默认值为 `2`。
+
+当前 Channel-only 入口仍只解析实际建连所需的 Channel Token；它在 B05 前可以不声明 `orchestration`。即使声明了 MainAgent，也只校验 `apiKeyEnv` 名称而不读取对应 API Key。MainAgent 凭证会在 Agent Runtime 正式接线时再解析，因此缺少模型密钥不会阻塞纯 Channel 启动。
 
 Codex A2A Adapter 的配置加载器已经能读取 `./adapters/codex/**`，但该进程的 `main.ts` 尚未切换到加载器，当前仍使用 `HUANLINK_CODEX_*`、`HUANLINK_LOG_LEVEL` 等遗留环境变量和内置默认值。因而，现阶段修改 `adapters/codex` JSON 不会改变正在运行的 Codex Adapter；该迁移后移到 Codex Adapter 自身批次，不属于本次 Server Channel 闭环。这里记录的是已知过渡状态，不代表允许长期保留第二套正式配置来源。
 
-当前只把名单变化热重载到正在运行的 Channel：每次保存仍会完整校验 Server 配置树；除 `groups`、`directs` 的 `mode` 与 `ids` 外，任何配置变化都要求重启，并且不会与新名单部分混用。无效 JSON、缺失字段或非法 ID 会保留上一份有效名单并记录脱敏告警。文件监听属于本机文件系统上的最佳努力便利能力，确定性校验仍以进程启动为准。
+当前只把名单变化热重载到正在运行的 Channel：每次保存仍会完整校验 Server 配置树；除 `groups`、`directs` 的 `mode` 与 `ids` 外，任何配置变化都要求重启，`orchestration` 的内容或其入口引用变化同样如此，并且不会与新名单部分混用。无效 JSON、缺失字段或非法 ID 会保留上一份有效名单并记录脱敏告警。文件监听属于本机文件系统上的最佳努力便利能力，确定性校验仍以进程启动为准。
 
 正式入口目前只把名单允许的事件按 route 顺序交给统一下游出口，保留 `sender.isSelf` 和 `trigger`。消息缓冲队列、Session 写入、Agent 触发和多个外部 Agent 路由尚未接入；因此不能把“Server 已连接 Channel”理解为 QQ -> Agent 全链路已经可用。
 
