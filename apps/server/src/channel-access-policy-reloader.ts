@@ -194,10 +194,24 @@ function snapshotConfig(
       inboundPolicy: copyChannelInboundAccessPolicy(channel.inboundPolicy),
     })),
     agents: config.agents.map((agent) => ({ ...agent })),
+    ...(config.orchestration === undefined
+      ? {}
+      : {
+          orchestration: {
+            defaultAgentId: config.orchestration.defaultAgentId,
+            agentCallPolicy: {
+              maxActiveTasksPerSession:
+                config.orchestration.agentCallPolicy.maxActiveTasksPerSession,
+            },
+          },
+        }),
     sources: {
       ...(config.sources.mainAgent === undefined
         ? {}
         : { mainAgent: config.sources.mainAgent }),
+      ...(config.sources.orchestration === undefined
+        ? {}
+        : { orchestration: config.sources.orchestration }),
       channels: [...config.sources.channels],
       agents: [...config.sources.agents],
     },
@@ -239,6 +253,7 @@ function withoutInboundPolicies(config: ServerChannelRuntimeConfig): unknown {
       ({ inboundPolicy: _inboundPolicy, ...channel }) => channel,
     ),
     agents: config.agents,
+    orchestration: config.orchestration,
     sources: config.sources,
   };
 }

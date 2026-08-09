@@ -123,6 +123,69 @@ describe("Channel access policy reloader", () => {
     await reloader.close();
   });
 
+  test("keeps the orchestration configuration and its source in the restart-required snapshot", async () => {
+    const logger = new RecordingRuntimeLogger();
+    const watch = new FakeWatchFactory();
+    const initialConfig = config();
+    const candidate = config({ groups: { mode: "denylist", ids: [] } });
+    const applyPolicies = vi.fn();
+    const reloader = createChannelAccessPolicyReloader({
+      configRoot: "C:/config-root",
+      initialConfig,
+      loadConfig: async () => candidate,
+      applyPolicies,
+      watchFactory: watch.create,
+      logger,
+      debounceMs: 5,
+    });
+
+    initialConfig.orchestration!.agentCallPolicy.maxActiveTasksPerSession = 7;
+    initialConfig.sources.orchestration = "server/alternate-orchestration.json";
+    watch.watcher.emitChange("server/channels/onebot11.json");
+    await wait(30);
+
+    expect(applyPolicies).toHaveBeenCalledOnce();
+    expect(
+      logger.find("channel.access_policy.reload_rejected"),
+    ).toBeUndefined();
+    await reloader.close();
+  });
+
+  test.each(["configuration", "source"])(
+    "rejects a changed orchestration %s instead of applying a new policy",
+    async (changedField) => {
+      const logger = new RecordingRuntimeLogger();
+      const watch = new FakeWatchFactory();
+      const candidate = config({ groups: { mode: "denylist", ids: [] } });
+      if (changedField === "configuration") {
+        candidate.orchestration!.agentCallPolicy.maxActiveTasksPerSession = 3;
+      } else {
+        candidate.sources.orchestration = "server/alternate-orchestration.json";
+      }
+      const applyPolicies = vi.fn();
+      const reloader = createChannelAccessPolicyReloader({
+        configRoot: "C:/config-root",
+        initialConfig: config(),
+        loadConfig: async () => candidate,
+        applyPolicies,
+        watchFactory: watch.create,
+        logger,
+        debounceMs: 5,
+      });
+
+      watch.watcher.emitChange("server/orchestration.json");
+      await wait(30);
+
+      expect(applyPolicies).not.toHaveBeenCalled();
+      expect(
+        logger.find("channel.access_policy.reload_rejected"),
+      ).toMatchObject({
+        fields: { reason: "restart_required" },
+      });
+      await reloader.close();
+    },
+  );
+
   test("rejects a changed Channel source reference even when only the policy value differs", async () => {
     const logger = new RecordingRuntimeLogger();
     const watch = new FakeWatchFactory();
@@ -378,8 +441,13 @@ function config(
         enabled: true,
       },
     ],
+    orchestration: {
+      defaultAgentId: "codex-local",
+      agentCallPolicy: { maxActiveTasksPerSession: 2 },
+    },
     sources: {
       mainAgent: "server/main-agent.json",
+      orchestration: "server/orchestration.json",
       channels: ["server/channels/onebot11.json"],
       agents: ["server/agents/codex-local.json"],
     },

@@ -79,6 +79,22 @@ const agentFileSchema = z
   })
   .strict();
 
+const orchestrationFileSchema = z
+  .object({
+    version: z.literal(1),
+    defaultAgentId: stableIdSchema,
+    agentCallPolicy: z
+      .object({
+        maxActiveTasksPerSession: z
+          .number()
+          .int()
+          .min(1)
+          .max(Number.MAX_SAFE_INTEGER),
+      })
+      .strict(),
+  })
+  .strict();
+
 const configEntrySchema = z
   .object({
     version: z.literal(1),
@@ -90,6 +106,7 @@ const configEntrySchema = z
 const serverConfigReferenceSchema = z
   .object({
     mainAgent: z.string().optional(),
+    orchestration: z.string().optional(),
     channels: z.array(z.string()).min(1),
     agents: z.array(z.string()).default([]),
   })
@@ -120,6 +137,17 @@ type ServerAgentConfig = {
   enabled: boolean;
 };
 
+type ServerOrchestrationStaticConfig = {
+  defaultAgentId: string;
+  agentCallPolicy: {
+    maxActiveTasksPerSession: number;
+  };
+};
+
+type ServerChannelStaticConfig = Omit<ServerChannelConfig, "accessToken"> & {
+  accessTokenEnv?: string;
+};
+
 /**
  * Channel 正式入口实际需要的配置快照。
  *
@@ -134,9 +162,28 @@ export type ServerChannelRuntimeConfig = {
     }
   >;
   agents: ServerAgentConfig[];
+  orchestration?: ServerOrchestrationStaticConfig;
   /** 入口文件中的显式引用身份；引用变化必须重启，不能伪装成名单热更新。 */
   sources: {
     mainAgent?: string;
+    orchestration?: string;
+    channels: string[];
+    agents: string[];
+  };
+};
+
+/**
+ * B01 总 Runtime 在启动预检前使用的非秘密配置快照。
+ * 环境变量名会被校验，但不会在此边界读取其真实值。
+ */
+export type HuanLinkServerStaticConfig = {
+  mainAgent: ServerMainAgentStaticConfig;
+  channels: ServerChannelStaticConfig[];
+  agents: ServerAgentConfig[];
+  orchestration: ServerOrchestrationStaticConfig;
+  sources: {
+    mainAgent: string;
+    orchestration: string;
     channels: string[];
     agents: string[];
   };
@@ -162,6 +209,10 @@ export type LoadServerLocalUserConfigInput = {
 type ParsedServerConfiguration = {
   mainAgent?: {
     value: z.infer<typeof mainAgentFileSchema>;
+    relativePath: string;
+  };
+  orchestration?: {
+    value: z.infer<typeof orchestrationFileSchema>;
     relativePath: string;
   };
   channels: Array<{
@@ -222,7 +273,57 @@ export async function loadServerChannelRuntimeConfig(
       resolveChannelConfig(channel.value, channel.relativePath, env, true),
     ),
     agents: configuration.agents.map(copyAgentConfig),
+    ...(configuration.orchestration === undefined
+      ? {}
+      : {
+          orchestration: copyOrchestrationConfig(
+            configuration.orchestration.value,
+          ),
+        }),
     sources,
+  };
+}
+
+export async function loadHuanLinkServerStaticConfig(
+  input: LoadServerLocalUserConfigInput = {},
+): Promise<HuanLinkServerStaticConfig> {
+  const { configuration, sources } = await readServerConfiguration(input);
+  if (configuration.mainAgent === undefined) {
+    throw configurationError("config.json", "mainAgent: is invalid");
+  }
+  if (configuration.orchestration === undefined) {
+    throw configurationError("config.json", "orchestration: is invalid");
+  }
+
+  const defaultAgent = configuration.agents.find(
+    (agent) =>
+      agent.agentId === configuration.orchestration!.value.defaultAgentId,
+  );
+  if (defaultAgent === undefined || !defaultAgent.enabled) {
+    throw configurationError(
+      configuration.orchestration.relativePath,
+      "defaultAgentId: is invalid",
+    );
+  }
+
+  return {
+    mainAgent: {
+      provider: configuration.mainAgent.value.provider,
+      modelId: configuration.mainAgent.value.modelId,
+      baseURL: configuration.mainAgent.value.baseURL,
+      apiKeyEnv: configuration.mainAgent.value.apiKeyEnv,
+    },
+    channels: configuration.channels.map((channel) =>
+      resolveChannelStaticConfig(channel.value),
+    ),
+    agents: configuration.agents.map(copyAgentConfig),
+    orchestration: copyOrchestrationConfig(configuration.orchestration.value),
+    sources: {
+      mainAgent: configuration.mainAgent.relativePath,
+      orchestration: configuration.orchestration.relativePath,
+      channels: [...sources.channels],
+      agents: [...sources.agents],
+    },
   };
 }
 
@@ -253,6 +354,10 @@ async function readServerConfiguration(
     references.mainAgent === undefined
       ? undefined
       : validateServerReference(references.mainAgent, "mainAgent");
+  const orchestrationRelativePath =
+    references.orchestration === undefined
+      ? undefined
+      : validateServerReference(references.orchestration, "orchestration");
   const channelFiles = references.channels.map((reference) =>
     validateServerReference(reference, "channels"),
   );
@@ -271,6 +376,17 @@ async function readServerConfiguration(
             mainAgentRelativePath,
           ),
           relativePath: mainAgentRelativePath,
+        };
+  const orchestration =
+    orchestrationRelativePath === undefined
+      ? undefined
+      : {
+          value: parseConfigFile(
+            orchestrationFileSchema,
+            await readJsonObject(configRoot, orchestrationRelativePath),
+            orchestrationRelativePath,
+          ),
+          relativePath: orchestrationRelativePath,
         };
 
   const channels = await Promise.all(
@@ -306,6 +422,7 @@ async function readServerConfiguration(
   return {
     configuration: {
       ...(mainAgent === undefined ? {} : { mainAgent }),
+      ...(orchestration === undefined ? {} : { orchestration }),
       channels,
       agents,
     },
@@ -314,6 +431,9 @@ async function readServerConfiguration(
       ...(mainAgentRelativePath === undefined
         ? {}
         : { mainAgent: mainAgentRelativePath }),
+      ...(orchestrationRelativePath === undefined
+        ? {}
+        : { orchestration: orchestrationRelativePath }),
       channels: [...channelFiles],
       agents: [...agentFiles],
     },
@@ -375,25 +495,39 @@ function resolveChannelConfig(
   env: Readonly<Record<string, string | undefined>>,
   includeEnvironmentReference: boolean,
 ): ServerChannelRuntimeConfig["channels"][number] {
+  const { accessTokenEnv, ...staticConfig } =
+    resolveChannelStaticConfig(channel);
+
+  return {
+    ...staticConfig,
+    ...(includeEnvironmentReference && accessTokenEnv !== undefined
+      ? { accessTokenEnv }
+      : {}),
+    ...(accessTokenEnv === undefined
+      ? {}
+      : {
+          accessToken: requireEnvironmentValue(
+            env,
+            accessTokenEnv,
+            relativePath,
+            "accessTokenEnv",
+          ),
+        }),
+  };
+}
+
+function resolveChannelStaticConfig(
+  channel: z.infer<typeof channelFileSchema>,
+): ServerChannelStaticConfig {
   return {
     channelId: channel.channelId,
     type: channel.type,
     url: channel.url,
     inboundPolicy: channel.inboundPolicy,
     enableUnsafePrivilegedOperations: channel.enableUnsafePrivilegedOperations,
-    ...(includeEnvironmentReference && channel.accessTokenEnv !== undefined
-      ? { accessTokenEnv: channel.accessTokenEnv }
-      : {}),
     ...(channel.accessTokenEnv === undefined
       ? {}
-      : {
-          accessToken: requireEnvironmentValue(
-            env,
-            channel.accessTokenEnv,
-            relativePath,
-            "accessTokenEnv",
-          ),
-        }),
+      : { accessTokenEnv: channel.accessTokenEnv }),
   };
 }
 
@@ -407,6 +541,18 @@ function copyAgentConfig(
     origin: agent.origin,
     skillId: agent.skillId,
     enabled: agent.enabled,
+  };
+}
+
+function copyOrchestrationConfig(
+  orchestration: z.infer<typeof orchestrationFileSchema>,
+): ServerOrchestrationStaticConfig {
+  return {
+    defaultAgentId: orchestration.defaultAgentId,
+    agentCallPolicy: {
+      maxActiveTasksPerSession:
+        orchestration.agentCallPolicy.maxActiveTasksPerSession,
+    },
   };
 }
 

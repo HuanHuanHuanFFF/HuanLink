@@ -9,5 +9,6 @@ export * from "./local-user-config.js";
 export * from "./onebot-operation-tools.js";
 export * from "./phase3-runtime.js";
 export * from "./process-lifecycle.js";
+export * from "./huanlink-server-runtime.js";
 export * from "./server-runtime.js";
 export * from "./server-runtime-logger.js";

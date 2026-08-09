@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "defaultAgentId": "codex-local",
+  "agentCallPolicy": {
+    "maxActiveTasksPerSession": 2
+  }
+}

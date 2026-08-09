@@ -2,6 +2,7 @@
   "version": 1,
   "server": {
     "mainAgent": "./server/main-agent.json",
+    "orchestration": "./server/orchestration.json",
     "channels": ["./server/channels/onebot11.json"],
     "agents": ["./server/agents/codex-local.json"]
   },
