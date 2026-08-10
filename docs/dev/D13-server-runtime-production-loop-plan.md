@@ -101,10 +101,18 @@ P0 不实现消息聚合队列，也不实现门禁 Agent。当前策略为：
 - route 与 Channel 固定信息保存在 Session metadata，不在每条模型输入中重复浪费上下文。
 - Channel 消息投影至少包含简短发送者身份、原始消息内容、是否为自身消息、引用关系和内容省略标记。
 - Tool Call 与 Tool Result 在 Store 中继续保持结构化事实；投影给模型时使用确定性、可追溯的表示，不降级为无法配对的自然语言摘要。
+- Projector 不绑定或反复读取完整 Session，而是只接收一个游标化上下文窗口：固定 metadata、可选的已持久化摘要及其 `throughEntryIndex`，以及该游标之后按稳定顺序读取的时间线条目。尚无压缩 checkpoint 时，游标位于 Session 起点，窗口包含当前全部条目。
+- B03 只建立上述窗口、游标和投影边界，不实现 token 上限检测、摘要生成或 checkpoint 推进。后续压缩必须原子保存 `summary + throughEntryIndex`，只有摘要写入成功才能推进游标；原始 Session 事实不因压缩删除。
 - `submit`、`status`、`continue`、`reply` 和注入的 OneBot Tool 都必须通过统一的协议无关 `SessionToolHistoryRecorder` 保存 Tool Call/Result；Integration 只接收 recorder hook 和运行上下文，不直接选择 SQLite、文件路径或 Server 配置。
 - recorder 必须从 SDK Tool 执行边界取得稳定的 `toolCallId`，在外部派发前记录 Call，并为成功、业务错误、异常和取消都记录可配对 Result；若当前 SDK 接口无法提供稳定 ID，B03 必须停下报告，不能伪造 ID 或降级为无法配对的文本。
-- P0 不实现上下文窗口压缩、摘要 checkpoint、token 预算策略或长期记忆。若完整 Session 超出模型窗口，必须明确报错或使用本计划单独确认的简单截断规则，不能暗中丢弃 Tool 配对。
+- Tool 定义及 Handler 继续由代码注册，不作为数据库配置保存；Tool 调用历史由 Conversation Store 保存。有效参数保持现有结构化格式；SDK 无法解析或校验的原始参数以明确的 raw 形式进入 Session，但不得进入普通日志。
+- Tool Call 写入失败时不得执行对应 Tool；外部操作已确认成功但 Result 历史写入失败时，仍返回真实成功结果并附带 `historyWarning`，不能改报失败或 `uncertain` 来诱导重试。
+- AgentCall 是外部 Agent 长任务的独立状态对象，不是全部 Tool Call 的重复任务表。`submit` 的直接 Tool Result 只记录 `accepted/result`；AgentCall 通过 `sourceToolCallId` 关联创建它的原始 Tool Call，后续终态作为新的同 Session re-entry 排队，不重复写成该旧 Tool Call 的第二个 Result，也不打断正在运行的 MainAgent turn。
+- 当前 AgentCall 状态仍由进程内任务列表持有，B03 不新增 `agent_calls` 持久化表、不宣称跨重启恢复；以后即使原始 Tool Call 已位于压缩游标之前，也可通过 AgentCall ID 与 `sourceToolCallId` 定向找回，而不扫描完整历史。
+- HuanLink 自有 `runId` 与 `agentCallId` 使用 UUID；`toolCallId`、A2A `taskId` 和平台 `messageId` 保留其真实来源 ID，不改为数据库自增 ID。Conversation 时间线继续使用每 Session 的稳定顺序键，而不是把顺序绑定到全局自增主键。
+- P0 不实现自动上下文压缩、摘要 checkpoint、token 预算策略或长期记忆。若当前窗口超出模型限制，必须明确报错，不能暗中截断并破坏 Tool 配对。
 - fresh turn、`input-required` 续跑和 terminal re-entry 必须共用同一个按 Session 串行的 Agent turn 调度边界；Phase3 不得让 re-entry 绕过该边界直接并发调用 MainAgent。
+- 同 Session 的输入必须在真正取得调度槽位后再读取最新上下文窗口；排队时不得预先捕获一份随后变旧的投影。不同 Session 仍可并行。
 
 ## 4. 本计划负责与不负责
 
@@ -210,23 +218,26 @@ B02 完成测试与压力审查后报告；不得顺手实现队列、watermark 
 
 ### 修改
 
-- 新建确定性的 Session Context Projector，按 Session 时间线产生 MainAgent 输入。
+- 定义游标化 Session Context Window，并新建只依赖该窗口的确定性 Projector；当前无 checkpoint 时从 Session 起点读取，后续压缩可以替换窗口来源而不修改 MainAgent 与 Tool 接线。
 - 固定发送者、原始内容、引用、内容省略、自身消息与跨 Session 来源的最小表示；固定 route 只在必要的上下文头部出现一次。
 - 定义协议无关 `SessionToolHistoryRecorder`，并把它注入 MainAgent 的 submit/status/continue、reply 与 OneBot Tool 执行边界，使所有 Tool Call/Result 都进入同一 Session 时间线。
-- 保证 Tool Call ID、Tool 名称、参数与 Result 配对保留；不得把敏感值写入普通日志。
-- terminal re-entry 与 fresh turn 都读取同一份最新 Session 投影。
+- 保证真实 Tool Call ID、Tool 名称、结构化或 raw 参数与 Result 配对保留；不得把敏感值写入普通日志。
+- 为 AgentCall 增加 `sourceToolCallId` 关联，但不在 B03 新建任务持久化表或重复 Session 任务状态。
+- 调整按 Session 串行的 turn 调度，使 terminal re-entry 与 fresh turn 在取得执行槽位后读取同一份最新上下文窗口。
 
 ### 验收
 
-- 给定相同 Session，投影结果稳定；消息与 Tool Call/Result 顺序可追溯。
+- 给定相同上下文窗口，投影结果稳定；固定 metadata 只出现一次，游标之前的原始条目不会被重复投影，消息与 Tool Call/Result 顺序可追溯。
 - Tool Result 始终紧邻对应 Tool Call；重复记录幂等或明确冲突，不静默覆盖。
-- submit/status/continue、reply 与 OneBot Tool 均覆盖成功、业务错误、抛错和取消；每条 Result 都可用 SDK `toolCallId` 找到唯一 Call。
+- submit/status/continue、reply 与 OneBot Tool 均覆盖成功、业务错误、抛错、取消、非法 raw 参数和历史写入失败；每条 Result 都可用 SDK `toolCallId` 找到唯一 Call。
+- Tool Call 历史写入失败时没有外部派发；外部操作已成功但 Result 写入失败时仍返回真实成功结果及 `historyWarning`，不自动重试。
 - 普通日志只记录长度、数量和关联 ID，不记录完整消息、Tool 参数、附件 URL 或资源 key。
+- 阻塞前一同 Session turn 后再加入新消息或 AgentCall 终态，后续 turn 只能在前一 turn 结束后启动，并在启动时看到最新窗口；不同 Session 不被全局阻塞。
 - 现阶段不宣称使用 SDK 原生持久 Session；若采用文本投影，文档和测试必须准确说明该边界。
 
 ### 停点
 
-如果保持完整 Tool 配对需要改变 OpenAI Agents SDK Session 模型或引入未确认的上下文截断策略，停止并向用户报告，不在 B03 暗中扩张。
+如果保持完整 Tool 配对需要改变 OpenAI Agents SDK Session 模型、提前实现压缩/checkpoint，或引入未确认的上下文截断策略，停止并向用户报告，不在 B03 暗中扩张。
 
 ## 9. B04：活动 Task 限制与 A2A/reply 正式组合
 
