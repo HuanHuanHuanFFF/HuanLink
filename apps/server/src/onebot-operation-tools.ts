@@ -1,5 +1,5 @@
 import type {
-  ChannelConversationRouteV1,
+  ChannelConversationRoute,
   ConversationJsonValue,
   InMemoryConversationSessionStore,
   RuntimeLogger,
@@ -352,7 +352,7 @@ type ToolResult =
     };
 
 type OutboundDelivery = {
-  readonly route: ChannelConversationRouteV1;
+  readonly route: ChannelConversationRoute;
   readonly messageId: string;
 };
 
@@ -364,17 +364,17 @@ type OperationExecution = {
 export type CreateOneBot11OperationToolsOptions = {
   sessions: InMemoryConversationSessionStore;
   resolveOperations(channelId: string): OneBot11Operations | undefined;
-  isRouteAllowed(route: ChannelConversationRouteV1): boolean;
+  isRouteAllowed(route: ChannelConversationRoute): boolean;
   /**
    * Decides whether destructive OneBot operations may target a Channel.
    * Omit the predicate unless the caller intentionally accepts that risk.
    */
   isUnsafePrivilegedOperationsEnabled?(channelId: string): boolean;
   /** Channel Runtime owns the canonical route-to-Session mapping. */
-  sessionIdForRoute(route: ChannelConversationRouteV1): SessionId;
+  sessionIdForRoute(route: ChannelConversationRoute): SessionId;
   /** Channel Runtime owns serialization of all target-session outbound work. */
   runOutbound<T>(
-    route: ChannelConversationRouteV1,
+    route: ChannelConversationRoute,
     operation: () => Promise<T>,
   ): Promise<T>;
   /** Applies Channel Runtime lifecycle gates without adding route-list checks. */
@@ -781,7 +781,7 @@ async function executePrivileged(
 
 async function executeSend(
   options: CreateOneBot11OperationToolsOptions,
-  route: ChannelConversationRouteV1,
+  route: ChannelConversationRoute,
   send: () => Promise<unknown>,
 ): Promise<OperationExecution> {
   assertAllowed(options, route);
@@ -797,7 +797,7 @@ async function executeSend(
 
 async function runAllowedOutbound<T>(
   options: CreateOneBot11OperationToolsOptions,
-  route: ChannelConversationRouteV1,
+  route: ChannelConversationRoute,
   operation: () => Promise<T>,
 ): Promise<T> {
   assertAllowed(options, route);
@@ -806,7 +806,7 @@ async function runAllowedOutbound<T>(
 
 function assertAllowed(
   options: CreateOneBot11OperationToolsOptions,
-  route: ChannelConversationRouteV1,
+  route: ChannelConversationRoute,
 ): void {
   if (!options.isRouteAllowed(route)) {
     throw new Error("OneBot target is not allowed");
@@ -816,14 +816,14 @@ function assertAllowed(
 function groupRoute(
   channelId: string,
   groupId: string,
-): ChannelConversationRouteV1 {
+): ChannelConversationRoute {
   return { channelId, conversationKind: "group", conversationId: groupId };
 }
 
 function directRoute(
   channelId: string,
   userId: string,
-): ChannelConversationRouteV1 {
+): ChannelConversationRoute {
   return { channelId, conversationKind: "direct", conversationId: userId };
 }
 

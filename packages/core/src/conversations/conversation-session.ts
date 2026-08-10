@@ -1,8 +1,8 @@
 import type {
-  DeliveryReceiptV1,
-  ChannelConversationRouteV1,
-  InboundChannelMessageV1,
-} from "../channels/contract-v1.js";
+  DeliveryReceipt,
+  ChannelConversationRoute,
+  InboundChannelMessage,
+} from "../channels/contract.js";
 import type { RunId, SessionId } from "../shared/ids.js";
 
 /** 可安全保存在结构化 Agent 会话历史中的 JSON 值。 */
@@ -18,7 +18,7 @@ export type ConversationJsonValue =
 export type ConversationSessionMetadata = {
   /** 显式区分可向外部聊天回复的 Session，不根据 ID 或连接状态推断。 */
   readonly kind: "external_channel";
-  readonly route: ChannelConversationRouteV1;
+  readonly route: ChannelConversationRoute;
   readonly contentFormat: string;
 };
 
@@ -41,7 +41,7 @@ export type ConversationChannelMessageEntry = {
   readonly type: "channel_message";
   readonly channelId: string;
   readonly messageId: string;
-  readonly observed?: InboundChannelMessageV1;
+  readonly observed?: InboundChannelMessage;
   readonly outbound?: ConversationOutboundDelivery;
 };
 
@@ -77,9 +77,9 @@ export type ConversationSession = {
 
 /** 成功发送后登记待回流关联所需的可信数据。 */
 export type RecordConversationOutboundDelivery = {
-  readonly route: ChannelConversationRouteV1;
+  readonly route: ChannelConversationRoute;
   readonly contentFormat: string;
-  readonly receipt: DeliveryReceiptV1;
+  readonly receipt: DeliveryReceipt;
   readonly sentAt: string;
   readonly runId: RunId;
   readonly toolCallId: string;

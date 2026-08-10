@@ -2,9 +2,9 @@ import { describe, expect, test, vi } from "vitest";
 
 import {
   InMemoryConversationSessionStore,
-  type ChannelAdapterV1,
-  type ChannelConversationRouteV1,
-  type InboundChannelMessageV1,
+  type ChannelAdapter,
+  type ChannelConversationRoute,
+  type InboundChannelMessage,
 } from "@huanlink/core";
 import type { OpenAiAgentsRunContext } from "@huanlink/integration-openai-agents";
 import type { OneBot11Operations } from "@huanlink/integration-onebot11";
@@ -25,8 +25,8 @@ const SOURCE_SESSION_ID = "session:qq-main:group:10001";
 
 function inboundMessage(
   messageId: string,
-  overrides: Partial<InboundChannelMessageV1> = {},
-): InboundChannelMessageV1 {
+  overrides: Partial<InboundChannelMessage> = {},
+): InboundChannelMessage {
   return {
     messageId,
     route: {
@@ -68,7 +68,7 @@ function toolCall(name: string, callId: string, argumentsJson: string) {
 function route(
   conversationKind: "group" | "direct",
   conversationId: string,
-): ChannelConversationRouteV1 {
+): ChannelConversationRoute {
   return { channelId: "qq-main", conversationKind, conversationId };
 }
 
@@ -138,7 +138,7 @@ function createFixture(
   };
   const logger = new RecordingRuntimeLogger();
   const runOutbound = async <T>(
-    candidate: ChannelConversationRouteV1,
+    candidate: ChannelConversationRoute,
     operation: () => Promise<T>,
   ): Promise<T> => {
     outboundSpy(candidate);
@@ -182,7 +182,7 @@ function createTestChannelRuntime(input: {
   groups: { mode: "allowlist" | "denylist"; ids: string[] };
   directs: { mode: "allowlist" | "denylist"; ids: string[] };
 }): ChannelRuntime {
-  const adapter: ChannelAdapterV1 = {
+  const adapter: ChannelAdapter = {
     descriptor: {
       channelId: "qq-main",
       platform: "onebot11",

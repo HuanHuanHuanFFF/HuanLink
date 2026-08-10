@@ -1,14 +1,14 @@
 import { describe, expect, test, vi } from "vitest";
 
 import {
-  type ChannelAdapterV1,
-  type ChannelMessageListenerV1,
-  type DeliveryReceiptV1,
+  type ChannelAdapter,
+  type ChannelMessageListener,
+  type DeliveryReceipt,
   InMemoryConversationSessionStore,
   type ConversationSessionStore,
-  type InboundChannelMessageV1,
-  type RetractChannelMessageCommandV1,
-  type SendChannelMessageCommandV1,
+  type InboundChannelMessage,
+  type RetractChannelMessageCommand,
+  type SendChannelMessageCommand,
 } from "@huanlink/core";
 
 import {
@@ -30,7 +30,7 @@ function deferred<T = void>() {
   return { promise, resolve, reject };
 }
 
-class RuntimeIngressAdapter implements ChannelAdapterV1 {
+class RuntimeIngressAdapter implements ChannelAdapter {
   readonly descriptor = {
     channelId: "qq-main",
     platform: "test",
@@ -47,7 +47,7 @@ class RuntimeIngressAdapter implements ChannelAdapterV1 {
       streaming: false,
     },
   };
-  private readonly listeners = new Set<ChannelMessageListenerV1>();
+  private readonly listeners = new Set<ChannelMessageListener>();
 
   start(): Promise<void> {
     return Promise.resolve();
@@ -57,20 +57,20 @@ class RuntimeIngressAdapter implements ChannelAdapterV1 {
     return Promise.resolve();
   }
 
-  onMessage(listener: ChannelMessageListenerV1): () => void {
+  onMessage(listener: ChannelMessageListener): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
 
-  send(_command: SendChannelMessageCommandV1): Promise<DeliveryReceiptV1> {
+  send(_command: SendChannelMessageCommand): Promise<DeliveryReceipt> {
     return Promise.resolve({ channelId: "qq-main", messageId: "unused" });
   }
 
-  retract(_command: RetractChannelMessageCommandV1): Promise<void> {
+  retract(_command: RetractChannelMessageCommand): Promise<void> {
     return Promise.resolve();
   }
 
-  emit(message: InboundChannelMessageV1): void {
+  emit(message: InboundChannelMessage): void {
     for (const listener of this.listeners) {
       void listener(message);
     }
@@ -80,7 +80,7 @@ class RuntimeIngressAdapter implements ChannelAdapterV1 {
 function ingressMention(
   messageId: string,
   conversationId: string,
-): InboundChannelMessageV1 {
+): InboundChannelMessage {
   return {
     messageId,
     route: {
@@ -171,7 +171,7 @@ describe("HuanLinkServerRuntime", () => {
         return channels;
       },
     });
-    const message: InboundChannelMessageV1 = {
+    const message: InboundChannelMessage = {
       messageId: "mention-through-coordinator",
       route: {
         channelId: "qq-main",

@@ -1,8 +1,8 @@
 import {
   assertValidChannelConversationRoute,
-  type ChannelConversationRouteV1,
-  type InboundChannelMessageV1,
-} from "../channels/contract-v1.js";
+  type ChannelConversationRoute,
+  type InboundChannelMessage,
+} from "../channels/contract.js";
 import type { SessionId } from "../shared/ids.js";
 
 import { cloneChannelConversationRoute } from "./conversation-session-copy.js";
@@ -19,7 +19,7 @@ import {
 /** A delivery receipt waiting for its platform-observed public message. */
 export type PendingConversationOutboundDelivery = {
   readonly targetSessionId: SessionId;
-  readonly route: ChannelConversationRouteV1;
+  readonly route: ChannelConversationRoute;
   readonly contentFormat: string;
   readonly outbound: ConversationOutboundDelivery;
 };
@@ -112,7 +112,7 @@ export function assertPendingConversationTarget(
   pending: PendingConversationOutboundDelivery,
   messageKey: string,
   sessionId: SessionId,
-  route: ChannelConversationRouteV1,
+  route: ChannelConversationRoute,
   contentFormat: string,
 ): void {
   assertSameChannelMessageSession(
@@ -131,8 +131,8 @@ export function assertPendingConversationTarget(
 }
 
 export function isSameInboundChannelMessage(
-  left: InboundChannelMessageV1,
-  right: InboundChannelMessageV1,
+  left: InboundChannelMessage,
+  right: InboundChannelMessage,
 ): boolean {
   return (
     left.messageId === right.messageId &&

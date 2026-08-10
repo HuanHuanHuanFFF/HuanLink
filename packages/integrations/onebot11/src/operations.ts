@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { createOneBot11SendMessageActionV1 } from "./outbound-message-v1.js";
+import { createOneBot11SendMessageAction } from "./outbound-message.js";
 import {
   createCanSendImageAction,
   createCanSendRecordAction,
@@ -276,7 +276,7 @@ export class OneBot11Operations {
       ["groupId", "parts", "replyToMessageId"],
       "sendGroupMessage input",
     );
-    const action = await createOneBot11SendMessageActionV1(
+    const action = await createOneBot11SendMessageAction(
       {
         route: {
           channelId: this.channelId,
@@ -303,7 +303,7 @@ export class OneBot11Operations {
       ["userId", "parts", "replyToMessageId"],
       "sendPrivateMessage input",
     );
-    const action = await createOneBot11SendMessageActionV1(
+    const action = await createOneBot11SendMessageAction(
       {
         route: {
           channelId: this.channelId,

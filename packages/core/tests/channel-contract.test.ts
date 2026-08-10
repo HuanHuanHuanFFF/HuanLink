@@ -1,8 +1,8 @@
 import { describe, expect, test, vi } from "vitest";
 
 import {
-  CHANNEL_INBOUND_CONTENT_MAX_BYTES_V1,
-  CHANNEL_INBOUND_CONTENT_TOO_LARGE_PLACEHOLDER_V1,
+  CHANNEL_INBOUND_CONTENT_MAX_BYTES,
+  CHANNEL_INBOUND_CONTENT_TOO_LARGE_PLACEHOLDER,
   ChannelOperationError,
   assertValidChannelConversationRoute,
   assertValidInboundChannelMessage,
@@ -10,17 +10,17 @@ import {
   assertValidRetractChannelMessageCommand,
   assertValidSendChannelMessageCommand,
   channelSessionIdFor,
-  type ChannelAdapterV1,
-  type ChannelCapabilitiesV1,
-  type ChannelConversationRouteV1,
-  type ChannelDescriptorV1,
-  type ChannelMessageListenerV1,
-  type InboundChannelMessageV1,
-  type RetractChannelMessageCommandV1,
-  type SendChannelMessageCommandV1,
+  type ChannelAdapter,
+  type ChannelCapabilities,
+  type ChannelConversationRoute,
+  type ChannelDescriptor,
+  type ChannelMessageListener,
+  type InboundChannelMessage,
+  type RetractChannelMessageCommand,
+  type SendChannelMessageCommand,
 } from "../src/index.js";
 
-const capabilities: ChannelCapabilitiesV1 = {
+const capabilities: ChannelCapabilities = {
   conversationKinds: ["direct", "group"],
   threads: false,
   inboundContentFormats: ["onebot11.cq"],
@@ -38,7 +38,7 @@ const capabilities: ChannelCapabilitiesV1 = {
   streaming: false,
 };
 
-const descriptor: ChannelDescriptorV1 = {
+const descriptor: ChannelDescriptor = {
   channelId: "qq-main",
   platform: "onebot11",
   accountId: "10000",
@@ -46,8 +46,8 @@ const descriptor: ChannelDescriptorV1 = {
 };
 
 function route(
-  overrides: Partial<ChannelConversationRouteV1> = {},
-): ChannelConversationRouteV1 {
+  overrides: Partial<ChannelConversationRoute> = {},
+): ChannelConversationRoute {
   return {
     channelId: "qq-main",
     conversationKind: "group",
@@ -57,8 +57,8 @@ function route(
 }
 
 function inbound(
-  overrides: Partial<InboundChannelMessageV1> = {},
-): InboundChannelMessageV1 {
+  overrides: Partial<InboundChannelMessage> = {},
+): InboundChannelMessage {
   return {
     messageId: "message-1",
     route: route(),
@@ -75,12 +75,12 @@ function inbound(
   };
 }
 
-describe("Channel Contract v1", () => {
+describe("Channel Contract", () => {
   test("receives group and direct messages, then sends and retracts through a fake adapter", async () => {
-    let listener: ChannelMessageListenerV1 | undefined;
+    let listener: ChannelMessageListener | undefined;
     const receive = vi.fn();
     const stopListening = vi.fn();
-    const sendCommand: SendChannelMessageCommandV1 = {
+    const sendCommand: SendChannelMessageCommand = {
       route: route(),
       parts: [
         { type: "text", text: "result: " },
@@ -92,7 +92,7 @@ describe("Channel Contract v1", () => {
         },
       ],
     };
-    const adapter: ChannelAdapterV1 = {
+    const adapter: ChannelAdapter = {
       descriptor,
       start: vi.fn(async () => undefined),
       close: vi.fn(async () => undefined),
@@ -120,7 +120,7 @@ describe("Channel Contract v1", () => {
     listener?.(incomingGroup);
     listener?.(incomingDirect);
     const receipt = await adapter.send(sendCommand);
-    const retractCommand: RetractChannelMessageCommandV1 = {
+    const retractCommand: RetractChannelMessageCommand = {
       route: sendCommand.route,
       messageId: receipt.messageId,
     };
@@ -198,12 +198,12 @@ describe("Channel Contract v1", () => {
   test.each([
     {
       boundary: "inbound",
-      validate: (invalidRoute: ChannelConversationRouteV1) =>
+      validate: (invalidRoute: ChannelConversationRoute) =>
         assertValidInboundChannelMessage(inbound({ route: invalidRoute })),
     },
     {
       boundary: "send",
-      validate: (invalidRoute: ChannelConversationRouteV1) =>
+      validate: (invalidRoute: ChannelConversationRoute) =>
         assertValidSendChannelMessageCommand({
           route: invalidRoute,
           parts: [{ type: "text", text: "hello" }],
@@ -211,7 +211,7 @@ describe("Channel Contract v1", () => {
     },
     {
       boundary: "retract",
-      validate: (invalidRoute: ChannelConversationRouteV1) =>
+      validate: (invalidRoute: ChannelConversationRoute) =>
         assertValidRetractChannelMessageCommand({
           route: invalidRoute,
           messageId: "message-1",
@@ -242,7 +242,7 @@ describe("Channel Contract v1", () => {
   );
 
   test("returns not_supported when an adapter cannot retract messages", async () => {
-    const unsupportedAdapter: ChannelAdapterV1 = {
+    const unsupportedAdapter: ChannelAdapter = {
       descriptor: {
         ...descriptor,
         capabilities: {
@@ -356,7 +356,7 @@ describe("Channel Contract v1", () => {
     delete withoutIsSelf.sender.isSelf;
     expect(() =>
       assertValidInboundChannelMessage(
-        withoutIsSelf as unknown as InboundChannelMessageV1,
+        withoutIsSelf as unknown as InboundChannelMessage,
       ),
     ).toThrow(/sender isSelf/i);
   });
@@ -388,7 +388,7 @@ describe("Channel Contract v1", () => {
   });
 
   test("accepts complete inbound content at the 8 KiB UTF-8 limit", () => {
-    const content = "a".repeat(CHANNEL_INBOUND_CONTENT_MAX_BYTES_V1);
+    const content = "a".repeat(CHANNEL_INBOUND_CONTENT_MAX_BYTES);
 
     expect(() =>
       assertValidInboundChannelMessage(inbound({ content })),
@@ -396,7 +396,7 @@ describe("Channel Contract v1", () => {
   });
 
   test("rejects complete inbound content above the 8 KiB UTF-8 limit", () => {
-    const content = "a".repeat(CHANNEL_INBOUND_CONTENT_MAX_BYTES_V1 + 1);
+    const content = "a".repeat(CHANNEL_INBOUND_CONTENT_MAX_BYTES + 1);
 
     expect(() =>
       assertValidInboundChannelMessage(inbound({ content })),
@@ -406,7 +406,7 @@ describe("Channel Contract v1", () => {
   test("measures the inbound limit in UTF-8 bytes instead of characters", () => {
     const content = "你".repeat(2731);
 
-    expect(content.length).toBeLessThan(CHANNEL_INBOUND_CONTENT_MAX_BYTES_V1);
+    expect(content.length).toBeLessThan(CHANNEL_INBOUND_CONTENT_MAX_BYTES);
     expect(() =>
       assertValidInboundChannelMessage(inbound({ content })),
     ).toThrow(/must not exceed 8192 UTF-8 bytes/);
@@ -414,10 +414,10 @@ describe("Channel Contract v1", () => {
 
   test("accepts a bounded placeholder when original inbound content is too large", () => {
     const message = inbound({
-      content: CHANNEL_INBOUND_CONTENT_TOO_LARGE_PLACEHOLDER_V1,
+      content: CHANNEL_INBOUND_CONTENT_TOO_LARGE_PLACEHOLDER,
       contentOmitted: {
         reason: "too_large",
-        originalSizeBytes: CHANNEL_INBOUND_CONTENT_MAX_BYTES_V1 + 1,
+        originalSizeBytes: CHANNEL_INBOUND_CONTENT_MAX_BYTES + 1,
       },
     });
 
@@ -438,14 +438,14 @@ describe("Channel Contract v1", () => {
       content: "partial original content",
       contentOmitted: {
         reason: "too_large",
-        originalSizeBytes: CHANNEL_INBOUND_CONTENT_MAX_BYTES_V1 + 1,
+        originalSizeBytes: CHANNEL_INBOUND_CONTENT_MAX_BYTES + 1,
       },
     },
     {
-      content: CHANNEL_INBOUND_CONTENT_TOO_LARGE_PLACEHOLDER_V1,
+      content: CHANNEL_INBOUND_CONTENT_TOO_LARGE_PLACEHOLDER,
       contentOmitted: {
         reason: "too_large",
-        originalSizeBytes: CHANNEL_INBOUND_CONTENT_MAX_BYTES_V1,
+        originalSizeBytes: CHANNEL_INBOUND_CONTENT_MAX_BYTES,
       },
     },
   ])("rejects an invalid too-large placeholder %#", (overrides) => {

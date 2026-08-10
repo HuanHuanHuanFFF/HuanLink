@@ -2,23 +2,23 @@ import { Buffer } from "node:buffer";
 import { posix, win32 } from "node:path";
 
 import type {
-  RetractChannelMessageCommandV1,
-  SendChannelMessageCommandV1,
-} from "./channel-adapter-v1.js";
-import type { ChannelConversationRouteV1 } from "./channel-instance-v1.js";
+  RetractChannelMessageCommand,
+  SendChannelMessageCommand,
+} from "./channel-adapter.js";
+import type { ChannelConversationRoute } from "./channel-instance.js";
 import {
-  CHANNEL_INBOUND_CONTENT_MAX_BYTES_V1,
-  CHANNEL_INBOUND_CONTENT_TOO_LARGE_PLACEHOLDER_V1,
-  type ChannelOutboundAttachmentLinkPartV1,
-  type ChannelOutboundAttachmentLocalPathPartV1,
-  type ChannelOutboundMessagePartV1,
-  type InboundChannelMessageV1,
-} from "./channel-message-v1.js";
+  CHANNEL_INBOUND_CONTENT_MAX_BYTES,
+  CHANNEL_INBOUND_CONTENT_TOO_LARGE_PLACEHOLDER,
+  type ChannelOutboundAttachmentLinkPart,
+  type ChannelOutboundAttachmentLocalPathPart,
+  type ChannelOutboundMessagePart,
+  type InboundChannelMessage,
+} from "./channel-message.js";
 
 /** 在生成 session key 或调用 Adapter 前校验规范会话路由。 */
 export function assertValidChannelConversationRoute(
   value: unknown,
-): asserts value is ChannelConversationRouteV1 {
+): asserts value is ChannelConversationRoute {
   if (typeof value !== "object" || value === null) {
     throw new Error("Channel route must be an object");
   }
@@ -45,7 +45,7 @@ export function assertValidChannelConversationRoute(
 
 /** 在调用平台前拒绝缺失或非法的撤回消息 ID。 */
 export function assertValidRetractChannelMessageCommand(
-  command: RetractChannelMessageCommandV1,
+  command: RetractChannelMessageCommand,
 ): void {
   if (typeof command !== "object" || command === null) {
     throw new Error("Channel retract command must be an object");
@@ -59,7 +59,7 @@ export function assertValidRetractChannelMessageCommand(
 
 /** 在调用 Adapter 前校验发送命令、目标路由和消息内容。 */
 export function assertValidSendChannelMessageCommand(
-  command: SendChannelMessageCommandV1,
+  command: SendChannelMessageCommand,
 ): void {
   if (typeof command !== "object" || command === null) {
     throw new Error("Channel send command must be an object");
@@ -73,7 +73,7 @@ export function assertValidSendChannelMessageCommand(
   );
   assertValidChannelConversationRoute(rawCommand.route);
   assertValidOutboundChannelMessageParts(
-    rawCommand.parts as readonly ChannelOutboundMessagePartV1[],
+    rawCommand.parts as readonly ChannelOutboundMessagePart[],
   );
   validateOptionalString(
     rawCommand.replyToMessageId,
@@ -83,7 +83,7 @@ export function assertValidSendChannelMessageCommand(
 
 /** 在入站消息离开 Adapter 边界前校验字符串边界和基础元数据。 */
 export function assertValidInboundChannelMessage(
-  message: InboundChannelMessageV1,
+  message: InboundChannelMessage,
 ): void {
   if (typeof message !== "object" || message === null) {
     throw new Error("Inbound Channel message must be an object");
@@ -123,9 +123,9 @@ export function assertValidInboundChannelMessage(
   if (rawMessage.contentOmitted === undefined) {
     requireNonEmptyContentString(rawMessage.content, "Inbound Channel content");
     const sizeBytes = Buffer.byteLength(rawMessage.content, "utf8");
-    if (sizeBytes > CHANNEL_INBOUND_CONTENT_MAX_BYTES_V1) {
+    if (sizeBytes > CHANNEL_INBOUND_CONTENT_MAX_BYTES) {
       throw new Error(
-        `Inbound Channel content must not exceed ${CHANNEL_INBOUND_CONTENT_MAX_BYTES_V1} UTF-8 bytes`,
+        `Inbound Channel content must not exceed ${CHANNEL_INBOUND_CONTENT_MAX_BYTES} UTF-8 bytes`,
       );
     }
     return;
@@ -139,7 +139,7 @@ export function assertValidInboundChannelMessage(
  * 该函数只检查结构、URL 和路径边界，不发起网络或文件访问。
  */
 export function assertValidOutboundChannelMessageParts(
-  parts: readonly ChannelOutboundMessagePartV1[],
+  parts: readonly ChannelOutboundMessagePart[],
 ): void {
   if (!Array.isArray(parts) || parts.length === 0) {
     throw new Error("Outbound Channel message parts must be a non-empty array");
@@ -225,7 +225,7 @@ function validateTrigger(value: unknown): void {
 
 function validateOmittedContent(content: unknown, value: unknown): void {
   if (
-    content !== CHANNEL_INBOUND_CONTENT_TOO_LARGE_PLACEHOLDER_V1 ||
+    content !== CHANNEL_INBOUND_CONTENT_TOO_LARGE_PLACEHOLDER ||
     typeof value !== "object" ||
     value === null
   ) {
@@ -245,18 +245,15 @@ function validateOmittedContent(content: unknown, value: unknown): void {
   }
   if (
     !Number.isSafeInteger(omitted.originalSizeBytes) ||
-    (omitted.originalSizeBytes as number) <=
-      CHANNEL_INBOUND_CONTENT_MAX_BYTES_V1
+    (omitted.originalSizeBytes as number) <= CHANNEL_INBOUND_CONTENT_MAX_BYTES
   ) {
     throw new Error(
-      `Inbound Channel omitted content originalSizeBytes must exceed ${CHANNEL_INBOUND_CONTENT_MAX_BYTES_V1}`,
+      `Inbound Channel omitted content originalSizeBytes must exceed ${CHANNEL_INBOUND_CONTENT_MAX_BYTES}`,
     );
   }
 }
 
-function validateAttachmentLink(
-  part: ChannelOutboundAttachmentLinkPartV1,
-): void {
+function validateAttachmentLink(part: ChannelOutboundAttachmentLinkPart): void {
   const rawPart = part as unknown as Record<string, unknown>;
   assertOnlyKeys(
     rawPart,
@@ -287,7 +284,7 @@ function validateAttachmentLink(
 }
 
 function validateAttachmentLocalPath(
-  part: ChannelOutboundAttachmentLocalPathPartV1,
+  part: ChannelOutboundAttachmentLocalPathPart,
 ): void {
   const rawPart = part as unknown as Record<string, unknown>;
   assertOnlyKeys(

@@ -11,7 +11,7 @@ import type {
   AgentEventDraft,
   AgentEventType,
   AgentRuntimeTrigger,
-  ChannelTriggerV1,
+  ChannelTrigger,
   EventLog,
   EventReader,
   EventWriter,
@@ -27,7 +27,7 @@ describe("core public types", () => {
     const agentCallId: AgentCallId = "agent_call_01";
     const eventType: AgentEventType = "agent_call.created";
     const trigger: AgentRuntimeTrigger = "agent_call_terminal";
-    const channelTrigger: ChannelTriggerV1 = { kind: "mention" };
+    const channelTrigger: ChannelTrigger = { kind: "mention" };
     const state: AgentCallTaskState = "submitted";
     const executionMode: TaskExecutionMode = "async";
 

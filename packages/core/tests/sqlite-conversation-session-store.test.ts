@@ -7,7 +7,7 @@ import { afterEach, describe, expect, test } from "vitest";
 import {
   SqliteConversationSessionStore,
   type ConversationSessionStore,
-  type InboundChannelMessageV1,
+  type InboundChannelMessage,
   type RecordConversationOutboundDelivery,
 } from "../src/index.js";
 
@@ -31,8 +31,8 @@ function openStore(databasePath = ":memory:"): SqliteConversationSessionStore {
 
 function inboundMessage(
   messageId: string,
-  overrides: Partial<InboundChannelMessageV1> = {},
-): InboundChannelMessageV1 {
+  overrides: Partial<InboundChannelMessage> = {},
+): InboundChannelMessage {
   return {
     messageId,
     route: {

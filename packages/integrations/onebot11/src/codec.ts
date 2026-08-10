@@ -159,7 +159,7 @@ export function parseOneBot11CqSegments(
 
 /**
  * 创建旧版入口使用的 OneBot 11 群文本发送 Action。
- * 群号或 echo 无效时抛出错误；新版完整发送能力由 outbound-message-v1.ts 负责。
+ * 群号或 echo 无效时抛出错误；完整发送能力由 outbound-message.ts 负责。
  */
 export function createOneBot11SendGroupTextAction(
   conversationId: string,

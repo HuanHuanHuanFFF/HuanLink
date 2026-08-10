@@ -20,7 +20,7 @@ export * from "./agent-call/types.js";
 export * from "./agent-call/agent-call-service.js";
 export * from "./orchestration/agent-turn-scheduler.js";
 export * from "./tasks/types.js";
-export * from "./channels/contract-v1.js";
+export * from "./channels/contract.js";
 export * from "./channels/session-key.js";
 export * from "./conversations/conversation-session.js";
 export * from "./conversations/conversation-session-store.js";

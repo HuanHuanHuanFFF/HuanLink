@@ -1,4 +1,4 @@
-import type { ChannelConversationRouteV1 } from "../channels/contract-v1.js";
+import type { ChannelConversationRoute } from "../channels/contract.js";
 
 /** 校验 Session 和 Tool 关联使用的非空标识。 */
 export function requireConversationIdentifier(
@@ -22,8 +22,8 @@ export function validateConversationToolIdentity(
 
 /** 比较同一 Session 的固定 Channel 路由。 */
 export function isSameConversationRoute(
-  left: ChannelConversationRouteV1,
-  right: ChannelConversationRouteV1,
+  left: ChannelConversationRoute,
+  right: ChannelConversationRoute,
 ): boolean {
   return (
     left.channelId === right.channelId &&

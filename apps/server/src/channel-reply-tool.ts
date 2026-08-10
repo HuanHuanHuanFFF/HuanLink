@@ -1,6 +1,6 @@
 import type {
-  ChannelAdapterV1,
-  ChannelOutboundMessagePartV1,
+  ChannelAdapter,
+  ChannelOutboundMessagePart,
   ConversationJsonValue,
   InMemoryConversationSessionStore,
   RuntimeLogger,
@@ -63,7 +63,7 @@ type ChannelReplyToolResult =
 
 export type CreateChannelReplyToolOptions = {
   sessions: InMemoryConversationSessionStore;
-  resolveAdapter(channelId: string): ChannelAdapterV1 | undefined;
+  resolveAdapter(channelId: string): ChannelAdapter | undefined;
   logger?: RuntimeLogger;
   now?: () => Date;
   redactValues?: readonly string[];
@@ -177,7 +177,7 @@ export function createChannelReplyTool(options: CreateChannelReplyToolOptions) {
         return JSON.stringify(output);
       };
 
-      let adapter: ChannelAdapterV1 | undefined;
+      let adapter: ChannelAdapter | undefined;
       try {
         adapter = options.resolveAdapter(metadata.route.channelId);
       } catch (error) {
@@ -196,11 +196,11 @@ export function createChannelReplyTool(options: CreateChannelReplyToolOptions) {
       }
 
       toolLogger.info("channel.reply.sending");
-      let receipt: Awaited<ReturnType<ChannelAdapterV1["send"]>>;
+      let receipt: Awaited<ReturnType<ChannelAdapter["send"]>>;
       try {
         receipt = await adapter.send({
           route: metadata.route,
-          parts: input.parts as readonly ChannelOutboundMessagePartV1[],
+          parts: input.parts as readonly ChannelOutboundMessagePart[],
           ...(input.replyToMessageId === undefined
             ? {}
             : { replyToMessageId: input.replyToMessageId }),

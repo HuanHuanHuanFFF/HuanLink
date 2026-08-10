@@ -4,27 +4,27 @@ import { Buffer } from "node:buffer";
 import {
   ChannelOperationError,
   NoopRuntimeLogger,
-  type ChannelAdapterV1,
-  type ChannelDescriptorV1,
-  type ChannelErrorCodeV1,
-  type ChannelMessageListenerV1,
-  type DeliveryReceiptV1,
-  type InboundChannelMessageV1,
-  type RetractChannelMessageCommandV1,
+  type ChannelAdapter,
+  type ChannelDescriptor,
+  type ChannelErrorCode,
+  type ChannelMessageListener,
+  type DeliveryReceipt,
+  type InboundChannelMessage,
+  type RetractChannelMessageCommand,
   type RuntimeLogFields,
   type RuntimeLogger,
-  type SendChannelMessageCommandV1,
+  type SendChannelMessageCommand,
 } from "@huanlink/core";
 
-import { parseOneBot11MessageV1 } from "./message-v1.js";
+import { parseOneBot11Message } from "./message.js";
 import { OneBot11Operations } from "./operations.js";
 import {
-  createOneBot11DeleteMessageActionV1,
-  createOneBot11SendMessageActionV1,
+  createOneBot11DeleteMessageAction,
+  createOneBot11SendMessageAction,
   readOneBot11MessageId,
-} from "./outbound-message-v1.js";
+} from "./outbound-message.js";
 import type {
-  OneBot11ChannelAdapterV1Options,
+  OneBot11ChannelAdapterOptions,
   OneBot11ChannelErrorListener,
   OneBot11Transport,
 } from "./types.js";
@@ -55,23 +55,23 @@ const ONEBOT11_CAPABILITIES = {
 } as const;
 
 /**
- * OneBot 11 的 Channel Contract V1 Adapter。
+ * OneBot 11 的 Channel Contract Adapter。
  * 负责双向合同映射、消息订阅、能力声明，以及稳定 Channel 错误转换。
  */
-export class OneBot11ChannelAdapterV1 implements ChannelAdapterV1 {
-  readonly descriptor: ChannelDescriptorV1;
+export class OneBot11ChannelAdapter implements ChannelAdapter {
+  readonly descriptor: ChannelDescriptor;
   /** OneBot 专属具名操作；后续 Tool Handler 只从这里选择允许的方法。 */
   readonly operations: OneBot11Operations;
 
   private readonly transport: OneBot11Transport;
   private readonly onError: OneBot11ChannelErrorListener;
   private readonly logger: RuntimeLogger;
-  private readonly listeners = new Set<ChannelMessageListenerV1>();
+  private readonly listeners = new Set<ChannelMessageListener>();
   private readonly unsubscribeTransport: () => void;
   private closeOperation: Promise<void> | undefined;
 
   /** 校验实例配置、建立描述信息，并订阅 Transport 事件流。 */
-  constructor(options: OneBot11ChannelAdapterV1Options) {
+  constructor(options: OneBot11ChannelAdapterOptions) {
     const channelId = requireNonEmpty(options.channelId, "channelId");
     this.descriptor = {
       channelId,
@@ -105,19 +105,19 @@ export class OneBot11ChannelAdapterV1 implements ChannelAdapterV1 {
   }
 
   /** 注册规范化入站消息监听器，并返回对应的取消订阅函数。 */
-  onMessage(listener: ChannelMessageListenerV1): () => void {
+  onMessage(listener: ChannelMessageListener): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
 
   /**
-   * 发送一条 V1 Channel 消息，并返回 OneBot 分配的消息 ID。
+   * 发送一条 Channel 消息，并返回 OneBot 分配的消息 ID。
    * 所有协议和传输异常都会转换为稳定的 ChannelOperationError。
    */
-  async send(command: SendChannelMessageCommandV1): Promise<DeliveryReceiptV1> {
+  async send(command: SendChannelMessageCommand): Promise<DeliveryReceipt> {
     const conversationId = command.route?.conversationId ?? "unknown";
     try {
-      const action = await createOneBot11SendMessageActionV1(
+      const action = await createOneBot11SendMessageAction(
         command,
         this.descriptor.channelId,
         `send-${command.route.conversationKind}:${randomUUID()}`,
@@ -139,10 +139,10 @@ export class OneBot11ChannelAdapterV1 implements ChannelAdapterV1 {
   }
 
   /** 使用 OneBot `delete_msg` 主动撤回指定消息。 */
-  async retract(command: RetractChannelMessageCommandV1): Promise<void> {
+  async retract(command: RetractChannelMessageCommand): Promise<void> {
     const conversationId = command.route?.conversationId ?? "unknown";
     try {
-      const action = createOneBot11DeleteMessageActionV1(
+      const action = createOneBot11DeleteMessageAction(
         command,
         this.descriptor.channelId,
         `delete:${randomUUID()}`,
@@ -163,10 +163,10 @@ export class OneBot11ChannelAdapterV1 implements ChannelAdapterV1 {
     return this.closeOperation;
   }
 
-  /** 将 Transport 事件解析为 V1 入站消息，记录摘要后分发给订阅者。 */
+  /** 将 Transport 事件解析为入站消息，记录摘要后分发给订阅者。 */
   private handleEvent(event: Record<string, unknown>): void {
     try {
-      const message = parseOneBot11MessageV1(event, {
+      const message = parseOneBot11Message(event, {
         channelId: this.descriptor.channelId,
       });
       if (message === undefined) {
@@ -192,7 +192,7 @@ export class OneBot11ChannelAdapterV1 implements ChannelAdapterV1 {
   }
 
   /** 向每个监听器分发独立消息副本，并隔离同步及异步监听器错误。 */
-  private dispatchMessage(message: InboundChannelMessageV1): void {
+  private dispatchMessage(message: InboundChannelMessage): void {
     for (const listener of [...this.listeners]) {
       try {
         void Promise.resolve(listener(cloneMessage(message))).catch((error) =>
@@ -229,9 +229,7 @@ export class OneBot11ChannelAdapterV1 implements ChannelAdapterV1 {
 }
 
 /** 复制消息及其嵌套字段，避免一个监听器修改其他监听器看到的对象。 */
-function cloneMessage(
-  message: InboundChannelMessageV1,
-): InboundChannelMessageV1 {
+function cloneMessage(message: InboundChannelMessage): InboundChannelMessage {
   return {
     ...message,
     route: { ...message.route },
@@ -279,7 +277,7 @@ function normalizeOperationError(
 }
 
 /** 保守映射 OneBot 标准通信错误；未知 retcode 不猜测为可重试错误。 */
-function mapRemoteActionErrorCode(retcode: unknown): ChannelErrorCodeV1 {
+function mapRemoteActionErrorCode(retcode: unknown): ChannelErrorCode {
   switch (retcode) {
     case 1400:
       return "invalid_target";

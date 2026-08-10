@@ -4,7 +4,7 @@ import {
   InMemoryConversationSessionStore,
   SqliteConversationSessionStore,
   type ConversationSessionStore,
-  type InboundChannelMessageV1,
+  type InboundChannelMessage,
 } from "../src/index.js";
 
 type StoreHandle = {
@@ -14,8 +14,8 @@ type StoreHandle = {
 
 function inboundMessage(
   messageId: string,
-  overrides: Partial<InboundChannelMessageV1> = {},
-): InboundChannelMessageV1 {
+  overrides: Partial<InboundChannelMessage> = {},
+): InboundChannelMessage {
   return {
     messageId,
     route: {

@@ -1,7 +1,7 @@
 import type {
-  ChannelConversationRouteV1,
-  InboundChannelMessageV1,
-} from "../channels/contract-v1.js";
+  ChannelConversationRoute,
+  InboundChannelMessage,
+} from "../channels/contract.js";
 
 import type {
   ConversationJsonValue,
@@ -42,8 +42,8 @@ export function cloneConversationSessionMetadata(
 
 /** 复制一条规范入站消息及其嵌套元数据。 */
 export function cloneInboundChannelMessage(
-  message: InboundChannelMessageV1,
-): InboundChannelMessageV1 {
+  message: InboundChannelMessage,
+): InboundChannelMessage {
   return {
     ...message,
     route: cloneChannelConversationRoute(message.route),
@@ -59,8 +59,8 @@ export function cloneInboundChannelMessage(
 
 /** 复制规范路由，避免调用方改写 Store 内部元数据。 */
 export function cloneChannelConversationRoute(
-  route: ChannelConversationRouteV1,
-): ChannelConversationRouteV1 {
+  route: ChannelConversationRoute,
+): ChannelConversationRoute {
   return { ...route };
 }
 

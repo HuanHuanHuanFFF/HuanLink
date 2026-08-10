@@ -1,4 +1,4 @@
-import type { ChannelOutboundMessagePartV1 } from "@huanlink/core";
+import type { ChannelOutboundMessagePart } from "@huanlink/core";
 
 import type { OneBot11Action } from "./codec.js";
 
@@ -7,13 +7,13 @@ export type OneBot11OperationData = unknown;
 
 export type OneBot11SendGroupMessageInput = {
   readonly groupId: string;
-  readonly parts: readonly ChannelOutboundMessagePartV1[];
+  readonly parts: readonly ChannelOutboundMessagePart[];
   readonly replyToMessageId?: string;
 };
 
 export type OneBot11SendPrivateMessageInput = {
   readonly userId: string;
-  readonly parts: readonly ChannelOutboundMessagePartV1[];
+  readonly parts: readonly ChannelOutboundMessagePart[];
   readonly replyToMessageId?: string;
 };
 

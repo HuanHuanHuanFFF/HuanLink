@@ -1,9 +1,9 @@
 import {
   assertValidChannelConversationRoute,
   assertValidInboundChannelMessage,
-  type ChannelConversationRouteV1,
-  type InboundChannelMessageV1,
-} from "../channels/contract-v1.js";
+  type ChannelConversationRoute,
+  type InboundChannelMessage,
+} from "../channels/contract.js";
 
 import {
   cloneConversationJsonRecord,
@@ -49,8 +49,8 @@ export type SqliteOutboundDeliveryRow = { payload_json: string };
 /** Decodes and validates a platform-observed message from SQLite. */
 export function parseSqliteStoredMessage(
   row: Pick<SqliteMessageRow, "observed_json">,
-): InboundChannelMessageV1 {
-  const message = JSON.parse(row.observed_json) as InboundChannelMessageV1;
+): InboundChannelMessage {
+  const message = JSON.parse(row.observed_json) as InboundChannelMessage;
   assertValidInboundChannelMessage(message);
   return message;
 }
@@ -98,7 +98,7 @@ export function parseSqliteSessionMetadata(
   if (row.kind !== "external_channel") {
     throw new Error("SQLite conversation session has an unsupported kind");
   }
-  const route = JSON.parse(row.route_json) as ChannelConversationRouteV1;
+  const route = JSON.parse(row.route_json) as ChannelConversationRoute;
   assertValidChannelConversationRoute(route);
   requireConversationIdentifier(
     row.content_format,

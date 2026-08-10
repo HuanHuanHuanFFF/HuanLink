@@ -3,8 +3,8 @@ import { describe, expect, test, vi } from "vitest";
 import {
   ChannelOperationError,
   InMemoryConversationSessionStore,
-  type ChannelAdapterV1,
-  type InboundChannelMessageV1,
+  type ChannelAdapter,
+  type InboundChannelMessage,
 } from "@huanlink/core";
 import type { OpenAiAgentsRunContext } from "@huanlink/integration-openai-agents";
 import { Agent, RunContext, tool } from "@openai/agents";
@@ -16,8 +16,8 @@ import { createPhase3MainAgentRuntime } from "../src/main-agent-runtime.js";
 
 function inboundMessage(
   messageId: string,
-  overrides: Partial<InboundChannelMessageV1> = {},
-): InboundChannelMessageV1 {
+  overrides: Partial<InboundChannelMessage> = {},
+): InboundChannelMessage {
   return {
     messageId,
     route: {
@@ -54,10 +54,10 @@ function toolCall(callId: string, argumentsJson: string) {
   };
 }
 
-function fakeAdapter(messageId = "message-2"): ChannelAdapterV1 & {
-  send: ReturnType<typeof vi.fn<ChannelAdapterV1["send"]>>;
+function fakeAdapter(messageId = "message-2"): ChannelAdapter & {
+  send: ReturnType<typeof vi.fn<ChannelAdapter["send"]>>;
 } {
-  const send = vi.fn<ChannelAdapterV1["send"]>(async () => ({
+  const send = vi.fn<ChannelAdapter["send"]>(async () => ({
     channelId: "qq-main",
     messageId,
   }));

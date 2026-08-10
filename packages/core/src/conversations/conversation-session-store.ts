@@ -1,4 +1,4 @@
-import type { InboundChannelMessageV1 } from "../channels/contract-v1.js";
+import type { InboundChannelMessage } from "../channels/contract.js";
 import type { SessionId } from "../shared/ids.js";
 
 import type {
@@ -13,7 +13,7 @@ import type {
 export interface ConversationSessionStore {
   appendChannelMessage(
     sessionId: SessionId,
-    message: InboundChannelMessageV1,
+    message: InboundChannelMessage,
   ): "appended" | "duplicate" | "associated";
   recordOutboundDelivery(
     targetSessionId: SessionId,

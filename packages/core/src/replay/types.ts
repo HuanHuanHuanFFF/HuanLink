@@ -1,5 +1,5 @@
 import type { AgentCallTaskState } from "../agent-call/types.js";
-import type { InboundChannelMessageV1 } from "../channels/contract-v1.js";
+import type { InboundChannelMessage } from "../channels/contract.js";
 import type { AgentRuntimeTrigger } from "../runtime/agent-runtime.js";
 import type { AgentCallId, RunId, SessionId } from "../shared/ids.js";
 import type { TaskExecutionMode } from "../tasks/types.js";
@@ -20,7 +20,7 @@ export interface RunViewCause {
   readonly state: AgentCallTaskState;
 }
 
-export type ChannelInputView = InboundChannelMessageV1;
+export type ChannelInputView = InboundChannelMessage;
 
 export interface AgentCallView {
   readonly agentCallId: AgentCallId;

@@ -1,8 +1,8 @@
 import {
   assertValidInboundChannelMessage,
-  type ChannelConversationRouteV1,
-  type InboundChannelMessageV1,
-} from "../channels/contract-v1.js";
+  type ChannelConversationRoute,
+  type InboundChannelMessage,
+} from "../channels/contract.js";
 import type { SessionId } from "../shared/ids.js";
 
 import type {
@@ -68,7 +68,7 @@ export class InMemoryConversationSessionStore implements ConversationSessionStor
   /** 追加平台观测消息；完全相同的重复事实幂等，冲突事实拒绝覆盖。 */
   appendChannelMessage(
     sessionId: SessionId,
-    message: InboundChannelMessageV1,
+    message: InboundChannelMessage,
   ): "appended" | "duplicate" | "associated" {
     assertValidInboundChannelMessage(message);
     const key = channelMessageKey(message.route.channelId, message.messageId);
@@ -341,7 +341,7 @@ export class InMemoryConversationSessionStore implements ConversationSessionStor
 
   private ensureSession(
     sessionId: SessionId,
-    route: ChannelConversationRouteV1,
+    route: ChannelConversationRoute,
     contentFormat: string,
   ): MutableConversationSession {
     requireConversationIdentifier(sessionId, "Conversation sessionId");
@@ -382,7 +382,7 @@ export class InMemoryConversationSessionStore implements ConversationSessionStor
 function assertSessionMetadata(
   session: MutableConversationSession,
   sessionId: SessionId,
-  route: ChannelConversationRouteV1,
+  route: ChannelConversationRoute,
   contentFormat: string,
 ): void {
   if (!isSameConversationRoute(session.metadata.route, route)) {

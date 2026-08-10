@@ -1,8 +1,8 @@
 import { errorMessage } from "../shared/errors.js";
-import { assertValidInboundChannelMessage } from "../channels/channel-validation-v1.js";
+import { assertValidInboundChannelMessage } from "../channels/channel-validation.js";
 import { AGENT_EVENT_TYPES, CORE_SCHEMA_VERSION } from "./types.js";
 import type { AgentEvent, AgentEventType } from "./types.js";
-import type { InboundChannelMessageV1 } from "../channels/channel-message-v1.js";
+import type { InboundChannelMessage } from "../channels/channel-message.js";
 import type { RunId } from "../shared/ids.js";
 
 const EVENT_ENVELOPE_KEYS = new Set([
@@ -155,7 +155,7 @@ function isAgentEventData(type: AgentEventType, value: unknown): boolean {
 
 function isInboundChannelMessage(value: unknown): boolean {
   try {
-    assertValidInboundChannelMessage(value as InboundChannelMessageV1);
+    assertValidInboundChannelMessage(value as InboundChannelMessage);
     return true;
   } catch {
     return false;

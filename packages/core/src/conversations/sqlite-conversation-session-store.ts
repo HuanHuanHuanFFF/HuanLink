@@ -2,9 +2,9 @@ import { DatabaseSync } from "node:sqlite";
 
 import {
   assertValidInboundChannelMessage,
-  type ChannelConversationRouteV1,
-  type InboundChannelMessageV1,
-} from "../channels/contract-v1.js";
+  type ChannelConversationRoute,
+  type InboundChannelMessage,
+} from "../channels/contract.js";
 import type { SessionId } from "../shared/ids.js";
 
 import {
@@ -78,7 +78,7 @@ export class SqliteConversationSessionStore implements ConversationSessionStore 
 
   appendChannelMessage(
     sessionId: SessionId,
-    message: InboundChannelMessageV1,
+    message: InboundChannelMessage,
   ): "appended" | "duplicate" | "associated" {
     this.assertOpen();
     assertValidInboundChannelMessage(message);
@@ -435,7 +435,7 @@ export class SqliteConversationSessionStore implements ConversationSessionStore 
 
   private ensureSession(
     sessionId: SessionId,
-    route: ChannelConversationRouteV1,
+    route: ChannelConversationRoute,
     contentFormat: string,
   ): void {
     requireConversationIdentifier(sessionId, "Conversation sessionId");
@@ -599,7 +599,7 @@ export class SqliteConversationSessionStore implements ConversationSessionStore 
 
   private assertSessionMetadata(
     sessionId: SessionId,
-    route: ChannelConversationRouteV1,
+    route: ChannelConversationRoute,
     contentFormat: string,
   ): void {
     const metadata = this.readMetadata(sessionId);

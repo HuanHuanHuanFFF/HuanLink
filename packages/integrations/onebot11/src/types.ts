@@ -49,7 +49,7 @@ export interface OneBot11Transport {
 }
 
 /** 正式 OneBot 11 Adapter 的实例标识、扩展和运行依赖。 */
-export type OneBot11ChannelAdapterV1Options = {
+export type OneBot11ChannelAdapterOptions = {
   channelId: string;
   accountId?: string;
   transport: OneBot11Transport;
@@ -60,7 +60,7 @@ export type OneBot11ChannelAdapterV1Options = {
 };
 
 /** 正向 WebSocket Transport 与正式 Adapter 的组合配置。 */
-export type ForwardWebSocketOneBot11ChannelV1Options =
+export type ForwardWebSocketOneBot11ChannelOptions =
   ForwardWebSocketOneBot11TransportOptions & {
     channelId: string;
     accountId?: string;
