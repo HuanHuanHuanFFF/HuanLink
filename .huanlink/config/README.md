@@ -23,7 +23,7 @@
 
 ## 当前阶段边界
 
-Server 正式入口已经只从本配置树装配 V1 Channel；旧的单群号、命令前缀和 OneBot 地址环境变量入口不再生效。环境变量只承载 JSON 明确引用的秘密值。
+Server 正式入口已经只从本配置树装配 Channel；旧的单群号、命令前缀和 OneBot 地址环境变量入口不再生效。环境变量只承载 JSON 明确引用的秘密值。
 
 仓库默认 Server 配置还显式引用 `./server/orchestration.json`。B01 的总 Runtime 静态加载器要求 `mainAgent`、`orchestration` 和 `defaultAgentId` 全部存在；默认 Agent 必须已启用且使用 A2A。它校验 MainAgent 的 `apiKeyEnv` 名称以及目标 Agent 的 `origin`、`skillId`，但不读取任何环境变量中的秘密；`agentCallPolicy.maxActiveTasksPerSession` 必须是正安全整数，仓库默认值为 `2`。
 
