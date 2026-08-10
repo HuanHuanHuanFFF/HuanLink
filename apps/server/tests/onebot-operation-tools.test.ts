@@ -5,6 +5,7 @@ import {
   type ChannelAdapter,
   type ChannelConversationRoute,
   type InboundChannelMessage,
+  type SessionToolHistoryRecorder,
 } from "@huanlink/core";
 import type { OpenAiAgentsRunContext } from "@huanlink/integration-openai-agents";
 import type { OneBot11Operations } from "@huanlink/integration-onebot11";
@@ -110,6 +111,7 @@ function operationsFixture() {
 
 function createFixture(
   input: {
+    historyRecorder?: SessionToolHistoryRecorder;
     unsafePrivilegedChannelIds?: readonly string[];
     operationChannelIds?: readonly string[];
     runtime?: Pick<
@@ -146,6 +148,9 @@ function createFixture(
   };
   const tools = createOneBot11OperationTools({
     sessions,
+    ...(input.historyRecorder === undefined
+      ? {}
+      : { historyRecorder: input.historyRecorder }),
     resolveOperations,
     isRouteAllowed:
       input.runtime?.isRouteAllowed ??
@@ -325,6 +330,138 @@ describe("OneBot 11 operation Tools", () => {
         }),
       }),
     );
+  });
+
+  test("does not dispatch OneBot when recording the SDK Tool Call fails", async () => {
+    const historyRecorder: SessionToolHistoryRecorder = {
+      recordToolCall: () => {
+        throw new Error("history call secret");
+      },
+      recordToolResult: () => undefined,
+    };
+    const { logger, sendGroupMessage, tools } = createFixture({
+      historyRecorder,
+    });
+    const argumentsJson = JSON.stringify({
+      channelId: "qq-main",
+      request: {
+        operation: "sendGroupMessage",
+        params: {
+          groupId: "20002",
+          parts: [{ type: "text", text: "OneBot secret content" }],
+        },
+      },
+    });
+
+    await expect(
+      tools.standard.invoke(context(), argumentsJson, {
+        toolCall: toolCall(
+          ONEBOT11_STANDARD_TOOL_NAME,
+          "call-onebot-history-write-failure",
+          argumentsJson,
+        ),
+      }),
+    ).rejects.toThrow("Tool history Call recording failed");
+
+    expect(sendGroupMessage).not.toHaveBeenCalled();
+    expect(logger.entries).toContainEqual({
+      level: "error",
+      message: "main_agent.tool.history.write_failed",
+      fields: {
+        runId: "run-onebot-tools",
+        sessionId: SOURCE_SESSION_ID,
+        toolCallId: "call-onebot-history-write-failure",
+        toolName: ONEBOT11_STANDARD_TOOL_NAME,
+        historyStage: "call",
+        errorType: "Error",
+      },
+    });
+    expect(JSON.stringify(logger.entries)).not.toContain("secret");
+  });
+
+  test("keeps schema-invalid OneBot JSON arguments raw in Tool history", async () => {
+    const { sendGroupMessage, sessions, tools } = createFixture();
+    const argumentsJson = JSON.stringify({
+      channelId: "qq-main",
+      request: {
+        operation: "sendGroupMessage",
+        params: { groupId: "20002", parts: [] },
+      },
+    });
+
+    const output = await tools.standard.invoke(context(), argumentsJson, {
+      toolCall: toolCall(
+        ONEBOT11_STANDARD_TOOL_NAME,
+        "call-onebot-schema-invalid",
+        argumentsJson,
+      ),
+    });
+
+    expect(JSON.parse(String(output))).toMatchObject({
+      status: "error",
+      tool: ONEBOT11_STANDARD_TOOL_NAME,
+    });
+    expect(sendGroupMessage).not.toHaveBeenCalled();
+    expect(sessions.getSession(SOURCE_SESSION_ID)?.timeline.at(-2)).toEqual({
+      type: "agent_tool_call",
+      runId: "run-onebot-tools",
+      toolCallId: "call-onebot-schema-invalid",
+      toolName: ONEBOT11_STANDARD_TOOL_NAME,
+      rawArguments: argumentsJson,
+    });
+  });
+
+  test("keeps raw OneBot response data when recording its Tool Result fails", async () => {
+    let sessionStore: InMemoryConversationSessionStore | undefined;
+    const historyRecorder: SessionToolHistoryRecorder = {
+      recordToolCall: (sessionId, call) =>
+        sessionStore!.appendAgentToolCall(sessionId, call),
+      recordToolResult: () => {
+        throw new Error("history result secret");
+      },
+    };
+    const fixture = createFixture({
+      historyRecorder,
+    });
+    sessionStore = fixture.sessions;
+    const { logger, sendGroupMessage, tools } = fixture;
+    const argumentsJson = JSON.stringify({
+      channelId: "qq-main",
+      request: {
+        operation: "sendGroupMessage",
+        params: {
+          groupId: "20002",
+          parts: [{ type: "text", text: "OneBot secret content" }],
+        },
+      },
+    });
+
+    const output = await tools.standard.invoke(context(), argumentsJson, {
+      toolCall: toolCall(
+        ONEBOT11_STANDARD_TOOL_NAME,
+        "call-onebot-history-result-failure",
+        argumentsJson,
+      ),
+    });
+
+    expect(JSON.parse(String(output))).toEqual({
+      message_id: 7001,
+      historyWarning: "Tool result history was not persisted.",
+    });
+    expect(sendGroupMessage).toHaveBeenCalledOnce();
+    expect(logger.entries).toContainEqual({
+      level: "error",
+      message: "main_agent.tool.history.write_failed",
+      fields: {
+        runId: "run-onebot-tools",
+        sessionId: SOURCE_SESSION_ID,
+        toolCallId: "call-onebot-history-result-failure",
+        toolName: ONEBOT11_STANDARD_TOOL_NAME,
+        historyStage: "result",
+        errorType: "Error",
+      },
+    });
+    expect(JSON.stringify(logger.entries)).not.toContain("secret");
   });
 
   test("rejects a disallowed explicit target before any protocol call", async () => {

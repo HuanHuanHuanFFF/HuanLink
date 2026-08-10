@@ -3,6 +3,7 @@ import type {
   AgentCallInvoker,
   AgentCallReader,
   RuntimeLogger,
+  SessionToolHistoryRecorder,
 } from "@huanlink/core";
 import { NoopRuntimeLogger } from "@huanlink/core";
 import {
@@ -39,6 +40,7 @@ export type CreatePhase3MainAgentRuntimeOptions = {
   codexSkillId?: string;
   modelBinding?: MainAgentModelBinding;
   logger?: RuntimeLogger;
+  historyRecorder?: SessionToolHistoryRecorder;
   /** B07 当前会话回复；未注入时 MainAgent 不注册 reply。 */
   channelReply?: CreateChannelReplyToolOptions;
   /** 由 Server 组合根注入的平台受控 Tool；MainAgent 不理解平台协议。 */
@@ -54,15 +56,18 @@ export function createPhase3MainAgentRuntime(
   const submitTool = createCodexAgentCallTool({
     invoker: options.invoker,
     skillId: options.codexSkillId,
+    historyRecorder: options.historyRecorder,
     logger: logger.child({ source: "main_agent.tool.submit" }),
   });
   const taskStatusTool = createTaskStatusTool({
     reader: options.taskReader,
+    historyRecorder: options.historyRecorder,
     logger: logger.child({ source: "main_agent.tool.status" }),
   });
   const taskContinuationTool = createTaskContinuationTool({
     reader: options.taskReader,
     continuator: options.taskContinuator,
+    historyRecorder: options.historyRecorder,
     logger: logger.child({ source: "main_agent.tool.continue" }),
   });
   const channelReplyTool =
@@ -70,6 +75,7 @@ export function createPhase3MainAgentRuntime(
       ? undefined
       : createChannelReplyTool({
           ...options.channelReply,
+          historyRecorder: options.historyRecorder,
           logger: logger.child({ source: "main_agent.tool.reply" }),
         });
   const agent = new Agent<OpenAiAgentsRunContext>({

@@ -9,6 +9,8 @@ import type { SessionId } from "../shared/ids.js";
 
 import {
   cloneConversationSession,
+  cloneConversationAgentToolCallPayload,
+  cloneConversationSessionContextWindow,
   cloneConversationSessionMetadata,
   cloneConversationJsonRecord,
   cloneConversationJsonValue,
@@ -21,6 +23,7 @@ import type {
   ConversationAgentToolCallEntry,
   ConversationAgentToolResultEntry,
   ConversationSession,
+  ConversationSessionContextWindow,
   ConversationSessionMetadata,
   ConversationTimelineEntry,
   RecordConversationOutboundDelivery,
@@ -40,6 +43,7 @@ import type { ConversationSessionStore } from "./conversation-session-store.js";
 import {
   isSameConversationRoute,
   requireConversationIdentifier,
+  validateConversationToolCallPayload,
   validateConversationToolIdentity,
 } from "./conversation-session-validation.js";
 import {
@@ -315,6 +319,7 @@ export class SqliteConversationSessionStore implements ConversationSessionStore 
   ): void {
     this.assertOpen();
     validateConversationToolIdentity(call, "Agent Tool Call");
+    validateConversationToolCallPayload(call, "Agent Tool Call");
     this.inTransaction(() => {
       this.requireExistingSession(sessionId);
       const exists = this.findToolCall(sessionId, call.runId, call.toolCallId);
@@ -328,10 +333,7 @@ export class SqliteConversationSessionStore implements ConversationSessionStore 
         runId: call.runId,
         toolCallId: call.toolCallId,
         toolName: call.toolName,
-        arguments: cloneConversationJsonRecord(
-          call.arguments,
-          "Agent Tool Call arguments",
-        ),
+        ...cloneConversationAgentToolCallPayload(call),
       };
       this.insertEntry(sessionId, entryIndex, entry);
       this.database
@@ -405,7 +407,7 @@ export class SqliteConversationSessionStore implements ConversationSessionStore 
     }
     const rows = this.database
       .prepare(
-        `SELECT payload_json
+        `SELECT entry_index, payload_json
          FROM conversation_entries
          WHERE session_id = ?
          ORDER BY entry_index ASC`,
@@ -413,6 +415,31 @@ export class SqliteConversationSessionStore implements ConversationSessionStore 
       .all(sessionId) as SqliteEntryRow[];
     const timeline = rows.map((row) => parseSqliteStoredEntry(row));
     return cloneConversationSession({ metadata, timeline });
+  }
+
+  getSessionContextWindow(
+    sessionId: SessionId,
+  ): ConversationSessionContextWindow | undefined {
+    this.assertOpen();
+    const metadata = this.readMetadata(sessionId);
+    if (metadata === undefined) {
+      return undefined;
+    }
+    const rows = this.database
+      .prepare(
+        `SELECT entry_index, payload_json
+         FROM conversation_entries
+         WHERE session_id = ?
+         ORDER BY entry_index ASC`,
+      )
+      .all(sessionId) as SqliteEntryRow[];
+    return cloneConversationSessionContextWindow({
+      metadata,
+      entries: rows.map((row) => ({
+        entryIndex: row.entry_index,
+        entry: parseSqliteStoredEntry(row),
+      })),
+    });
   }
 
   getSessionMetadata(

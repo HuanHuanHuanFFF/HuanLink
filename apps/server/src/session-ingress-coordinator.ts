@@ -13,7 +13,6 @@ import type { ChannelRuntimeMessage } from "./channel-runtime.js";
 export type SessionIngressMainAgentInput = {
   readonly runId: RunId;
   readonly sessionId: SessionId;
-  readonly input: string;
   readonly signal: AbortSignal;
 };
 
@@ -61,7 +60,6 @@ export function createSessionIngressCoordinator(
       await options.runner.runMainAgent({
         runId: createRunId(),
         sessionId,
-        input: message.content,
         signal,
       });
     },

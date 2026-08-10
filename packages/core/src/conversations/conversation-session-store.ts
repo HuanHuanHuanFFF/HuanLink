@@ -5,6 +5,7 @@ import type {
   AppendConversationAgentToolCall,
   AppendConversationAgentToolResult,
   ConversationSession,
+  ConversationSessionContextWindow,
   ConversationSessionMetadata,
   RecordConversationOutboundDelivery,
 } from "./conversation-session.js";
@@ -28,6 +29,9 @@ export interface ConversationSessionStore {
     result: AppendConversationAgentToolResult,
   ): void;
   getSession(sessionId: SessionId): ConversationSession | undefined;
+  getSessionContextWindow(
+    sessionId: SessionId,
+  ): ConversationSessionContextWindow | undefined;
   getSessionMetadata(
     sessionId: SessionId,
   ): ConversationSessionMetadata | undefined;

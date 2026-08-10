@@ -45,14 +45,26 @@ export type ConversationChannelMessageEntry = {
   readonly outbound?: ConversationOutboundDelivery;
 };
 
+/** Tool Call 参数的两种互斥持久化形式。 */
+export type ConversationAgentToolCallPayload =
+  | {
+      /** 已由调用方解析并校验的结构化参数；保持既有持久格式兼容。 */
+      readonly arguments: Readonly<Record<string, ConversationJsonValue>>;
+      readonly rawArguments?: never;
+    }
+  | {
+      /** SDK 未能解析或校验时保留的原始参数，不伪造结构化 JSON。 */
+      readonly rawArguments: string;
+      readonly arguments?: never;
+    };
+
 /** Agent 发出的结构化 Tool Call；参数不降级为展示文本。 */
 export type ConversationAgentToolCallEntry = {
   readonly type: "agent_tool_call";
   readonly runId: RunId;
   readonly toolCallId: string;
   readonly toolName: string;
-  readonly arguments: Readonly<Record<string, ConversationJsonValue>>;
-};
+} & ConversationAgentToolCallPayload;
 
 /** 与 Tool Call 配对的结构化 Tool Result。 */
 export type ConversationAgentToolResultEntry = {
@@ -75,6 +87,28 @@ export type ConversationSession = {
   readonly timeline: readonly ConversationTimelineEntry[];
 };
 
+/** Stable ordering key for one stored Session timeline entry. */
+export type ConversationSessionEntryIndex = number;
+
+/** One immutable fact exposed after the Session context cursor. */
+export type ConversationSessionContextEntry = {
+  readonly entryIndex: ConversationSessionEntryIndex;
+  readonly entry: ConversationTimelineEntry;
+};
+
+/** Future compaction boundary; current Stores do not write summaries. */
+export type ConversationSessionContextSummary = {
+  readonly text: string;
+  readonly throughEntryIndex: ConversationSessionEntryIndex;
+};
+
+/** Metadata plus the ordered facts that remain after an optional cursor. */
+export type ConversationSessionContextWindow = {
+  readonly metadata: ConversationSessionMetadata;
+  readonly summary?: ConversationSessionContextSummary;
+  readonly entries: readonly ConversationSessionContextEntry[];
+};
+
 /** 成功发送后登记待回流关联所需的可信数据。 */
 export type RecordConversationOutboundDelivery = {
   readonly route: ChannelConversationRoute;
@@ -86,10 +120,11 @@ export type RecordConversationOutboundDelivery = {
   readonly sourceSessionId: SessionId;
 };
 
-export type AppendConversationAgentToolCall = Omit<
-  ConversationAgentToolCallEntry,
-  "type"
->;
+export type AppendConversationAgentToolCall = {
+  readonly runId: RunId;
+  readonly toolCallId: string;
+  readonly toolName: string;
+} & ConversationAgentToolCallPayload;
 
 export type AppendConversationAgentToolResult = Omit<
   ConversationAgentToolResultEntry,

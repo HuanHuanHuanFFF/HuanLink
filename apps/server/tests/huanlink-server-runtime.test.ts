@@ -8,6 +8,7 @@ import {
   type ConversationSessionStore,
   type InboundChannelMessage,
   type RetractChannelMessageCommand,
+  type SessionToolHistoryRecorder,
   type SendChannelMessageCommand,
 } from "@huanlink/core";
 
@@ -136,6 +137,7 @@ function createFakes(
     appendAgentToolResult: () => undefined,
     getSession: () => undefined,
     getSessionMetadata: () => undefined,
+    getSessionContextWindow: () => undefined,
   };
   const runtime = createHuanLinkServerRuntime({
     channels,
@@ -152,8 +154,14 @@ describe("HuanLinkServerRuntime", () => {
   test("wires Channel ingress through the Coordinator before invoking Phase3", async () => {
     const sessionStore = new InMemoryConversationSessionStore();
     const storeOwner = { close: vi.fn() };
+    const projectedInputs: string[] = [];
+    let getLatestContext!: (sessionId: string) => string;
+    let historyRecorder!: SessionToolHistoryRecorder;
     const phase3 = {
-      runMainAgent: vi.fn(async () => ({ output: "accepted" })),
+      runMainAgent: vi.fn(async ({ sessionId }: { sessionId: string }) => {
+        projectedInputs.push(getLatestContext(sessionId));
+        return { output: "accepted" };
+      }),
       close: vi.fn(),
     };
     const channels = {
@@ -165,7 +173,11 @@ describe("HuanLinkServerRuntime", () => {
     ) => Promise<void> | void;
     const runtime = await assembleHuanLinkServerRuntime({
       createStore: () => ({ sessionStore, storeOwner }),
-      createPhase3: () => phase3,
+      createPhase3: (input) => {
+        getLatestContext = input.getLatestContext;
+        historyRecorder = input.historyRecorder;
+        return phase3;
+      },
       createChannels: ({ onChannelMessage: handler }) => {
         onChannelMessage = handler;
         return channels;
@@ -203,9 +215,27 @@ describe("HuanLinkServerRuntime", () => {
     expect(phase3.runMainAgent).toHaveBeenCalledWith({
       runId: expect.any(String),
       sessionId: "channel:qq-main:group:10001",
-      input: "@HuanLink inspect this",
       signal,
     });
+    expect(projectedInputs).toHaveLength(1);
+    expect(projectedInputs[0]).toContain("@HuanLink inspect this");
+    expect(projectedInputs[0]?.match(/\"route\":/g)).toHaveLength(1);
+
+    historyRecorder.recordToolCall("channel:qq-main:group:10001", {
+      runId: "run-tool-history",
+      toolCallId: "call-tool-history",
+      toolName: "test_tool",
+      arguments: { value: "recorded" },
+    });
+    historyRecorder.recordToolResult("channel:qq-main:group:10001", {
+      runId: "run-tool-history",
+      toolCallId: "call-tool-history",
+      toolName: "test_tool",
+      output: { status: "ok" },
+    });
+    expect(
+      sessionStore.getSession("channel:qq-main:group:10001")?.timeline,
+    ).toHaveLength(3);
 
     await runtime.close();
   });
@@ -214,12 +244,14 @@ describe("HuanLinkServerRuntime", () => {
     const sessionStore = new InMemoryConversationSessionStore();
     const adapter = new RuntimeIngressAdapter();
     let activeSignal: AbortSignal | undefined;
+    let getLatestContext!: (sessionId: string) => string;
     const runMainAgent = vi.fn(
       async (input: {
-        readonly input: string;
+        readonly sessionId: string;
         readonly signal: AbortSignal;
       }) => {
-        if (input.input !== "first") {
+        const projectedInput = getLatestContext(input.sessionId);
+        if (!projectedInput.includes('"content":"first"')) {
           return { output: "other route completed" };
         }
         activeSignal = input.signal;
@@ -242,7 +274,10 @@ describe("HuanLinkServerRuntime", () => {
         sessionStore,
         storeOwner: { close: vi.fn() },
       }),
-      createPhase3: () => ({ runMainAgent, close: vi.fn() }),
+      createPhase3: (input) => {
+        getLatestContext = input.getLatestContext;
+        return { runMainAgent, close: vi.fn() };
+      },
       createChannels: ({ onChannelMessage }) =>
         createChannelRuntime({
           channels: [
@@ -265,9 +300,9 @@ describe("HuanLinkServerRuntime", () => {
     adapter.emit(ingressMention("other-route", "20002"));
 
     await vi.waitFor(() => expect(runMainAgent).toHaveBeenCalledTimes(2));
-    expect(runMainAgent.mock.calls.map(([input]) => input.input)).toEqual([
-      "first",
-      "other-route",
+    expect(runMainAgent.mock.calls.map(([input]) => input.sessionId)).toEqual([
+      "channel:qq-main:group:10001",
+      "channel:qq-main:group:20002",
     ]);
 
     await runtime.close();
@@ -293,6 +328,7 @@ describe("HuanLinkServerRuntime", () => {
       appendAgentToolResult: () => undefined,
       getSession: () => undefined,
       getSessionMetadata: () => undefined,
+      getSessionContextWindow: () => undefined,
     };
     const storeOwner = {
       close: vi.fn(() => {

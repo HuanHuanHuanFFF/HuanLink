@@ -238,25 +238,10 @@ describe("createTaskStatusTool", () => {
           state: record.state,
         },
       });
-      expect(observed.logger.entries).toContainEqual({
-        level: "debug",
-        message: "main_agent.tool.completed",
-        fields: {
-          runId: "run-status-query",
-          sessionId: "session-current",
-          toolName: GET_TASK_STATUS_TOOL_NAME,
-          taskId: query,
-          resolutionStatus: "found",
-          agentCallId: record.agentCallId,
-          a2aTaskId: record.taskId,
-          state: record.state,
-          result: observed.result,
-        },
-      });
     },
   );
 
-  test("redacts secret question details from debug logs while returning the full status", async () => {
+  test("does not log question or artifact payloads while returning the full status", async () => {
     const publicQuestion = {
       id: "scope",
       header: "Scope",
@@ -289,35 +274,20 @@ describe("createTaskStatusTool", () => {
       status: "found",
       task: { questions: [publicQuestion, secretQuestion] },
     });
-    const debugEntry = observed.logger.entries.find(
-      ({ level, message, fields }) =>
-        level === "debug" &&
-        message === "main_agent.tool.completed" &&
-        fields.resolutionStatus === "found",
-    );
-    const serializedDebug = JSON.stringify(debugEntry);
+    const serializedLogs = JSON.stringify(observed.logger.entries);
     for (const secret of [
+      publicQuestion.question,
       secretQuestion.header,
       secretQuestion.question,
       secretQuestion.options[0]!.label,
       secretQuestion.options[0]!.description,
+      record.artifacts[0]!.text,
     ]) {
-      expect(serializedDebug).not.toContain(secret);
+      expect(serializedLogs).not.toContain(secret);
     }
-    const loggedQuestions = (
-      debugEntry?.fields.result as {
-        task?: { questions?: Array<Record<string, unknown>> };
-      }
-    )?.task?.questions;
-    expect(loggedQuestions?.[0]).toEqual(publicQuestion);
-    expect(loggedQuestions?.[1]).toEqual({
-      id: "credential",
-      isOther: false,
-      isSecret: true,
-    });
   });
 
-  test("does not let a mutating debug logger alter the returned task status", async () => {
+  test("does not expose the returned task status to a mutating debug logger", async () => {
     const question = {
       id: "scope",
       header: "Scope",
@@ -374,7 +344,9 @@ describe("createTaskStatusTool", () => {
         questions: [question],
       },
     });
-    expect(JSON.stringify(logger.entries)).toContain("logger-mutated-question");
+    expect(JSON.stringify(logger.entries)).not.toContain(
+      "logger-mutated-question",
+    );
   });
 
   test("returns the current-session A2A candidate when another session owns the colliding canonical ID", async () => {
@@ -577,14 +549,6 @@ describe("createTaskStatusTool", () => {
         new ThrowingRuntimeLogger({
           throwWhen: ({ level, message }) =>
             level === "info" && message === "main_agent.tool.completed",
-        }),
-    },
-    {
-      name: "completed debug logging",
-      createLogger: () =>
-        new ThrowingRuntimeLogger({
-          throwWhen: ({ level, message }) =>
-            level === "debug" && message === "main_agent.tool.completed",
         }),
     },
   ])(

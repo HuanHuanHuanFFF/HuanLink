@@ -2,6 +2,7 @@ import {
   TASK_EXECUTION_MODES,
   type AgentCallInvoker,
   type RuntimeLogger,
+  type SessionToolHistoryRecorder,
 } from "@huanlink/core";
 import { tool } from "@openai/agents";
 import { z } from "zod";
@@ -12,6 +13,7 @@ import {
   safeRuntimeErrorType,
 } from "./best-effort-runtime-logger.js";
 import type { OpenAiAgentsRunContext } from "./openai-agents-runtime.js";
+import { withSessionToolHistory } from "./session-tool-history-tool.js";
 
 export const SUBMIT_CODEX_AGENT_CALL_TOOL_NAME =
   "submit_codex_agent_call" as const;
@@ -34,6 +36,7 @@ export type CreateCodexAgentCallToolOptions = {
   invoker: AgentCallInvoker;
   logger?: RuntimeLogger;
   skillId?: string;
+  historyRecorder?: SessionToolHistoryRecorder;
 };
 
 export function createCodexAgentCallTool(
@@ -42,7 +45,7 @@ export function createCodexAgentCallTool(
   const logger = bestEffortRuntimeLogger(options.logger);
   const skillId = options.skillId ?? "codex-code-task";
 
-  return tool<typeof parameters, OpenAiAgentsRunContext>({
+  const functionTool = tool<typeof parameters, OpenAiAgentsRunContext>({
     name: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
     description:
       "Submit a coding task to the remote Codex agent. Async mode returns an accepted task ID; blocking mode returns the observed task outcome. Terminal re-entry follow-ups always run asynchronously.",
@@ -70,10 +73,6 @@ export function createCodexAgentCallTool(
         inputLength: task.length,
       };
       toolLogger.info("main_agent.tool.started", inputFields);
-      toolLogger.debug("main_agent.tool.started", {
-        ...inputFields,
-        task,
-      });
 
       const signal = combineAbortSignals(
         runContext.context.signal,
@@ -88,6 +87,9 @@ export function createCodexAgentCallTool(
           skillId,
           input: task,
           executionMode: effectiveExecutionMode,
+          ...(details?.toolCall?.callId === undefined
+            ? {}
+            : { sourceToolCallId: details.toolCall.callId }),
           ...(signal === undefined ? {} : { signal }),
         });
         toolLogger.info("main_agent.tool.completed", {
@@ -107,4 +109,10 @@ export function createCodexAgentCallTool(
       }
     },
   });
+  return withSessionToolHistory(
+    functionTool,
+    options.historyRecorder,
+    logger,
+    (rawArguments) => parameters.parse(JSON.parse(rawArguments)),
+  );
 }

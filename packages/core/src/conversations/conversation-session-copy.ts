@@ -5,7 +5,9 @@ import type {
 
 import type {
   ConversationJsonValue,
+  ConversationAgentToolCallPayload,
   ConversationSession,
+  ConversationSessionContextWindow,
   ConversationSessionMetadata,
   ConversationTimelineEntry,
 } from "./conversation-session.js";
@@ -37,6 +39,27 @@ export function cloneConversationSessionMetadata(
     kind: metadata.kind,
     route: cloneChannelConversationRoute(metadata.route),
     contentFormat: metadata.contentFormat,
+  };
+}
+
+/** Returns a defensive copy of a cursor-based Session context window. */
+export function cloneConversationSessionContextWindow(
+  window: ConversationSessionContextWindow,
+): ConversationSessionContextWindow {
+  return {
+    metadata: cloneConversationSessionMetadata(window.metadata),
+    ...(window.summary === undefined
+      ? {}
+      : {
+          summary: {
+            text: window.summary.text,
+            throughEntryIndex: window.summary.throughEntryIndex,
+          },
+        }),
+    entries: window.entries.map(({ entryIndex, entry }) => ({
+      entryIndex,
+      entry: cloneConversationTimelineEntry(entry),
+    })),
   };
 }
 
@@ -78,6 +101,21 @@ export function cloneConversationJsonRecord(
       cloneConversationJsonValue(item, `${label}.${key}`),
     ]),
   );
+}
+
+/** 复制互斥的 Tool Call 参数，保留原始参数不作 JSON 解析。 */
+export function cloneConversationAgentToolCallPayload(
+  payload: ConversationAgentToolCallPayload,
+): ConversationAgentToolCallPayload {
+  if (payload.rawArguments !== undefined) {
+    return { rawArguments: payload.rawArguments };
+  }
+  return {
+    arguments: cloneConversationJsonRecord(
+      payload.arguments,
+      "Agent Tool Call arguments",
+    ),
+  };
 }
 
 /** 校验并深复制可进入会话历史的 JSON 值。 */
@@ -130,11 +168,11 @@ function cloneConversationTimelineEntry(
       };
     case "agent_tool_call":
       return {
-        ...entry,
-        arguments: cloneConversationJsonRecord(
-          entry.arguments,
-          "Agent Tool Call arguments",
-        ),
+        type: "agent_tool_call",
+        runId: entry.runId,
+        toolCallId: entry.toolCallId,
+        toolName: entry.toolName,
+        ...cloneConversationAgentToolCallPayload(entry),
       };
     case "agent_tool_result":
       return {

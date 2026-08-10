@@ -76,6 +76,7 @@ describe("createDeepSeekMainAgentModelBinding", () => {
       skillId: "codex-code-task",
       input: "add one focused validation",
       executionMode: "async",
+      sourceToolCallId: "call-submit-codex",
     });
     expect(requests).toHaveLength(2);
     expect(requests[0]?.url).toBe(

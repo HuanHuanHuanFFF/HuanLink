@@ -1,4 +1,10 @@
-import type { ConversationSessionStore } from "@huanlink/core";
+import {
+  ConversationSessionStoreToolHistoryRecorder,
+  projectConversationSessionContext,
+  type ConversationSessionStore,
+  type SessionId,
+  type SessionToolHistoryRecorder,
+} from "@huanlink/core";
 
 import type { ChannelRuntimeMessage } from "./channel-runtime.js";
 import {
@@ -53,6 +59,8 @@ export type AssembleHuanLinkServerRuntimeOptions = {
   readonly createStore: () => Awaitable<HuanLinkServerStoreResource>;
   readonly createPhase3: (input: {
     readonly sessionStore: ConversationSessionStore;
+    readonly getLatestContext: (sessionId: SessionId) => string;
+    readonly historyRecorder: SessionToolHistoryRecorder;
   }) => Awaitable<HuanLinkServerPhase3Runtime>;
   readonly createChannels: (input: {
     readonly onChannelMessage: (
@@ -119,7 +127,19 @@ export async function assembleHuanLinkServerRuntime(
     const { sessionStore, storeOwner } = await options.createStore();
     acquired.push(storeOwner);
 
-    const phase3 = await options.createPhase3({ sessionStore });
+    const phase3 = await options.createPhase3({
+      sessionStore,
+      historyRecorder: new ConversationSessionStoreToolHistoryRecorder(
+        sessionStore,
+      ),
+      getLatestContext: (sessionId) => {
+        const window = sessionStore.getSessionContextWindow(sessionId);
+        if (window === undefined) {
+          throw new Error(`Conversation Session ${sessionId} does not exist`);
+        }
+        return projectConversationSessionContext(window);
+      },
+    });
     acquired.push(phase3);
 
     const sessionIngress = createSessionIngressCoordinator({

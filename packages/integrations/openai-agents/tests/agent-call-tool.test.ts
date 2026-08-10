@@ -169,6 +169,7 @@ describe("createCodexAgentCallTool", () => {
       skillId: "codex-code-task",
       input: delegatedTask,
       executionMode: scenario.expectedMode,
+      sourceToolCallId: "tool-call-01",
       signal: abortController.signal,
     });
     expect(model.requests).toHaveLength(2);
@@ -189,18 +190,6 @@ describe("createCodexAgentCallTool", () => {
           toolName: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
           executionMode: scenario.expectedMode,
           inputLength: delegatedTask.length,
-        },
-      },
-      {
-        level: "debug",
-        message: "main_agent.tool.started",
-        fields: {
-          runId: "run-tool-01",
-          sessionId: "session-tool-01",
-          toolName: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
-          executionMode: scenario.expectedMode,
-          inputLength: delegatedTask.length,
-          task: delegatedTask,
         },
       },
       {
@@ -231,14 +220,6 @@ describe("createCodexAgentCallTool", () => {
         new ThrowingRuntimeLogger({
           throwWhen: ({ level, message }) =>
             level === "info" && message === "main_agent.tool.started",
-        }),
-    },
-    {
-      name: "started debug logging",
-      createLogger: () =>
-        new ThrowingRuntimeLogger({
-          throwWhen: ({ level, message }) =>
-            level === "debug" && message === "main_agent.tool.started",
         }),
     },
     {

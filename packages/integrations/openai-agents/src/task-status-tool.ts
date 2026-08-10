@@ -1,9 +1,9 @@
 import {
-  type AgentCallInputQuestion,
   type AgentCallReader,
   type AgentCallRecord,
   type RuntimeLogFields,
   type RuntimeLogger,
+  type SessionToolHistoryRecorder,
 } from "@huanlink/core";
 import { tool } from "@openai/agents";
 import { z } from "zod";
@@ -13,6 +13,7 @@ import {
   safeRuntimeErrorType,
 } from "./best-effort-runtime-logger.js";
 import type { OpenAiAgentsRunContext } from "./openai-agents-runtime.js";
+import { withSessionToolHistory } from "./session-tool-history-tool.js";
 import { resolveTaskRecord } from "./task-record-resolution.js";
 
 export const GET_TASK_STATUS_TOOL_NAME = "get_task_status" as const;
@@ -28,6 +29,7 @@ const parameters = z.object({
 export type CreateTaskStatusToolOptions = {
   logger?: RuntimeLogger;
   reader: AgentCallReader;
+  historyRecorder?: SessionToolHistoryRecorder;
 };
 
 type TaskStatusToolResult =
@@ -37,7 +39,7 @@ type TaskStatusToolResult =
 export function createTaskStatusTool(options: CreateTaskStatusToolOptions) {
   const logger = bestEffortRuntimeLogger(options.logger);
 
-  return tool<typeof parameters, OpenAiAgentsRunContext>({
+  const functionTool = tool<typeof parameters, OpenAiAgentsRunContext>({
     name: GET_TASK_STATUS_TOOL_NAME,
     description:
       "Read the current status of an existing HuanLink task in this session without creating or changing any task.",
@@ -62,10 +64,6 @@ export function createTaskStatusTool(options: CreateTaskStatusToolOptions) {
         fields: RuntimeLogFields,
       ) => {
         toolLogger.info("main_agent.tool.completed", fields);
-        toolLogger.debug("main_agent.tool.completed", {
-          ...fields,
-          result: taskStatusLogProjection(result),
-        });
         return JSON.stringify(result);
       };
 
@@ -108,42 +106,12 @@ export function createTaskStatusTool(options: CreateTaskStatusToolOptions) {
       }
     },
   });
-}
-
-function taskStatusLogProjection(result: TaskStatusToolResult): unknown {
-  if (result.status !== "found") {
-    return { ...result };
-  }
-
-  const { artifacts, questions, ...taskFields } = result.task;
-  return {
-    status: "found",
-    task: {
-      ...taskFields,
-      ...(questions === undefined
-        ? {}
-        : { questions: questions.map(questionLogProjection) }),
-      artifacts: artifacts.map((artifact) => ({ ...artifact })),
-    },
-  };
-}
-
-function questionLogProjection(question: AgentCallInputQuestion): unknown {
-  if (question.isSecret) {
-    return {
-      id: question.id,
-      isOther: question.isOther,
-      isSecret: true,
-    };
-  }
-
-  return {
-    ...question,
-    options:
-      question.options === null
-        ? null
-        : question.options.map((option) => ({ ...option })),
-  };
+  return withSessionToolHistory(
+    functionTool,
+    options.historyRecorder,
+    logger,
+    (rawArguments) => parameters.parse(JSON.parse(rawArguments)),
+  );
 }
 
 function publicTaskStatus(record: AgentCallRecord) {

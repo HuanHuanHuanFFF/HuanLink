@@ -54,7 +54,7 @@ function channelMessage(input: {
 }
 
 describe("SessionIngressCoordinator", () => {
-  test("awaits appended mention with original content and Channel signal", async () => {
+  test("awaits an appended mention without capturing a pre-queue input", async () => {
     const sessions = new InMemoryConversationSessionStore();
     const run = deferred<{ output: string }>();
     const runMainAgent = vi.fn(() => run.promise);
@@ -79,7 +79,6 @@ describe("SessionIngressCoordinator", () => {
     expect(runMainAgent).toHaveBeenCalledWith({
       runId: "run-mention",
       sessionId: message.sessionId,
-      input: "@HuanLink help me",
       signal: controller.signal,
     });
     expect(createRunId).toHaveBeenCalledOnce();
@@ -136,7 +135,6 @@ describe("SessionIngressCoordinator", () => {
     expect(runMainAgent).toHaveBeenCalledWith({
       runId: "run-command",
       sessionId: command.sessionId,
-      input: "/huanlink status",
       signal: command.signal,
     });
   });
@@ -170,6 +168,7 @@ describe("SessionIngressCoordinator", () => {
       appendAgentToolResult: () => undefined,
       getSession: () => undefined,
       getSessionMetadata: () => undefined,
+      getSessionContextWindow: () => undefined,
     };
     const runMainAgent = vi.fn(async () => ({ output: "unexpected" }));
     const coordinator = createSessionIngressCoordinator({
@@ -319,6 +318,7 @@ describe("SessionIngressCoordinator", () => {
       appendAgentToolResult: () => undefined,
       getSession: () => undefined,
       getSessionMetadata: () => undefined,
+      getSessionContextWindow: () => undefined,
     };
     const runMainAgent = vi.fn(async () => ({ output: "unexpected" }));
     const coordinator = createSessionIngressCoordinator({
@@ -350,6 +350,7 @@ describe("SessionIngressCoordinator", () => {
       appendAgentToolResult: sessions.appendAgentToolResult.bind(sessions),
       getSession: sessions.getSession.bind(sessions),
       getSessionMetadata: sessions.getSessionMetadata.bind(sessions),
+      getSessionContextWindow: sessions.getSessionContextWindow.bind(sessions),
     };
     const runMainAgent = vi.fn(async () => ({ output: "unexpected" }));
     const coordinator = createSessionIngressCoordinator({

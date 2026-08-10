@@ -3,10 +3,18 @@ import type {
   ConversationJsonValue,
   InMemoryConversationSessionStore,
   RuntimeLogger,
+  SessionToolHistoryRecorder,
   SessionId,
 } from "@huanlink/core";
-import { ChannelOperationError, NoopRuntimeLogger } from "@huanlink/core";
-import type { OpenAiAgentsRunContext } from "@huanlink/integration-openai-agents";
+import {
+  ChannelOperationError,
+  ConversationSessionStoreToolHistoryRecorder,
+  NoopRuntimeLogger,
+} from "@huanlink/core";
+import {
+  type OpenAiAgentsRunContext,
+  withSessionToolHistory,
+} from "@huanlink/integration-openai-agents";
 import {
   OneBot11DeliveryUncertainError,
   OneBot11RemoteActionError,
@@ -363,6 +371,8 @@ type OperationExecution = {
 
 export type CreateOneBot11OperationToolsOptions = {
   sessions: InMemoryConversationSessionStore;
+  /** Defaults to the supplied Session Store without generating any IDs. */
+  historyRecorder?: SessionToolHistoryRecorder;
   resolveOperations(channelId: string): OneBot11Operations | undefined;
   isRouteAllowed(route: ChannelConversationRoute): boolean;
   /**
@@ -401,54 +411,67 @@ export function createOneBot11OperationTools(
   const logger = createBestEffortRuntimeLogger(
     options.logger ?? new NoopRuntimeLogger(),
   );
+  const historyRecorder =
+    options.historyRecorder ??
+    new ConversationSessionStoreToolHistoryRecorder(options.sessions);
 
-  const standard = tool<typeof standardParameters, OpenAiAgentsRunContext>({
-    name: ONEBOT11_STANDARD_TOOL_NAME,
-    description:
-      "Run one named, non-privileged OneBot 11 operation. Operations with an explicit group or private target must be in HuanLink's allowed Channel range; account-level list and status queries have no target and return the configured account's raw data.",
-    parameters: standardParameters,
-    strict: true,
-    isEnabled: ({ runContext }) =>
-      isExternalSession(options, runContext.context.sessionId),
-    errorFunction: (_context, error) =>
-      JSON.stringify(errorResult(ONEBOT11_STANDARD_TOOL_NAME, error)),
-    execute: async (input, runContext, details) =>
-      await executeToolCall({
-        options,
-        logger,
-        toolName: ONEBOT11_STANDARD_TOOL_NAME,
-        input,
-        runContext,
-        toolCallId: details?.toolCall?.callId,
-        operation: async (operations) =>
-          executeStandard(options, operations, input),
-      }),
-  });
+  const standard = withSessionToolHistory(
+    tool<typeof standardParameters, OpenAiAgentsRunContext>({
+      name: ONEBOT11_STANDARD_TOOL_NAME,
+      description:
+        "Run one named, non-privileged OneBot 11 operation. Operations with an explicit group or private target must be in HuanLink's allowed Channel range; account-level list and status queries have no target and return the configured account's raw data.",
+      parameters: standardParameters,
+      strict: true,
+      isEnabled: ({ runContext }) =>
+        isExternalSession(options, runContext.context.sessionId),
+      errorFunction: (_context, error) =>
+        JSON.stringify(errorResult(ONEBOT11_STANDARD_TOOL_NAME, error)),
+      execute: async (input, runContext, details) =>
+        await executeToolCall({
+          options,
+          logger,
+          toolName: ONEBOT11_STANDARD_TOOL_NAME,
+          input,
+          runContext,
+          toolCallId: details?.toolCall?.callId,
+          operation: async (operations) =>
+            executeStandard(options, operations, input),
+        }),
+    }),
+    historyRecorder,
+    logger,
+    parseStandardHistoryArguments,
+  );
   const privileged =
     options.isUnsafePrivilegedOperationsEnabled !== undefined
-      ? tool<typeof privilegedParameters, OpenAiAgentsRunContext>({
-          name: ONEBOT11_PRIVILEGED_TOOL_NAME,
-          description:
-            "Run one named destructive OneBot 11 operation. This Tool currently has no approval, target-list, or message-ownership protection and executes immediately.",
-          parameters: privilegedParameters,
-          strict: true,
-          isEnabled: ({ runContext }) =>
-            isExternalSession(options, runContext.context.sessionId),
-          errorFunction: (_context, error) =>
-            JSON.stringify(errorResult(ONEBOT11_PRIVILEGED_TOOL_NAME, error)),
-          execute: async (input, runContext, details) =>
-            await executeToolCall({
-              options,
-              logger,
-              toolName: ONEBOT11_PRIVILEGED_TOOL_NAME,
-              input,
-              runContext,
-              toolCallId: details?.toolCall?.callId,
-              operation: async (operations) => ({
-                data: await executePrivileged(operations, input),
+      ? withSessionToolHistory(
+          tool<typeof privilegedParameters, OpenAiAgentsRunContext>({
+            name: ONEBOT11_PRIVILEGED_TOOL_NAME,
+            description:
+              "Run one named destructive OneBot 11 operation. This Tool currently has no approval, target-list, or message-ownership protection and executes immediately.",
+            parameters: privilegedParameters,
+            strict: true,
+            isEnabled: ({ runContext }) =>
+              isExternalSession(options, runContext.context.sessionId),
+            errorFunction: (_context, error) =>
+              JSON.stringify(errorResult(ONEBOT11_PRIVILEGED_TOOL_NAME, error)),
+            execute: async (input, runContext, details) =>
+              await executeToolCall({
+                options,
+                logger,
+                toolName: ONEBOT11_PRIVILEGED_TOOL_NAME,
+                input,
+                runContext,
+                toolCallId: details?.toolCall?.callId,
+                operation: async (operations) => ({
+                  data: await executePrivileged(operations, input),
+                }),
               }),
-            }),
-        })
+          }),
+          historyRecorder,
+          logger,
+          parsePrivilegedHistoryArguments,
+        )
       : undefined;
 
   if (privileged !== undefined) {
@@ -458,6 +481,22 @@ export function createOneBot11OperationTools(
   }
 
   return { standard, privileged };
+}
+
+function parseStandardHistoryArguments(
+  rawArguments: string,
+): Readonly<Record<string, ConversationJsonValue>> {
+  return standardParameters.parse(
+    JSON.parse(rawArguments),
+  ) as unknown as Readonly<Record<string, ConversationJsonValue>>;
+}
+
+function parsePrivilegedHistoryArguments(
+  rawArguments: string,
+): Readonly<Record<string, ConversationJsonValue>> {
+  return privilegedParameters.parse(
+    JSON.parse(rawArguments),
+  ) as unknown as Readonly<Record<string, ConversationJsonValue>>;
 }
 
 async function executeToolCall<
@@ -506,35 +545,7 @@ async function executeToolCall<
     channelId: input.input.channelId,
     operation: input.input.request.operation,
   });
-  try {
-    input.options.sessions.appendAgentToolCall(context.sessionId, {
-      runId: context.runId,
-      toolCallId: input.toolCallId,
-      toolName: input.toolName,
-      arguments: input.input as unknown as Readonly<
-        Record<string, ConversationJsonValue>
-      >,
-    });
-  } catch (error) {
-    toolLogger.error("onebot.operation.tool_call_record_failed", {
-      errorType: errorType(error),
-    });
-    return JSON.stringify(errorResult(input.toolName, error));
-  }
-
   const complete = (result: ToolResult): string => {
-    try {
-      input.options.sessions.appendAgentToolResult(context.sessionId, {
-        runId: context.runId,
-        toolCallId: input.toolCallId!,
-        toolName: input.toolName,
-        output: result,
-      });
-    } catch (error) {
-      toolLogger.error("onebot.operation.tool_result_record_failed", {
-        errorType: errorType(error),
-      });
-    }
     toolLogger.info("onebot.operation.completed", {
       status: isErrorResult(result) ? result.status : "success",
     });

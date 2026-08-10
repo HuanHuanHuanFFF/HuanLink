@@ -19,6 +19,7 @@ import type {
 } from "./conversation-session.js";
 import {
   requireConversationIdentifier,
+  validateConversationToolCallPayload,
   validateConversationToolIdentity,
 } from "./conversation-session-validation.js";
 
@@ -80,7 +81,13 @@ export function parseSqliteStoredEntry(
       return entry;
     case "agent_tool_call":
       validateConversationToolIdentity(entry, "Agent Tool Call");
-      cloneConversationJsonRecord(entry.arguments, "Agent Tool Call arguments");
+      validateConversationToolCallPayload(entry, "Agent Tool Call");
+      if (entry.rawArguments === undefined) {
+        cloneConversationJsonRecord(
+          entry.arguments,
+          "Agent Tool Call arguments",
+        );
+      }
       return entry;
     case "agent_tool_result":
       validateConversationToolIdentity(entry, "Agent Tool Result");

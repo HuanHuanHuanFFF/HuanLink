@@ -24,5 +24,7 @@ export * from "./channels/contract.js";
 export * from "./channels/session-key.js";
 export * from "./conversations/conversation-session.js";
 export * from "./conversations/conversation-session-store.js";
+export * from "./conversations/conversation-session-context-projector.js";
+export * from "./conversations/session-tool-history-recorder.js";
 export * from "./conversations/in-memory-conversation-session-store.js";
 export * from "./conversations/sqlite-conversation-session-store.js";

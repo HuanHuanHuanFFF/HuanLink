@@ -4,9 +4,17 @@ import type {
   ConversationJsonValue,
   InMemoryConversationSessionStore,
   RuntimeLogger,
+  SessionToolHistoryRecorder,
 } from "@huanlink/core";
-import { ChannelOperationError, NoopRuntimeLogger } from "@huanlink/core";
-import type { OpenAiAgentsRunContext } from "@huanlink/integration-openai-agents";
+import {
+  ChannelOperationError,
+  ConversationSessionStoreToolHistoryRecorder,
+  NoopRuntimeLogger,
+} from "@huanlink/core";
+import {
+  type OpenAiAgentsRunContext,
+  withSessionToolHistory,
+} from "@huanlink/integration-openai-agents";
 import { tool } from "@openai/agents";
 import { z } from "zod";
 
@@ -63,6 +71,8 @@ type ChannelReplyToolResult =
 
 export type CreateChannelReplyToolOptions = {
   sessions: InMemoryConversationSessionStore;
+  /** Defaults to the supplied Session Store without generating any IDs. */
+  historyRecorder?: SessionToolHistoryRecorder;
   resolveAdapter(channelId: string): ChannelAdapter | undefined;
   logger?: RuntimeLogger;
   now?: () => Date;
@@ -74,8 +84,11 @@ export function createChannelReplyTool(options: CreateChannelReplyToolOptions) {
   const logger = createBestEffortRuntimeLogger(
     options.logger ?? new NoopRuntimeLogger(),
   );
+  const historyRecorder =
+    options.historyRecorder ??
+    new ConversationSessionStoreToolHistoryRecorder(options.sessions);
 
-  return tool<typeof parameters, OpenAiAgentsRunContext>({
+  const reply = tool<typeof parameters, OpenAiAgentsRunContext>({
     name: CHANNEL_REPLY_TOOL_NAME,
     description:
       "Send one message to the current external Channel session. The target is fixed by trusted session metadata; omit this tool to stay silent.",
@@ -129,52 +142,14 @@ export function createChannelReplyTool(options: CreateChannelReplyToolOptions) {
         conversationKind: metadata.route.conversationKind,
         conversationId: metadata.route.conversationId,
       });
-      const storedArguments = replyArguments(input);
-      try {
-        options.sessions.appendAgentToolCall(context.sessionId, {
-          runId: context.runId,
-          toolCallId,
-          toolName: CHANNEL_REPLY_TOOL_NAME,
-          arguments: storedArguments,
-        });
-      } catch (error) {
-        toolLogger.error("channel.reply.tool_call_record_failed", {
-          errorType: safeErrorType(error),
-        });
-        return JSON.stringify(replyError("error", error, options.redactValues));
-      }
-
       const complete = (result: ChannelReplyToolResult): string => {
-        let output = result;
-        try {
-          options.sessions.appendAgentToolResult(context.sessionId, {
-            runId: context.runId,
-            toolCallId,
-            toolName: CHANNEL_REPLY_TOOL_NAME,
-            output,
-          });
-        } catch (error) {
-          toolLogger.error("channel.reply.tool_result_record_failed", {
-            status: result.status,
-            errorType: safeErrorType(error),
-          });
-          if (result.status === "success") {
-            output = {
-              ...result,
-              warning: appendWarning(
-                result.warning,
-                formatReplyError(error, options.redactValues),
-              ),
-            };
-          }
-        }
         toolLogger.info("channel.reply.completed", {
-          status: output.status,
-          ...(output.status === "success"
-            ? { messageId: output.messageId }
+          status: result.status,
+          ...(result.status === "success"
+            ? { messageId: result.messageId }
             : {}),
         });
-        return JSON.stringify(output);
+        return JSON.stringify(result);
       };
 
       let adapter: ChannelAdapter | undefined;
@@ -258,12 +233,22 @@ export function createChannelReplyTool(options: CreateChannelReplyToolOptions) {
       });
     },
   });
+
+  return withSessionToolHistory(
+    reply,
+    historyRecorder,
+    logger,
+    parseReplyHistoryArguments,
+  );
 }
 
-function replyArguments(
-  input: ChannelReplyToolInput,
+function parseReplyHistoryArguments(
+  rawArguments: string,
 ): Readonly<Record<string, ConversationJsonValue>> {
-  return input as unknown as Readonly<Record<string, ConversationJsonValue>>;
+  const parsed: ChannelReplyToolInput = parameters.parse(
+    JSON.parse(rawArguments),
+  );
+  return parsed as unknown as Readonly<Record<string, ConversationJsonValue>>;
 }
 
 function replyError(
@@ -308,10 +293,6 @@ function formatReplyError(
     }
   }
   return result.replace(/\bBearer\s+\S+/giu, "Bearer [Redacted]");
-}
-
-function appendWarning(current: string | undefined, next: string): string {
-  return current === undefined ? next : `${current}: ${next}`;
 }
 
 function safeErrorType(error: unknown): string {

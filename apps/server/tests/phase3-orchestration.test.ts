@@ -22,6 +22,7 @@ import type {
   AgentCallTaskState,
   AgentCallTransport,
   AgentCallTransportContinueRequest,
+  SessionToolHistoryRecorder,
 } from "@huanlink/core";
 
 import {
@@ -662,6 +663,118 @@ afterEach(async () => {
 });
 
 describe("Phase 3 HuanLink orchestration", () => {
+  test("projects the latest Session context only after a queued turn obtains its slot", async () => {
+    const releaseFirst = deferred();
+    const firstStarted = deferred();
+    const observedInputs: string[] = [];
+    const runner: OpenAiAgentsRunner = {
+      run: async (_agent, input) => {
+        observedInputs.push(input);
+        if (observedInputs.length === 1) {
+          firstStarted.resolve();
+          await releaseFirst.promise;
+        }
+        return { finalOutput: "done" };
+      },
+    };
+    let latestContext = "context before first turn";
+    const runtime = createPhase3HuanLinkRuntime({
+      codexA2aOrigin: "http://127.0.0.1:1",
+      transport: terminalTransport("completed"),
+      runner,
+      getLatestContext: () => latestContext,
+    });
+    runtimes.push(runtime);
+
+    const first = runtime.runMainAgent({
+      runId: "run-context-first",
+      sessionId: "session-context-queue",
+      input: "stale caller input one",
+    });
+    await firstStarted.promise;
+
+    latestContext = "context when second turn was queued";
+    const second = runtime.runMainAgent({
+      runId: "run-context-second",
+      sessionId: "session-context-queue",
+      input: "stale caller input two",
+    });
+    latestContext = "context after second turn was queued";
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(observedInputs).toEqual(["context before first turn"]);
+
+    releaseFirst.resolve();
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      { output: "done" },
+      { output: "done" },
+    ]);
+    expect(observedInputs).toEqual([
+      "context before first turn",
+      "context after second turn was queued",
+    ]);
+  });
+
+  test("queues a terminal re-entry behind the active turn and projects context when it obtains the slot", async () => {
+    const activeTurnStarted = deferred();
+    const releaseActiveTurn = deferred();
+    const reentry = deferred<Phase3ReentryResult>();
+    const observedInputs: string[] = [];
+    const { transport, completions } = sequentialTerminalTransport();
+    const runner: OpenAiAgentsRunner = {
+      run: async (_agent, input) => {
+        observedInputs.push(input);
+        if (observedInputs.length === 1) {
+          activeTurnStarted.resolve();
+          await releaseActiveTurn.promise;
+        }
+        return { finalOutput: "done" };
+      },
+    };
+    let latestContext = "context for active turn";
+    const runtime = createPhase3HuanLinkRuntime({
+      codexA2aOrigin: "http://127.0.0.1:1",
+      transport,
+      runner,
+      getLatestContext: () => latestContext,
+      onReentry: (result) => reentry.resolve(result),
+    });
+    runtimes.push(runtime);
+
+    const activeTurn = runtime.runMainAgent({
+      runId: "run-active-before-terminal",
+      sessionId: "session-phase3-sequence",
+    });
+    await activeTurnStarted.promise;
+
+    const accepted = await runtime.agentCalls.invoke({
+      runId: "run-submit-before-terminal",
+      sessionId: "session-phase3-sequence",
+      contextId: "session-phase3-sequence",
+      skillId: "codex-code-task",
+      input: "long external task",
+      executionMode: "async",
+    });
+    latestContext = "context before terminal arrived";
+    completions[0]!.resolve();
+    await vi.waitFor(() =>
+      expect(
+        runtime.agentCalls.getByAgentCallId(accepted.agentCallId)?.state,
+      ).toBe("completed"),
+    );
+    latestContext = "context after terminal was queued";
+
+    expect(observedInputs).toEqual(["context for active turn"]);
+
+    releaseActiveTurn.resolve();
+    await expect(activeTurn).resolves.toEqual({ output: "done" });
+    const completed = await reentry.promise;
+
+    expect(completed.latestContext).toBe("context after terminal was queued");
+    expect(observedInputs).toHaveLength(2);
+    expect(observedInputs[1]).toContain("context after terminal was queued");
+  });
+
   test("logs MainAgent payload sizes without recording full Channel content", async () => {
     const logger = new RecordingRuntimeLogger();
     const secretInput = "private Channel message with attachment key";
@@ -1003,6 +1116,10 @@ describe("Phase 3 HuanLink orchestration", () => {
 
     const model = new DelegateThenSummarizeModel();
     const reentry = deferred<Phase3ReentryResult>();
+    const historyRecorder: SessionToolHistoryRecorder = {
+      recordToolCall: vi.fn(),
+      recordToolResult: vi.fn(),
+    };
     let latestContext = "group context before acceptance";
     const runtime = createPhase3HuanLinkRuntime({
       codexA2aOrigin: server.origin,
@@ -1012,6 +1129,7 @@ describe("Phase 3 HuanLink orchestration", () => {
       }),
       createRunId: () => "run-phase3-reentry",
       getLatestContext: async () => latestContext,
+      historyRecorder,
       onReentry: (result) => reentry.resolve(result),
     });
     runtimes.push(runtime);
@@ -1033,8 +1151,25 @@ describe("Phase 3 HuanLink orchestration", () => {
     ).toMatchObject({
       taskId: accepted.taskId,
       sessionId: "session-phase3",
+      sourceToolCallId: "phase3-tool-call",
       state: expect.stringMatching(/submitted|working/),
     });
+    expect(historyRecorder.recordToolCall).toHaveBeenCalledWith(
+      "session-phase3",
+      expect.objectContaining({
+        runId: "run-phase3-initial",
+        toolCallId: "phase3-tool-call",
+        toolName: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
+      }),
+    );
+    expect(historyRecorder.recordToolResult).toHaveBeenCalledWith(
+      "session-phase3",
+      expect.objectContaining({
+        runId: "run-phase3-initial",
+        toolCallId: "phase3-tool-call",
+        toolName: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
+      }),
+    );
     expect(model.requests).toHaveLength(2);
 
     latestContext = "latest group message arrived while Codex was working";

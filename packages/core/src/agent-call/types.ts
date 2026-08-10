@@ -112,6 +112,7 @@ export type AgentCallRequest = {
   input: string;
   executionMode: TaskExecutionMode;
   contextId?: string;
+  sourceToolCallId?: string;
   signal?: AbortSignal;
 };
 
@@ -148,6 +149,7 @@ export type AgentCallRecord = {
   capabilityName: string;
   input: string;
   executionMode: TaskExecutionMode;
+  sourceToolCallId?: string;
   state: AgentCallTaskState;
   artifacts: AgentCallArtifact[];
   questions?: AgentCallInputQuestion[];

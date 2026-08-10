@@ -11,6 +11,7 @@ import type {
   ConversationAgentToolCallEntry,
   ConversationChannelMessageEntry,
   ConversationSession,
+  ConversationSessionContextWindow,
   ConversationSessionMetadata,
   ConversationTimelineEntry,
   RecordConversationOutboundDelivery,
@@ -29,22 +30,29 @@ import {
 import type { ConversationSessionStore } from "./conversation-session-store.js";
 import {
   cloneChannelConversationRoute,
+  cloneConversationAgentToolCallPayload,
   cloneConversationJsonRecord,
   cloneConversationJsonValue,
   cloneConversationSession,
+  cloneConversationSessionContextWindow,
   cloneConversationSessionMetadata,
   cloneInboundChannelMessage,
 } from "./conversation-session-copy.js";
 import {
   isSameConversationRoute,
   requireConversationIdentifier,
+  validateConversationToolCallPayload,
   validateConversationToolIdentity,
 } from "./conversation-session-validation.js";
 
 type MutableConversationSession = {
   metadata: ConversationSessionMetadata;
   timeline: ConversationTimelineEntry[];
+  entryIndexes: number[];
+  nextEntryIndex: number;
 };
+
+const ENTRY_INDEX_STRIDE = 1024;
 
 type MessageLocation = {
   sessionId: SessionId;
@@ -151,7 +159,7 @@ export class InMemoryConversationSessionStore implements ConversationSessionStor
       observed: cloneInboundChannelMessage(message),
       ...(pending === undefined ? {} : { outbound: pending.outbound }),
     };
-    session.timeline.push(entry);
+    appendTimelineEntry(session, entry);
     this.messageLocations.set(key, { sessionId, entry });
     if (pending !== undefined) {
       this.pendingOutboundDeliveries.delete(key);
@@ -255,6 +263,7 @@ export class InMemoryConversationSessionStore implements ConversationSessionStor
   ): void {
     const session = this.requireSession(sessionId);
     validateConversationToolIdentity(call, "Agent Tool Call");
+    validateConversationToolCallPayload(call, "Agent Tool Call");
     if (
       findToolCall(session.timeline, call.runId, call.toolCallId) !== undefined
     ) {
@@ -262,15 +271,12 @@ export class InMemoryConversationSessionStore implements ConversationSessionStor
         `Agent Tool Call ${call.runId} / ${call.toolCallId} already exists in session ${sessionId}`,
       );
     }
-    session.timeline.push({
+    appendTimelineEntry(session, {
       type: "agent_tool_call",
       runId: call.runId,
       toolCallId: call.toolCallId,
       toolName: call.toolName,
-      arguments: cloneConversationJsonRecord(
-        call.arguments,
-        "Agent Tool Call arguments",
-      ),
+      ...cloneConversationAgentToolCallPayload(call),
     });
   }
 
@@ -319,6 +325,11 @@ export class InMemoryConversationSessionStore implements ConversationSessionStor
         "Agent Tool Result output",
       ),
     });
+    session.entryIndexes.splice(
+      callIndex + 1,
+      0,
+      session.entryIndexes[callIndex]! + 1,
+    );
   }
 
   /** 返回结构化 Session 的完整防御性副本。 */
@@ -327,6 +338,21 @@ export class InMemoryConversationSessionStore implements ConversationSessionStor
     return session === undefined
       ? undefined
       : cloneConversationSession(session);
+  }
+
+  getSessionContextWindow(
+    sessionId: SessionId,
+  ): ConversationSessionContextWindow | undefined {
+    const session = this.sessions.get(sessionId);
+    return session === undefined
+      ? undefined
+      : cloneConversationSessionContextWindow({
+          metadata: session.metadata,
+          entries: session.timeline.map((entry, index) => ({
+            entryIndex: session.entryIndexes[index]!,
+            entry,
+          })),
+        });
   }
 
   /** 返回固定 Session 元数据，不复制可能持续增长的时间线。 */
@@ -354,6 +380,8 @@ export class InMemoryConversationSessionStore implements ConversationSessionStor
           contentFormat,
         },
         timeline: [],
+        entryIndexes: [],
+        nextEntryIndex: ENTRY_INDEX_STRIDE,
       };
       this.sessions.set(sessionId, created);
       return created;
@@ -377,6 +405,15 @@ export class InMemoryConversationSessionStore implements ConversationSessionStor
     }
     return session;
   }
+}
+
+function appendTimelineEntry(
+  session: MutableConversationSession,
+  entry: ConversationTimelineEntry,
+): void {
+  session.timeline.push(entry);
+  session.entryIndexes.push(session.nextEntryIndex);
+  session.nextEntryIndex += ENTRY_INDEX_STRIDE;
 }
 
 function assertSessionMetadata(

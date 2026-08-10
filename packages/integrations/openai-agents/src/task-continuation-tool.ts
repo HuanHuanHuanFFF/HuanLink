@@ -5,6 +5,7 @@ import {
   type AgentCallReader,
   type RuntimeLogFields,
   type RuntimeLogger,
+  type SessionToolHistoryRecorder,
 } from "@huanlink/core";
 import { tool } from "@openai/agents";
 import { z } from "zod";
@@ -15,6 +16,7 @@ import {
   safeRuntimeErrorType,
 } from "./best-effort-runtime-logger.js";
 import type { OpenAiAgentsRunContext } from "./openai-agents-runtime.js";
+import { withSessionToolHistory } from "./session-tool-history-tool.js";
 import { resolveTaskRecord } from "./task-record-resolution.js";
 
 export const CONTINUE_TASK_TOOL_NAME = "continue_task" as const;
@@ -37,6 +39,7 @@ export type CreateTaskContinuationToolOptions = {
   reader: AgentCallReader;
   continuator: AgentCallContinuator;
   logger?: RuntimeLogger;
+  historyRecorder?: SessionToolHistoryRecorder;
 };
 
 export function createTaskContinuationTool(
@@ -44,7 +47,7 @@ export function createTaskContinuationTool(
 ) {
   const logger = bestEffortRuntimeLogger(options.logger);
 
-  return tool<typeof parameters, OpenAiAgentsRunContext>({
+  const functionTool = tool<typeof parameters, OpenAiAgentsRunContext>({
     name: CONTINUE_TASK_TOOL_NAME,
     description:
       "Continue an input-required task in this session with answers to every pending question.",
@@ -153,6 +156,12 @@ export function createTaskContinuationTool(
       }
     },
   });
+  return withSessionToolHistory(
+    functionTool,
+    options.historyRecorder,
+    logger,
+    (rawArguments) => parameters.parse(JSON.parse(rawArguments)),
+  );
 }
 
 function validateAnswers(

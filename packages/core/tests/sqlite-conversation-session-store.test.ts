@@ -176,6 +176,43 @@ describe("SqliteConversationSessionStore", () => {
     reopened.close();
   });
 
+  test("persists raw Tool Call arguments after reopening", () => {
+    const directory = mkdtempSync(join(tmpdir(), "huanlink-sqlite-store-"));
+    temporaryDirectories.push(directory);
+    const databasePath = join(directory, "conversation.sqlite");
+    const first = openStore(databasePath);
+    first.appendChannelMessage("session-a", inboundMessage("message-1"));
+    first.appendAgentToolCall("session-a", {
+      runId: "run-raw",
+      toolCallId: "call-raw",
+      toolName: "reply",
+      rawArguments: '{"content":',
+    });
+    first.close();
+
+    const reopened = openStore(databasePath);
+    expect(reopened.getSession("session-a")?.timeline[1]).toEqual({
+      type: "agent_tool_call",
+      runId: "run-raw",
+      toolCallId: "call-raw",
+      toolName: "reply",
+      rawArguments: '{"content":',
+    });
+    expect(
+      reopened.getSessionContextWindow("session-a")?.entries,
+    ).toMatchObject([
+      { entryIndex: 1024, entry: { type: "channel_message" } },
+      {
+        entryIndex: 2048,
+        entry: {
+          type: "agent_tool_call",
+          rawArguments: '{"content":',
+        },
+      },
+    ]);
+    reopened.close();
+  });
+
   test("returns fixed metadata and defensive session copies", () => {
     const store: ConversationSessionStore = openStore();
     store.appendChannelMessage("session-a", inboundMessage("message-1"));

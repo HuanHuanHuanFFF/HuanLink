@@ -211,22 +211,11 @@ describe("AgentCallService", () => {
       ]),
     );
 
-    const nonDebug = JSON.stringify(
-      logger.entries.filter(({ level }) => level !== "debug"),
-    );
-    const debug = JSON.stringify(
-      logger.entries.filter(({ level }) => level === "debug"),
-    );
     const allLogs = JSON.stringify(logger.entries);
-    expect(nonDebug).not.toContain(input);
-    expect(nonDebug).not.toContain(ordinaryQuestion);
-    expect(nonDebug).not.toContain(ordinaryAnswer);
-    expect(nonDebug).not.toContain(artifactText);
-    expect(debug).toContain(input);
-    expect(debug).toContain(ordinaryQuestion);
-    expect(debug).toContain(ordinaryAnswer);
-    expect(debug).toContain(artifactText);
-    expect(debug).toContain("[Redacted]");
+    expect(allLogs).not.toContain(input);
+    expect(allLogs).not.toContain(ordinaryQuestion);
+    expect(allLogs).not.toContain(ordinaryAnswer);
+    expect(allLogs).not.toContain(artifactText);
     expect(allLogs).not.toContain(secretQuestion);
     expect(allLogs).not.toContain(secretHeader);
     expect(allLogs).not.toContain(secretAnswer);
@@ -236,6 +225,7 @@ describe("AgentCallService", () => {
   test("logs cancel start and completion", async () => {
     const logger = new RecordingLogger();
     const canceledArtifact = "canceled artifact visible only at debug";
+    const canceledStatus = "canceled by the remote worker";
     const transport: AgentCallTransport = {
       discoverCapability: async (skillId) => ({ id: skillId, name: skillId }),
       submitTask: async () =>
@@ -252,6 +242,7 @@ describe("AgentCallService", () => {
         task("canceled", {
           contextId: "context-log-cancel",
           artifacts: [{ id: "artifact-canceled", text: canceledArtifact }],
+          statusMessage: canceledStatus,
         }),
     };
     const service = new AgentCallService({
@@ -295,14 +286,9 @@ describe("AgentCallService", () => {
         }),
       ]),
     );
-    const nonDebug = JSON.stringify(
-      logger.entries.filter(({ level }) => level !== "debug"),
-    );
-    const debug = JSON.stringify(
-      logger.entries.filter(({ level }) => level === "debug"),
-    );
-    expect(nonDebug).not.toContain(canceledArtifact);
-    expect(debug).toContain(canceledArtifact);
+    const allLogs = JSON.stringify(logger.entries);
+    expect(allLogs).not.toContain(canceledArtifact);
+    expect(allLogs).not.toContain(canceledStatus);
   });
 
   test("logs submit, continuation and cancellation failures safely", async () => {
@@ -411,7 +397,6 @@ describe("AgentCallService", () => {
     const allLogs = JSON.stringify(logger.entries);
     expect(allLogs).not.toContain(secretQuestion);
     expect(allLogs).not.toContain(secretAnswer);
-    expect(allLogs).toContain("[Redacted]");
   });
 
   test("lists defensive copies of records for only the requested run", async () => {
@@ -465,6 +450,40 @@ describe("AgentCallService", () => {
       artifacts: [{ id: "artifact-1", text: "result-1" }],
     });
     expect(service.listByRunId("missing-run")).toEqual([]);
+
+    await service.close();
+  });
+
+  test("preserves the source Tool Call association in defensive record copies", async () => {
+    const transport: AgentCallTransport = {
+      discoverCapability: async (skillId) => ({ id: skillId, name: skillId }),
+      submitTask: async () => task("completed"),
+      async *watchTask() {},
+      continueTask: rejectUnexpectedContinuation,
+      cancelTask: async (taskId) => task("canceled", { taskId }),
+    };
+    const service = new AgentCallService({
+      transport,
+      createId: () => "agent-call-source-tool",
+    });
+
+    const submitted = await service.submit({
+      runId: "run-source-tool",
+      sessionId: "session-source-tool",
+      skillId: "codex-code-task",
+      input: "delegate the requested work",
+      executionMode: "async",
+      sourceToolCallId: "tool-call-42",
+    });
+    const record = service.getByAgentCallId(submitted.agentCallId)!;
+    record.sourceToolCallId = "mutated-tool-call";
+
+    expect(service.getByAgentCallId(submitted.agentCallId)).toMatchObject({
+      sourceToolCallId: "tool-call-42",
+    });
+    expect(service.listByRunId("run-source-tool")).toMatchObject([
+      { sourceToolCallId: "tool-call-42" },
+    ]);
 
     await service.close();
   });

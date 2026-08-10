@@ -106,6 +106,90 @@ function defineConversationSessionStoreContract(
       ]);
     });
 
+    test("persists unparseable raw Tool Call arguments without a parsed fallback", () => {
+      const store = createStore();
+      store.appendChannelMessage("session-a", inboundMessage("message-1"));
+      store.appendAgentToolCall("session-a", {
+        runId: "run-1",
+        toolCallId: "call-raw",
+        toolName: "reply",
+        rawArguments: '{"content":',
+      });
+
+      const entry = store
+        .getSession("session-a")
+        ?.timeline.find(({ type }) => type === "agent_tool_call");
+      expect(entry).toEqual({
+        type: "agent_tool_call",
+        runId: "run-1",
+        toolCallId: "call-raw",
+        toolName: "reply",
+        rawArguments: '{"content":',
+      });
+      expect(entry).not.toHaveProperty("arguments");
+
+      expect(() =>
+        store.appendAgentToolCall("session-a", {
+          runId: "run-1",
+          toolCallId: "call-invalid",
+          toolName: "reply",
+          arguments: { content: "parsed" },
+          rawArguments: '{"content":"raw"}',
+        } as never),
+      ).toThrow(/exactly one of arguments or rawArguments/i);
+    });
+
+    test("reads a defensive context window with stable entry indexes", () => {
+      const store = createStore();
+      const first = inboundMessage("message-1");
+      const second = inboundMessage("message-2", { content: "later" });
+      store.appendChannelMessage("session-a", first);
+      store.appendAgentToolCall("session-a", {
+        runId: "run-1",
+        toolCallId: "call-1",
+        toolName: "reply",
+        arguments: { content: "done" },
+      });
+      store.appendChannelMessage("session-a", second);
+      store.appendAgentToolResult("session-a", {
+        runId: "run-1",
+        toolCallId: "call-1",
+        toolName: "reply",
+        output: { status: "sent" },
+      });
+
+      const window = store.getSessionContextWindow("session-a")!;
+
+      expect(window.summary).toBeUndefined();
+      expect(window.entries.map(({ entryIndex }) => entryIndex)).toEqual([
+        1024, 2048, 2049, 3072,
+      ]);
+      expect(window.entries.map(({ entry }) => entry.type)).toEqual([
+        "channel_message",
+        "agent_tool_call",
+        "agent_tool_result",
+        "channel_message",
+      ]);
+
+      (window.metadata.route as { conversationId: string }).conversationId =
+        "mutated";
+      const observed = window.entries[0]?.entry;
+      if (
+        observed?.type === "channel_message" &&
+        observed.observed !== undefined
+      ) {
+        (observed.observed.sender as { username: string }).username = "mutated";
+      }
+
+      const reloaded = store.getSessionContextWindow("session-a")!;
+      expect(reloaded.metadata.route.conversationId).toBe("10001");
+      const reloadedMessage = reloaded.entries[0]?.entry;
+      expect(reloadedMessage).toMatchObject({
+        type: "channel_message",
+        observed: { sender: { username: "Alice" } },
+      });
+    });
+
     test("waits for a self event before exposing a successful delivery", () => {
       const store = createStore();
       store.appendChannelMessage("session-a", inboundMessage("message-1"));
