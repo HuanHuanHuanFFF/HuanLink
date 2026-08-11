@@ -1,6 +1,6 @@
 import {
-  type AgentCallReader,
-  type AgentCallRecord,
+  type AsyncToolTaskStatusQueryResult,
+  type AsyncToolTaskStatusReader,
   type RuntimeLogFields,
   type RuntimeLogger,
   type SessionToolHistoryRecorder,
@@ -14,7 +14,6 @@ import {
 } from "./best-effort-runtime-logger.js";
 import type { OpenAiAgentsRunContext } from "./openai-agents-runtime.js";
 import { withSessionToolHistory } from "./session-tool-history-tool.js";
-import { resolveTaskRecord } from "./task-record-resolution.js";
 
 export const GET_TASK_STATUS_TOOL_NAME = "get_task_status" as const;
 
@@ -23,18 +22,16 @@ const parameters = z.object({
     .string()
     .trim()
     .min(1)
-    .describe("A HuanLink task ID or external A2A task ID to look up."),
+    .describe("The HuanLink task ID to look up in the current session."),
 });
 
 export type CreateTaskStatusToolOptions = {
   logger?: RuntimeLogger;
-  reader: AgentCallReader;
+  reader: AsyncToolTaskStatusReader;
   historyRecorder?: SessionToolHistoryRecorder;
 };
 
-type TaskStatusToolResult =
-  | { status: "not-found" | "ambiguous"; taskId: string }
-  | { status: "found"; task: ReturnType<typeof publicTaskStatus> };
+type TaskStatusToolResult = AsyncToolTaskStatusQueryResult;
 
 export function createTaskStatusTool(options: CreateTaskStatusToolOptions) {
   const logger = bestEffortRuntimeLogger(options.logger);
@@ -68,34 +65,18 @@ export function createTaskStatusTool(options: CreateTaskStatusToolOptions) {
       };
 
       try {
-        const resolution = resolveTaskRecord(
-          options.reader,
-          taskId,
+        const result = options.reader.getStatus(
           runContext.context.sessionId,
+          taskId,
         );
-        if (resolution.status === "not-found") {
-          return complete(
-            { status: "not-found", taskId },
-            { taskId, resolutionStatus: "not-found" },
-          );
+        if (result.status === "not-found") {
+          return complete(result, { taskId, resolutionStatus: "not-found" });
         }
-        if (resolution.status === "ambiguous") {
-          return complete(
-            { status: "ambiguous", taskId },
-            { taskId, resolutionStatus: "ambiguous" },
-          );
-        }
-
-        const result: TaskStatusToolResult = {
-          status: "found",
-          task: publicTaskStatus(resolution.record),
-        };
         return complete(result, {
           taskId,
           resolutionStatus: "found",
-          agentCallId: resolution.record.agentCallId,
-          a2aTaskId: resolution.record.taskId,
-          state: resolution.record.state,
+          kind: result.kind,
+          state: result.state,
         });
       } catch (error) {
         toolLogger.error("main_agent.tool.failed", {
@@ -112,33 +93,4 @@ export function createTaskStatusTool(options: CreateTaskStatusToolOptions) {
     logger,
     (rawArguments) => parameters.parse(JSON.parse(rawArguments)),
   );
-}
-
-function publicTaskStatus(record: AgentCallRecord) {
-  return {
-    taskId: record.agentCallId,
-    a2aTaskId: record.taskId,
-    state: record.state,
-    executionMode: record.executionMode,
-    createdAt: record.createdAt,
-    updatedAt: record.updatedAt,
-    ...(record.statusMessage === undefined
-      ? {}
-      : { statusMessage: record.statusMessage }),
-    ...(record.terminalNotificationError === undefined
-      ? {}
-      : { notificationError: record.terminalNotificationError }),
-    ...(record.questions === undefined
-      ? {}
-      : {
-          questions: record.questions.map((question) => ({
-            ...question,
-            options:
-              question.options === null
-                ? null
-                : question.options.map((option) => ({ ...option })),
-          })),
-        }),
-    artifacts: record.artifacts.map((artifact) => ({ ...artifact })),
-  };
 }

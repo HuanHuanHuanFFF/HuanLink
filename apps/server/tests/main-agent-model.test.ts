@@ -52,12 +52,11 @@ describe("createDeepSeekMainAgentModelBinding", () => {
       fetch: fakeFetch,
     });
     const runtime = createPhase3MainAgentRuntime({
-      invoker: { invoke },
-      taskReader: {
-        getByAgentCallId: () => undefined,
-        getByTaskId: () => undefined,
+      agentCallInvoker: { invoke },
+      taskStatusReader: {
+        getStatus: (_sessionId, taskId) => ({ status: "not-found", taskId }),
       },
-      taskContinuator: { continueTask },
+      agentCallContinuator: { continueTask },
       modelBinding,
     });
 
@@ -76,6 +75,7 @@ describe("createDeepSeekMainAgentModelBinding", () => {
       skillId: "codex-code-task",
       input: "add one focused validation",
       executionMode: "async",
+      toolName: "submit_codex_agent_call",
       sourceToolCallId: "call-submit-codex",
     });
     expect(requests).toHaveLength(2);

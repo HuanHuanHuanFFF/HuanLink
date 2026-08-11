@@ -126,12 +126,22 @@ export type AsyncToolTaskStatusQueryResult =
       readonly taskId: HuanLinkTaskId;
     };
 
+export interface AsyncToolTaskStatusReader {
+  getStatus(
+    sessionId: SessionId,
+    taskId: HuanLinkTaskId,
+  ): AsyncToolTaskStatusQueryResult;
+}
+
 export type AsyncToolTaskAcceptedUpdate = {
   readonly state: Exclude<AsyncToolTaskState, "submitting">;
+  readonly payload?: unknown;
   readonly statusMessage?: string;
 };
 
 export type AsyncToolTaskTerminalListener = (task: AsyncToolTask) => void;
+
+export type AsyncToolTaskInputRequiredListener = (task: AsyncToolTask) => void;
 
 export type AsyncToolTaskTerminalListenerError = {
   readonly taskId: HuanLinkTaskId;

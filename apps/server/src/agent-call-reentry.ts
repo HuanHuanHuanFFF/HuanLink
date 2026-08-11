@@ -1,98 +1,94 @@
-import type {
-  AgentCallArtifact,
-  AgentCallInputQuestion,
-  AgentCallRecord,
+import {
+  projectConversationSessionContext,
+  type ConversationAgentToolCallEntry,
+  type ConversationJsonValue,
+  type ConversationSessionContextWindow,
+  type AsyncToolTaskStatus,
 } from "@huanlink/core";
 
-export type AgentCallPausedPayload = {
-  taskId: string;
-  a2aTaskId: string;
-  contextId?: string;
-  state: "input-required";
-  statusMessage?: string;
-  questions: AgentCallInputQuestion[];
-  artifacts: AgentCallArtifact[];
-  latestContext: string;
-};
-
-export function buildAgentCallReentryInput(
-  agentCall: AgentCallRecord,
-  latestContext: string,
+/**
+ * Builds the model-visible Session context for one Task re-entry.
+ *
+ * The source Call is appended only when it fell before the current Window.
+ * An appended copy omits its lookup IDs; a source Call already present in the
+ * Window keeps the projector's original structure so Call/Result pairs remain
+ * intact.
+ */
+export function buildTaskReentrySessionContext(
+  window: ConversationSessionContextWindow,
+  sourceToolCall: ConversationAgentToolCallEntry,
 ): string {
-  const artifacts = agentCall.artifacts
-    .map((artifact) => {
-      const label = artifact.name ?? artifact.id;
-      return `- ${label}: ${artifact.text ?? "(no text payload)"}`;
-    })
-    .join("\n");
+  const projected = projectConversationSessionContext(window);
+  const sourceIsInWindow = window.entries.some(
+    ({ entry }) =>
+      entry.type === "agent_tool_call" &&
+      entry.runId === sourceToolCall.runId &&
+      entry.toolCallId === sourceToolCall.toolCallId,
+  );
 
-  return [
-    "A previously accepted remote AgentCall reached a terminal state.",
-    `AgentCall ID: ${agentCall.agentCallId}`,
-    `A2A task ID: ${agentCall.taskId}`,
-    `State: ${agentCall.state}`,
-    agentCall.statusMessage
-      ? `Status message: ${agentCall.statusMessage}`
-      : "Status message: (none)",
-    "Artifacts:",
-    artifacts || "- (none)",
-    "Latest conversation context at completion:",
-    latestContext || "(none)",
-    "Respond with a concise result for the user.",
-    "If the latest conversation context contains an explicit, unambiguous follow-up that the user already authorized and no confirmation is required, submit that next task as a new async AgentCall in this same session.",
-    "Never repeat the completed task or invent a follow-up; a task already accepted or completed in the supplied result or context is not pending and must not be submitted again.",
-    "Include the completed result and any newly accepted task ID in the response. If an authorized follow-up needs a material choice, ask the user instead.",
-  ].join("\n");
+  if (sourceIsInWindow) {
+    return projected;
+  }
+  const context = JSON.parse(projected) as ConversationJsonValue;
+  if (
+    context === null ||
+    Array.isArray(context) ||
+    typeof context !== "object"
+  ) {
+    throw new Error("Projected Session context must be a JSON object");
+  }
+  return JSON.stringify({
+    ...context,
+    sourceToolCall: projectSourceToolCall(sourceToolCall),
+  });
 }
 
-export function buildAgentCallPausedPayload(
-  agentCall: AgentCallRecord,
-  latestContext: string,
-): AgentCallPausedPayload {
-  if (agentCall.state !== "input-required") {
-    throw new Error(
-      `AgentCall ${agentCall.agentCallId} must be input-required before paused re-entry`,
-    );
-  }
-
+function projectSourceToolCall(
+  sourceToolCall: ConversationAgentToolCallEntry,
+): ConversationJsonValue {
   return {
-    taskId: agentCall.agentCallId,
-    a2aTaskId: agentCall.taskId,
-    ...(agentCall.contextId === undefined
-      ? {}
-      : { contextId: agentCall.contextId }),
-    state: agentCall.state,
-    ...(agentCall.statusMessage === undefined
-      ? {}
-      : { statusMessage: agentCall.statusMessage }),
-    questions: cloneQuestions(agentCall.questions ?? []),
-    artifacts: agentCall.artifacts.map((artifact) => ({ ...artifact })),
-    latestContext,
+    type: "source_tool_call",
+    toolName: sourceToolCall.toolName,
+    ...(sourceToolCall.rawArguments === undefined
+      ? { arguments: sourceToolCall.arguments }
+      : { rawArguments: sourceToolCall.rawArguments }),
   };
 }
 
-export function buildAgentCallPausedReentryInput(
-  paused: AgentCallPausedPayload,
+export function buildAsyncToolTaskReentryInput(
+  task: AsyncToolTaskStatus,
+  latestContext: string,
 ): string {
   return [
-    "A previously accepted remote AgentCall requires user input before it can continue.",
-    "Paused task payload:",
-    JSON.stringify(paused, null, 2),
-    "Use get_task_status if the current state needs confirmation.",
-    "If the available conversation context already supplies complete answers to every pending question, call continue_task for this same task.",
-    "If a material choice is missing or ambiguous, ask the QQ user a concise question and wait for their answer.",
-    "Never submit a replacement AgentCall for this paused task.",
+    "A previously accepted asynchronous Tool Task reached a terminal state.",
+    "Task result:",
+    JSON.stringify(task),
+    "Latest conversation context at completion:",
+    latestContext || "(none)",
+    "Respond with a concise result for the user.",
+    "If the latest conversation context contains an explicit, unambiguous follow-up that the user already authorized and no confirmation is required, submit that next task asynchronously in this same session.",
+    "Never repeat the completed task or invent a follow-up; a task already accepted or completed in the supplied result or context is not pending and must not be submitted again.",
+    "Include the completed result and any newly accepted HuanLink task ID in the response. If an authorized follow-up needs a material choice, ask the user instead.",
   ].join("\n");
 }
 
-function cloneQuestions(
-  questions: AgentCallInputQuestion[],
-): AgentCallInputQuestion[] {
-  return questions.map((question) => ({
-    ...question,
-    options:
-      question.options === null
-        ? null
-        : question.options.map((option) => ({ ...option })),
-  }));
+export function buildAsyncToolTaskInputRequiredReentryInput(
+  task: AsyncToolTaskStatus,
+  latestContext: string,
+): string {
+  const continuationInstruction =
+    task.kind === "agent-call"
+      ? "If the available conversation context already supplies complete answers to every pending question, call continue_task for this same HuanLink task."
+      : "If the available conversation context already supplies complete answers to every pending question, use only this Task kind's enabled continuation Tool; otherwise ask the user.";
+  return [
+    "A previously accepted asynchronous Tool Task requires user input before it can continue.",
+    "Paused Task result:",
+    JSON.stringify(task),
+    "Latest conversation context:",
+    latestContext || "(none)",
+    "Use get_task_status if the current state needs confirmation.",
+    continuationInstruction,
+    "If a material choice is missing or ambiguous, ask the user a concise question and wait for their answer.",
+    "Never submit a replacement task for this paused Task.",
+  ].join("\n");
 }

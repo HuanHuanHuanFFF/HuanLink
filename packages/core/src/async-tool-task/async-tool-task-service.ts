@@ -5,10 +5,13 @@ import type {
   AsyncToolTaskAcceptedUpdate,
   AsyncToolTask,
   AsyncToolTaskJsonValue,
+  AsyncToolTaskInputRequiredListener,
   AsyncToolTaskKindDefinition,
+  AsyncToolTaskPayload,
   AsyncToolTaskReserveRequest,
   AsyncToolTaskReserveResult,
   AsyncToolTaskStatusQueryResult,
+  AsyncToolTaskStatusReader,
   AsyncToolTaskTerminalListener,
   AsyncToolTaskTerminalListenerError,
 } from "./types.js";
@@ -24,7 +27,7 @@ export type AsyncToolTaskServiceOptions = {
   ) => void;
 };
 
-export class AsyncToolTaskService {
+export class AsyncToolTaskService implements AsyncToolTaskStatusReader {
   private readonly maxActiveTasksPerSession: number;
   private readonly taskKinds: ReadonlyMap<string, AsyncToolTaskKindDefinition>;
   private readonly createTaskId: () => HuanLinkTaskId;
@@ -38,7 +41,10 @@ export class AsyncToolTaskService {
   private readonly pendingReservationCountBySession = new Map<string, number>();
   private readonly acceptedTaskIds = new Set<HuanLinkTaskId>();
   private readonly terminalNotifiedTaskIds = new Set<HuanLinkTaskId>();
+  private readonly inputRequiredNotifiedTaskIds = new Set<HuanLinkTaskId>();
   private readonly terminalListeners = new Set<AsyncToolTaskTerminalListener>();
+  private readonly inputRequiredListeners =
+    new Set<AsyncToolTaskInputRequiredListener>();
 
   constructor(options: AsyncToolTaskServiceOptions) {
     if (!Number.isSafeInteger(options.maxActiveTasksPerSession)) {
@@ -185,6 +191,11 @@ export class AsyncToolTaskService {
     return () => this.terminalListeners.delete(listener);
   }
 
+  onInputRequired(listener: AsyncToolTaskInputRequiredListener): () => void {
+    this.inputRequiredListeners.add(listener);
+    return () => this.inputRequiredListeners.delete(listener);
+  }
+
   accept(
     sessionId: string,
     taskId: HuanLinkTaskId,
@@ -232,6 +243,8 @@ export class AsyncToolTaskService {
     if (!this.acceptedTaskIds.has(taskId)) {
       throw new Error(`Async Tool Task ${taskId} was not accepted`);
     }
+    assertAcceptedUpdate(update);
+    const effectivePayload = this.payloadForUpdate(task, update);
     if (isAsyncToolTaskTerminalState(task.state)) {
       const effectiveStatusMessage =
         update.statusMessage === undefined
@@ -239,13 +252,13 @@ export class AsyncToolTaskService {
           : update.statusMessage;
       if (
         task.state === update.state &&
-        task.statusMessage === effectiveStatusMessage
+        task.statusMessage === effectiveStatusMessage &&
+        isSamePayload(task.payload, effectivePayload)
       ) {
         return cloneTask(task);
       }
       throw new Error(`Async Tool Task ${taskId} terminal state conflicts`);
     }
-    assertAcceptedUpdate(update);
     return this.replaceAcceptedTask(task, update);
   }
 
@@ -254,9 +267,11 @@ export class AsyncToolTaskService {
     update: AsyncToolTaskAcceptedUpdate,
     markAccepted = false,
   ): AsyncToolTask {
+    const payload = this.payloadForUpdate(task, update);
     const next: AsyncToolTask = {
       ...task,
       state: update.state,
+      payload,
       ...(update.statusMessage === undefined
         ? {}
         : { statusMessage: update.statusMessage }),
@@ -266,6 +281,14 @@ export class AsyncToolTaskService {
       this.acceptedTaskIds.add(next.taskId);
     }
     this.tasks.set(next.taskId, next);
+    if (next.state !== "input-required") {
+      this.inputRequiredNotifiedTaskIds.delete(next.taskId);
+    } else if (
+      task.state !== "input-required" ||
+      !this.inputRequiredNotifiedTaskIds.has(next.taskId)
+    ) {
+      this.notifyInputRequired(next);
+    }
     if (
       !isAsyncToolTaskTerminalState(task.state) &&
       isAsyncToolTaskTerminalState(next.state)
@@ -274,6 +297,38 @@ export class AsyncToolTaskService {
       this.notifyTerminal(next);
     }
     return cloneTask(next);
+  }
+
+  private notifyInputRequired(task: AsyncToolTask): void {
+    if (this.inputRequiredNotifiedTaskIds.has(task.taskId)) {
+      return;
+    }
+    this.inputRequiredNotifiedTaskIds.add(task.taskId);
+    const failures: unknown[] = [];
+    for (const listener of this.inputRequiredListeners) {
+      try {
+        listener(cloneTask(task));
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length > 0) {
+      throw new AggregateError(
+        failures,
+        "Async Tool Task input-required listener failed",
+      );
+    }
+  }
+
+  private payloadForUpdate(
+    task: AsyncToolTask,
+    update: AsyncToolTaskAcceptedUpdate,
+  ): AsyncToolTaskPayload {
+    if (update.payload === undefined) {
+      return task.payload;
+    }
+    const kind = this.taskKinds.get(task.kind)!;
+    return clonePayload(kind.validatePayload(update.payload));
   }
 
   private notifyTerminal(task: AsyncToolTask): void {

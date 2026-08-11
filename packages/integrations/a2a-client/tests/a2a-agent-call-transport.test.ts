@@ -16,7 +16,9 @@ import {
   type RequestContext,
 } from "@a2a-js/sdk/server";
 import {
+  AGENT_CALL_TASK_KIND_DEFINITION,
   AgentCallService,
+  AsyncToolTaskService,
   type AgentCallTaskState,
   type AgentCallTaskSnapshot,
   type RuntimeLogFields,
@@ -84,6 +86,13 @@ function deferred() {
     resolve = done;
   });
   return { promise, resolve };
+}
+
+function createAgentCallTaskService() {
+  return new AsyncToolTaskService({
+    maxActiveTasksPerSession: 4,
+    taskKinds: [AGENT_CALL_TASK_KIND_DEFINITION],
+  });
 }
 
 class GateExecutor implements AgentExecutor {
@@ -454,6 +463,7 @@ describe("A2aAgentCallTransport", () => {
       });
       const service = new AgentCallService({
         transport,
+        taskService: createAgentCallTaskService(),
         createId: () => `agent-call-consumer-${expectedState}`,
       });
 
@@ -463,11 +473,17 @@ describe("A2aAgentCallTransport", () => {
         skillId: "codex-code-task",
         input: "exercise the real AgentCallService consumer",
         executionMode: "async",
+        toolName: "submit_codex_agent_call",
+        sourceToolCallId: `tool-call-consumer-${expectedState}`,
       });
       await service.waitForIdle();
       await service.close();
 
-      expect(service.getByAgentCallId(receipt.agentCallId)?.state).toBe(
+      expect(receipt.status).toBe("accepted");
+      if (receipt.status !== "accepted") {
+        throw new Error("Expected the AgentCall fixture to be accepted");
+      }
+      expect(service.getByAgentCallId(receipt.taskId)?.state).toBe(
         expectedState,
       );
       expect(logger.entries).toContainEqual(
@@ -514,6 +530,7 @@ describe("A2aAgentCallTransport", () => {
     });
     const service = new AgentCallService({
       transport,
+      taskService: createAgentCallTaskService(),
       createId: () => "agent-call-close-abort",
     });
 
@@ -523,6 +540,8 @@ describe("A2aAgentCallTransport", () => {
       skillId: "codex-code-task",
       input: "close while the remote watch is pending",
       executionMode: "async",
+      toolName: "submit_codex_agent_call",
+      sourceToolCallId: "tool-call-close-abort",
     });
     await watchStarted.promise;
     await service.close();

@@ -1,6 +1,10 @@
 import {
   TASK_EXECUTION_MODES,
+  type AgentCallArtifact,
+  type AgentCallInputQuestion,
+  type AgentCallInvocationResult,
   type AgentCallInvoker,
+  type AgentCallRequest,
   type RuntimeLogger,
   type SessionToolHistoryRecorder,
 } from "@huanlink/core";
@@ -80,25 +84,61 @@ export function createCodexAgentCallTool(
       );
 
       try {
-        const result = await options.invoker.invoke({
+        const sourceToolCallId = details?.toolCall?.callId;
+        const baseRequest = {
           runId: runContext.context.runId,
           sessionId: runContext.context.sessionId,
           contextId: runContext.context.sessionId,
           skillId,
+          toolName: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
           input: task,
-          executionMode: effectiveExecutionMode,
-          ...(details?.toolCall?.callId === undefined
-            ? {}
-            : { sourceToolCallId: details.toolCall.callId }),
           ...(signal === undefined ? {} : { signal }),
-        });
-        toolLogger.info("main_agent.tool.completed", {
-          status: result.status,
-          executionMode: result.executionMode,
-          agentCallId: result.agentCallId,
-          a2aTaskId: result.taskId,
-          state: result.state,
-        });
+        };
+        let request: AgentCallRequest;
+        if (effectiveExecutionMode === "async") {
+          if (sourceToolCallId === undefined) {
+            throw new Error("Async AgentCall requires the SDK Tool Call ID");
+          }
+          request = {
+            ...baseRequest,
+            executionMode: "async",
+            sourceToolCallId,
+          };
+        } else {
+          request = {
+            ...baseRequest,
+            executionMode: "blocking",
+            ...(sourceToolCallId === undefined ? {} : { sourceToolCallId }),
+          };
+        }
+        const result = publicAgentCallResult(
+          await options.invoker.invoke(request),
+        );
+        toolLogger.info(
+          "main_agent.tool.completed",
+          result.status === "accepted"
+            ? {
+                status: result.status,
+                taskId: result.taskId,
+                state: result.state,
+              }
+            : result.status === "error"
+              ? {
+                  status: result.status,
+                  error: result.error,
+                  ...(result.error === "task-limit-reached"
+                    ? {
+                        maxActiveTasksPerSession:
+                          result.maxActiveTasksPerSession,
+                      }
+                    : {}),
+                }
+              : {
+                  status: result.status,
+                  executionMode: result.executionMode,
+                  state: result.state,
+                },
+        );
         return JSON.stringify(result);
       } catch (error) {
         toolLogger.error("main_agent.tool.failed", {
@@ -115,4 +155,81 @@ export function createCodexAgentCallTool(
     logger,
     (rawArguments) => parameters.parse(JSON.parse(rawArguments)),
   );
+}
+
+function publicAgentCallResult(
+  result: AgentCallInvocationResult,
+): AgentCallInvocationResult {
+  if (result.status === "accepted") {
+    return {
+      status: "accepted",
+      taskId: result.taskId,
+      state: result.state,
+    };
+  }
+  if (result.status === "error") {
+    if (result.error === "task-limit-reached") {
+      return {
+        status: "error",
+        error: "task-limit-reached",
+        maxActiveTasksPerSession: result.maxActiveTasksPerSession,
+      };
+    }
+    return {
+      status: "error",
+      error: "task-preaccept-rejected",
+    };
+  }
+  if (result.status === "result") {
+    return {
+      status: "result",
+      executionMode: "blocking",
+      state: result.state,
+      artifacts: result.artifacts.map(publicArtifact),
+      ...(result.statusMessage === undefined
+        ? {}
+        : { statusMessage: result.statusMessage }),
+    };
+  }
+  return {
+    status: "blocking-interrupted",
+    executionMode: "blocking",
+    state: result.state,
+    ...(result.questions === undefined
+      ? {}
+      : { questions: result.questions.map(publicQuestion) }),
+    ...(result.statusMessage === undefined
+      ? {}
+      : { statusMessage: result.statusMessage }),
+  };
+}
+
+function publicArtifact(artifact: AgentCallArtifact): AgentCallArtifact {
+  return {
+    id: artifact.id,
+    ...(artifact.name === undefined ? {} : { name: artifact.name }),
+    ...(artifact.description === undefined
+      ? {}
+      : { description: artifact.description }),
+    ...(artifact.text === undefined ? {} : { text: artifact.text }),
+  };
+}
+
+function publicQuestion(
+  question: AgentCallInputQuestion,
+): AgentCallInputQuestion {
+  return {
+    id: question.id,
+    header: question.header,
+    question: question.question,
+    isOther: question.isOther,
+    isSecret: question.isSecret,
+    options:
+      question.options === null
+        ? null
+        : question.options.map((option) => ({
+            label: option.label,
+            description: option.description,
+          })),
+  };
 }

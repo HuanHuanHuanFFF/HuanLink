@@ -1,22 +1,13 @@
 import { describe, expect, test, vi } from "vitest";
 
-import type { AgentCallReader, AgentCallRecord } from "@huanlink/core";
-import {
-  Agent,
-  RunContext,
-  Runner,
-  ToolTimeoutError,
-  Usage,
-  type Model,
-  type ModelProvider,
-  type ModelRequest,
-  type ModelResponse,
-  type StreamEvent,
-} from "@openai/agents";
+import type {
+  AsyncToolTaskStatusQueryResult,
+  AsyncToolTaskStatusReader,
+} from "@huanlink/core";
+import { Agent, RunContext, ToolTimeoutError } from "@openai/agents";
 
 import {
   GET_TASK_STATUS_TOOL_NAME,
-  OpenAiAgentsRuntime,
   createTaskStatusTool,
   type OpenAiAgentsRunContext,
 } from "../src/index.js";
@@ -24,511 +15,155 @@ import { MutatingRuntimeLogger } from "./support/mutating-runtime-logger.js";
 import { RecordingRuntimeLogger } from "./support/recording-runtime-logger.js";
 import { ThrowingRuntimeLogger } from "./support/throwing-runtime-logger.js";
 
-const record: AgentCallRecord = {
-  agentCallId: "huanlink-task-01",
-  taskId: "a2a-task-01",
-  contextId: "session-current",
-  runId: "run-submission",
-  sessionId: "session-current",
-  skillId: "codex-code-task",
-  capabilityName: "Codex code task",
-  input: "make one focused change",
-  executionMode: "async",
-  state: "working",
-  artifacts: [{ id: "artifact-01", text: "partial result" }],
-  statusMessage: "Codex is working",
-  createdAt: "2026-07-13T01:02:03.000Z",
-  updatedAt: "2026-07-13T01:03:04.000Z",
-};
-
-function assistantMessage(text: string): ModelResponse["output"][number] {
-  return {
-    id: "msg-task-status-tool",
-    type: "message",
-    status: "completed",
-    role: "assistant",
-    content: [
+const foundAgentCallStatus: AsyncToolTaskStatusQueryResult = {
+  status: "found",
+  taskId: "huanlink-task-status",
+  kind: "agent-call",
+  toolName: "submit_codex_agent_call",
+  state: "input-required",
+  payload: {
+    artifacts: [{ id: "artifact-status", text: "current result" }],
+    questions: [
       {
-        type: "output_text",
-        text,
-        providerData: { annotations: [] },
+        id: "scope",
+        header: "Scope",
+        question: "Which scope should Codex use?",
+        isOther: false,
+        isSecret: false,
+        options: null,
       },
     ],
-  };
-}
-
-class TaskStatusCallingThenReplyModel implements Model {
-  readonly requests: ModelRequest[] = [];
-
-  constructor(private readonly taskId: string) {}
-
-  async getResponse(request: ModelRequest): Promise<ModelResponse> {
-    this.requests.push(request);
-    if (this.requests.length === 1) {
-      return {
-        usage: new Usage(),
-        output: [
-          {
-            type: "function_call",
-            callId: "task-status-tool-call",
-            name: GET_TASK_STATUS_TOOL_NAME,
-            arguments: JSON.stringify({ taskId: this.taskId }),
-          },
-        ],
-      };
-    }
-
-    return {
-      usage: new Usage(),
-      output: [assistantMessage("Task status received.")],
-    };
-  }
-
-  async *getStreamedResponse(
-    _request: ModelRequest,
-  ): AsyncIterable<StreamEvent> {
-    throw new Error("Streaming is not used in this test");
-  }
-}
-
-class SingleModelProvider implements ModelProvider {
-  constructor(private readonly model: Model) {}
-
-  getModel(): Model {
-    return this.model;
-  }
-}
-
-type ReaderScenario = {
-  byAgentCallId?: AgentCallRecord;
-  byTaskId?: AgentCallRecord;
+  },
+  statusMessage: "Codex needs a scope",
+  createdAt: "2026-08-12T01:00:00.000Z",
+  updatedAt: "2026-08-12T01:01:00.000Z",
 };
 
-async function queryStatus(
-  taskId: string,
-  sessionId: string,
-  scenario: ReaderScenario,
+function runContext(
+  trigger: OpenAiAgentsRunContext["trigger"] = "user",
+  sessionId = "session-status-public",
 ) {
-  const logger = new RecordingRuntimeLogger();
-  const invoke = vi.fn();
-  const submit = vi.fn();
-  const getByAgentCallId = vi.fn<AgentCallReader["getByAgentCallId"]>(
-    () => scenario.byAgentCallId,
-  );
-  const getByTaskId = vi.fn<AgentCallReader["getByTaskId"]>(
-    () => scenario.byTaskId,
-  );
-  const reader = {
-    getByAgentCallId,
-    getByTaskId,
-    invoke,
-    submit,
-  };
-  const model = new TaskStatusCallingThenReplyModel(taskId);
-  const agent = new Agent<OpenAiAgentsRunContext>({
-    name: "HuanLink MainAgent",
-    instructions: "Read existing task status without creating work.",
-    model: "mock-task-status-model",
-    tools: [createTaskStatusTool({ reader, logger })],
-  });
-  const runtime = new OpenAiAgentsRuntime({
-    agent,
-    runner: new Runner({
-      modelProvider: new SingleModelProvider(model),
-      tracingDisabled: true,
-    }),
-  });
-
-  await runtime.run({
-    runId: "run-status-query",
+  return new RunContext<OpenAiAgentsRunContext>({
+    runId: "run-status-public",
     sessionId,
-    input: `report task ${taskId}`,
+    trigger,
   });
-
-  const continuationInput = model.requests[1]?.input;
-  if (
-    continuationInput === undefined ||
-    typeof continuationInput === "string"
-  ) {
-    throw new Error("Expected a task-status tool continuation request");
-  }
-  const resultItem = continuationInput.find(
-    (item) => item.type === "function_call_result",
-  );
-  if (
-    resultItem === undefined ||
-    resultItem.name !== GET_TASK_STATUS_TOOL_NAME
-  ) {
-    throw new Error("Expected a task-status function result");
-  }
-  const output = resultItem.output;
-  const text =
-    typeof output === "string"
-      ? output
-      : !Array.isArray(output) && output.type === "text"
-        ? output.text
-        : undefined;
-  if (text === undefined) {
-    throw new Error("Expected text output from get_task_status");
-  }
-
-  return {
-    result: JSON.parse(text) as unknown,
-    getByAgentCallId,
-    getByTaskId,
-    invoke,
-    submit,
-    logger,
-  };
 }
 
 describe("createTaskStatusTool", () => {
-  test.each([
-    {
-      name: "canonical HuanLink task ID",
-      query: record.agentCallId,
-      scenario: { byAgentCallId: record },
-    },
-    {
-      name: "external A2A task ID",
-      query: record.taskId,
-      scenario: { byTaskId: record },
-    },
-  ])(
-    "returns a current-session record by $name",
-    async ({ query, scenario }) => {
-      const observed = await queryStatus(query, "session-current", scenario);
+  test("queries a HuanLink task only within the current session", async () => {
+    const getStatus = vi.fn<AsyncToolTaskStatusReader["getStatus"]>(
+      () => foundAgentCallStatus,
+    );
+    const logger = new RecordingRuntimeLogger();
+    const tool = createTaskStatusTool({ reader: { getStatus }, logger });
 
-      expect(observed.result).toEqual({
-        status: "found",
-        task: {
-          taskId: "huanlink-task-01",
-          a2aTaskId: "a2a-task-01",
-          state: "working",
-          executionMode: "async",
-          createdAt: "2026-07-13T01:02:03.000Z",
-          updatedAt: "2026-07-13T01:03:04.000Z",
-          statusMessage: "Codex is working",
-          artifacts: [{ id: "artifact-01", text: "partial result" }],
-        },
-      });
-      expect(observed.invoke).not.toHaveBeenCalled();
-      expect(observed.submit).not.toHaveBeenCalled();
-      expect(observed.logger.entries).toContainEqual({
+    const output = await tool.invoke(
+      runContext(),
+      JSON.stringify({ taskId: "huanlink-task-status" }),
+    );
+
+    expect(getStatus).toHaveBeenCalledWith(
+      "session-status-public",
+      "huanlink-task-status",
+    );
+    expect(JSON.parse(String(output))).toEqual(foundAgentCallStatus);
+    expect(JSON.stringify(output)).not.toContain("a2aTaskId");
+    expect(logger.entries).toEqual([
+      {
         level: "info",
         message: "main_agent.tool.started",
         fields: {
-          runId: "run-status-query",
-          sessionId: "session-current",
+          runId: "run-status-public",
+          sessionId: "session-status-public",
           toolName: GET_TASK_STATUS_TOOL_NAME,
-          taskId: query,
+          taskId: "huanlink-task-status",
         },
-      });
-      expect(observed.logger.entries).toContainEqual({
+      },
+      {
         level: "info",
         message: "main_agent.tool.completed",
         fields: {
-          runId: "run-status-query",
-          sessionId: "session-current",
+          runId: "run-status-public",
+          sessionId: "session-status-public",
           toolName: GET_TASK_STATUS_TOOL_NAME,
-          taskId: query,
+          taskId: "huanlink-task-status",
           resolutionStatus: "found",
-          agentCallId: record.agentCallId,
-          a2aTaskId: record.taskId,
-          state: record.state,
+          kind: "agent-call",
+          state: "input-required",
         },
-      });
-    },
-  );
-
-  test("does not log question or artifact payloads while returning the full status", async () => {
-    const publicQuestion = {
-      id: "scope",
-      header: "Scope",
-      question: "Choose the implementation scope.",
-      isOther: false,
-      isSecret: false,
-      options: [{ label: "Adapter", description: "Only change the adapter." }],
-    };
-    const secretQuestion = {
-      id: "credential",
-      header: "Secret credential header",
-      question: "Secret credential question",
-      isOther: false,
-      isSecret: true,
-      options: [
-        {
-          label: "Secret credential option",
-          description: "Secret credential option description",
-        },
-      ],
-    };
-    const observed = await queryStatus(record.agentCallId, "session-current", {
-      byAgentCallId: {
-        ...record,
-        questions: [publicQuestion, secretQuestion],
       },
-    });
-
-    expect(observed.result).toMatchObject({
-      status: "found",
-      task: { questions: [publicQuestion, secretQuestion] },
-    });
-    const serializedLogs = JSON.stringify(observed.logger.entries);
-    for (const secret of [
-      publicQuestion.question,
-      secretQuestion.header,
-      secretQuestion.question,
-      secretQuestion.options[0]!.label,
-      secretQuestion.options[0]!.description,
-      record.artifacts[0]!.text,
-    ]) {
-      expect(serializedLogs).not.toContain(secret);
-    }
+    ]);
+    expect(JSON.stringify(logger.entries)).not.toContain("current result");
+    expect(JSON.stringify(logger.entries)).not.toContain(
+      "Which scope should Codex use?",
+    );
   });
 
-  test("does not expose the returned task status to a mutating debug logger", async () => {
-    const question = {
-      id: "scope",
-      header: "Scope",
-      question: "Choose scope.",
-      isOther: false,
-      isSecret: false,
-      options: [{ label: "Adapter", description: "Adapter only." }],
+  test("returns the generic status projection for a non-AgentCall task", async () => {
+    const fakeStatus: AsyncToolTaskStatusQueryResult = {
+      status: "found",
+      taskId: "huanlink-task-fake",
+      kind: "fake-delay",
+      toolName: "fake_delayed_tool",
+      state: "working",
+      payload: { progress: 40 },
+      createdAt: "2026-08-12T02:00:00.000Z",
+      updatedAt: "2026-08-12T02:01:00.000Z",
     };
-    const logger = new MutatingRuntimeLogger(({ level, message, fields }) => {
-      if (level !== "debug" || message !== "main_agent.tool.completed") {
-        return;
-      }
-      const loggedResult = fields.result as {
-        task?: {
-          state?: string;
-          artifacts?: Array<{ text?: string }>;
-          questions?: Array<{ question?: string }>;
-        };
-      };
-      if (loggedResult.task === undefined) {
-        return;
-      }
-      loggedResult.task.state = "logger-mutated-state";
-      if (loggedResult.task.artifacts?.[0] !== undefined) {
-        loggedResult.task.artifacts[0].text = "logger-mutated-artifact";
-      }
-      if (loggedResult.task.questions?.[0] !== undefined) {
-        loggedResult.task.questions[0].question = "logger-mutated-question";
-      }
-    });
     const tool = createTaskStatusTool({
-      reader: {
-        getByAgentCallId: () => ({ ...record, questions: [question] }),
-        getByTaskId: () => undefined,
-      },
-      logger,
-    });
-    const context = new RunContext<OpenAiAgentsRunContext>({
-      runId: "run-status-mutation",
-      sessionId: "session-current",
-      trigger: "user",
+      reader: { getStatus: () => fakeStatus },
     });
 
     const output = await tool.invoke(
-      context,
-      JSON.stringify({ taskId: record.agentCallId }),
+      runContext(),
+      JSON.stringify({ taskId: "huanlink-task-fake" }),
     );
 
-    expect(JSON.parse(String(output))).toMatchObject({
-      status: "found",
-      task: {
-        state: "working",
-        artifacts: [{ text: "partial result" }],
-        questions: [question],
-      },
+    expect(JSON.parse(String(output))).toEqual(fakeStatus);
+  });
+
+  test("returns the fixed not-found result from the same-session reader", async () => {
+    const getStatus = vi.fn<AsyncToolTaskStatusReader["getStatus"]>(
+      (_sessionId, taskId) => ({ status: "not-found", taskId }),
+    );
+    const tool = createTaskStatusTool({ reader: { getStatus } });
+
+    const output = await tool.invoke(
+      runContext("user", "session-one"),
+      JSON.stringify({ taskId: "huanlink-task-other-session" }),
+    );
+
+    expect(JSON.parse(String(output))).toEqual({
+      status: "not-found",
+      taskId: "huanlink-task-other-session",
     });
-    expect(JSON.stringify(logger.entries)).not.toContain(
-      "logger-mutated-question",
+    expect(getStatus).toHaveBeenCalledTimes(1);
+    expect(getStatus).toHaveBeenCalledWith(
+      "session-one",
+      "huanlink-task-other-session",
     );
   });
 
-  test("returns the current-session A2A candidate when another session owns the colliding canonical ID", async () => {
-    const query = "shared-task-id";
-    const currentSessionRecord: AgentCallRecord = {
-      ...record,
-      agentCallId: "huanlink-current",
-      taskId: query,
-    };
-    const otherSessionRecord: AgentCallRecord = {
-      ...record,
-      agentCallId: query,
-      taskId: "a2a-other",
-      sessionId: "session-other",
-    };
-
-    const observed = await queryStatus(query, "session-current", {
-      byAgentCallId: otherSessionRecord,
-      byTaskId: currentSessionRecord,
+  test("does not expose a status result to a mutating logger", async () => {
+    const status = structuredClone(foundAgentCallStatus);
+    const logger = new MutatingRuntimeLogger(({ fields }) => {
+      fields.payload = { artifacts: [{ id: "logger-mutated" }] };
+      fields.statusMessage = "logger-mutated";
+    });
+    const tool = createTaskStatusTool({
+      reader: { getStatus: () => status },
+      logger,
     });
 
-    expect(observed.result).toMatchObject({
-      status: "found",
-      task: {
-        taskId: "huanlink-current",
-        a2aTaskId: query,
-      },
-    });
+    const output = await tool.invoke(
+      runContext(),
+      JSON.stringify({ taskId: "huanlink-task-status" }),
+    );
+
+    expect(JSON.parse(String(output))).toEqual(foundAgentCallStatus);
+    expect(status).toEqual(foundAgentCallStatus);
   });
-
-  test("returns ambiguous when both ID namespaces resolve to different records in the current session", async () => {
-    const query = "ambiguous-task-id";
-    const canonicalCandidate: AgentCallRecord = {
-      ...record,
-      agentCallId: query,
-      taskId: "a2a-canonical-candidate",
-    };
-    const externalCandidate: AgentCallRecord = {
-      ...record,
-      agentCallId: "huanlink-external-candidate",
-      taskId: query,
-    };
-
-    const observed = await queryStatus(query, "session-current", {
-      byAgentCallId: canonicalCandidate,
-      byTaskId: externalCandidate,
-    });
-
-    expect(observed.result).toEqual({ status: "ambiguous", taskId: query });
-    expect(observed.invoke).not.toHaveBeenCalled();
-    expect(observed.submit).not.toHaveBeenCalled();
-    expect(observed.logger.entries).toContainEqual({
-      level: "info",
-      message: "main_agent.tool.completed",
-      fields: {
-        runId: "run-status-query",
-        sessionId: "session-current",
-        toolName: GET_TASK_STATUS_TOOL_NAME,
-        taskId: query,
-        resolutionStatus: "ambiguous",
-      },
-    });
-  });
-
-  test("deduplicates the same current-session record returned by both ID namespaces", async () => {
-    const observed = await queryStatus(record.agentCallId, "session-current", {
-      byAgentCallId: record,
-      byTaskId: { ...record },
-    });
-
-    expect(observed.result).toMatchObject({
-      status: "found",
-      task: {
-        taskId: record.agentCallId,
-        a2aTaskId: record.taskId,
-      },
-    });
-  });
-
-  test("returns a terminal notification error under the public notificationError field", async () => {
-    const observed = await queryStatus(record.agentCallId, "session-current", {
-      byAgentCallId: {
-        ...record,
-        terminalNotificationError: "Failed to deliver the terminal update",
-      },
-    });
-
-    expect(observed.result).toMatchObject({
-      status: "found",
-      task: {
-        notificationError: "Failed to deliver the terminal update",
-      },
-    });
-  });
-
-  test("returns structured questions for an input-required task", async () => {
-    const observed = await queryStatus(record.agentCallId, "session-current", {
-      byAgentCallId: {
-        ...record,
-        state: "input-required",
-        questions: [
-          {
-            id: "scope",
-            header: "Scope",
-            question: "Which files may be changed?",
-            isOther: false,
-            isSecret: false,
-            options: [
-              {
-                label: "Adapter only",
-                description: "Limit changes to the adapter.",
-              },
-            ],
-          },
-        ],
-      },
-    });
-
-    expect(observed.result).toMatchObject({
-      status: "found",
-      task: {
-        state: "input-required",
-        questions: [
-          {
-            id: "scope",
-            header: "Scope",
-            question: "Which files may be changed?",
-            isOther: false,
-            isSecret: false,
-            options: [
-              {
-                label: "Adapter only",
-                description: "Limit changes to the adapter.",
-              },
-            ],
-          },
-        ],
-      },
-    });
-  });
-
-  test.each([
-    {
-      name: "an unknown ID",
-      query: "unknown-task",
-      scenario: {},
-    },
-    {
-      name: "a canonical ID owned by another session",
-      query: record.agentCallId,
-      scenario: {
-        byAgentCallId: { ...record, sessionId: "session-other" },
-      },
-    },
-    {
-      name: "an external ID owned by another session",
-      query: record.taskId,
-      scenario: {
-        byTaskId: { ...record, sessionId: "session-other" },
-      },
-    },
-  ])(
-    "returns the same not-found shape for $name",
-    async ({ query, scenario }) => {
-      const observed = await queryStatus(query, "session-current", scenario);
-
-      expect(observed.result).toEqual({ status: "not-found", taskId: query });
-      expect(observed.invoke).not.toHaveBeenCalled();
-      expect(observed.submit).not.toHaveBeenCalled();
-      expect(observed.logger.entries).toContainEqual({
-        level: "info",
-        message: "main_agent.tool.completed",
-        fields: {
-          runId: "run-status-query",
-          sessionId: "session-current",
-          toolName: GET_TASK_STATUS_TOOL_NAME,
-          taskId: query,
-          resolutionStatus: "not-found",
-        },
-      });
-    },
-  );
 
   test.each([
     {
@@ -536,120 +171,74 @@ describe("createTaskStatusTool", () => {
       createLogger: () => new ThrowingRuntimeLogger({ throwOnChild: true }),
     },
     {
-      name: "started info logging",
+      name: "started logging",
       createLogger: () =>
         new ThrowingRuntimeLogger({
-          throwWhen: ({ level, message }) =>
-            level === "info" && message === "main_agent.tool.started",
+          throwWhen: ({ message }) => message === "main_agent.tool.started",
         }),
     },
     {
-      name: "completed info logging",
+      name: "completed logging",
       createLogger: () =>
         new ThrowingRuntimeLogger({
-          throwWhen: ({ level, message }) =>
-            level === "info" && message === "main_agent.tool.completed",
+          throwWhen: ({ message }) => message === "main_agent.tool.completed",
         }),
     },
-  ])(
-    "does not change a found result when the logger fails during $name",
-    async ({ createLogger }) => {
-      const getByAgentCallId = vi.fn<AgentCallReader["getByAgentCallId"]>(
-        () => record,
-      );
-      const getByTaskId = vi.fn<AgentCallReader["getByTaskId"]>(
-        () => undefined,
-      );
-      const tool = createTaskStatusTool({
-        reader: { getByAgentCallId, getByTaskId },
-        logger: createLogger(),
-      });
-      const context = new RunContext<OpenAiAgentsRunContext>({
-        runId: "run-status-logger-failure",
-        sessionId: "session-current",
-        trigger: "user",
-      });
-
-      const output = await tool.invoke(
-        context,
-        JSON.stringify({ taskId: record.agentCallId }),
-      );
-
-      expect(JSON.parse(String(output))).toMatchObject({
-        status: "found",
-        task: {
-          taskId: record.agentCallId,
-          a2aTaskId: record.taskId,
-          state: record.state,
-        },
-      });
-      expect(getByAgentCallId).toHaveBeenCalledTimes(1);
-      expect(getByTaskId).toHaveBeenCalledTimes(1);
-    },
-  );
-
-  test("logs a failed status lookup without changing the tool error result", async () => {
-    const originalMessage = "Task reader failed";
-    const failure = new Error(originalMessage);
-    const logger = new MutatingRuntimeLogger(({ fields }) => {
-      if (fields.error instanceof Error) {
-        fields.error.message = "logger-mutated-error";
-      }
-    });
+  ])("preserves a found result when $name fails", async ({ createLogger }) => {
     const tool = createTaskStatusTool({
-      reader: {
-        getByAgentCallId: () => {
-          throw failure;
-        },
-        getByTaskId: () => undefined,
-      },
-      logger,
-    });
-    const context = new RunContext<OpenAiAgentsRunContext>({
-      runId: "run-status-failure",
-      sessionId: "session-current",
-      trigger: "user",
+      reader: { getStatus: () => foundAgentCallStatus },
+      logger: createLogger(),
     });
 
     const output = await tool.invoke(
-      context,
-      JSON.stringify({ taskId: "task-reader-failure" }),
+      runContext(),
+      JSON.stringify({ taskId: "huanlink-task-status" }),
     );
 
-    expect(String(output)).toContain(originalMessage);
-    expect(failure.message).toBe(originalMessage);
+    expect(JSON.parse(String(output))).toEqual(foundAgentCallStatus);
+  });
+
+  test("logs lookup failure metadata without changing the business error", async () => {
+    const failure = new Error("status lookup failed");
+    const logger = new RecordingRuntimeLogger();
+    const tool = createTaskStatusTool({
+      reader: {
+        getStatus: () => {
+          throw failure;
+        },
+      },
+      logger,
+    });
+
+    const output = await tool.invoke(
+      runContext(),
+      JSON.stringify({ taskId: "huanlink-task-status" }),
+    );
+
+    expect(String(output)).toContain("status lookup failed");
     expect(logger.entries.at(-1)).toEqual({
       level: "error",
       message: "main_agent.tool.failed",
       fields: {
-        runId: "run-status-failure",
-        sessionId: "session-current",
+        runId: "run-status-public",
+        sessionId: "session-status-public",
         toolName: GET_TASK_STATUS_TOOL_NAME,
-        taskId: "task-reader-failure",
+        taskId: "huanlink-task-status",
         errorType: "Error",
       },
     });
-    expect(logger.entries.at(-1)?.fields).not.toHaveProperty("error");
   });
 
   test("preserves the original lookup error when failed logging throws", async () => {
-    const businessFailure = new Error("Original task reader failure");
-    const loggerFailure = new Error("Runtime logger error failure");
-    const getByAgentCallId = vi.fn<AgentCallReader["getByAgentCallId"]>(() => {
+    const businessFailure = new Error("Original task status reader failure");
+    const getStatus = vi.fn<AsyncToolTaskStatusReader["getStatus"]>(() => {
       throw businessFailure;
     });
-    const getByTaskId = vi.fn<AgentCallReader["getByTaskId"]>(() => undefined);
     const tool = createTaskStatusTool({
-      reader: { getByAgentCallId, getByTaskId },
+      reader: { getStatus },
       logger: new ThrowingRuntimeLogger({
-        failure: loggerFailure,
         throwWhen: ({ level }) => level === "error",
       }),
-    });
-    const context = new RunContext<OpenAiAgentsRunContext>({
-      runId: "run-status-original-error",
-      sessionId: "session-current",
-      trigger: "user",
     });
     const timeoutController = new AbortController();
     timeoutController.abort(
@@ -660,39 +249,31 @@ describe("createTaskStatusTool", () => {
     );
 
     await expect(
-      tool.invoke(context, JSON.stringify({ taskId: "task-reader-failure" }), {
-        signal: timeoutController.signal,
-      }),
+      tool.invoke(
+        runContext(),
+        JSON.stringify({ taskId: "huanlink-task-status" }),
+        { signal: timeoutController.signal },
+      ),
     ).rejects.toBe(businessFailure);
-    expect(getByAgentCallId).toHaveBeenCalledTimes(1);
-    expect(getByTaskId).not.toHaveBeenCalled();
+    expect(getStatus).toHaveBeenCalledTimes(1);
   });
 
-  test("is enabled for user and input-required runs but disabled for terminal runs", async () => {
+  test("is enabled only for user and input-required runs", async () => {
     const tool = createTaskStatusTool({
       reader: {
-        getByAgentCallId: () => undefined,
-        getByTaskId: () => undefined,
+        getStatus: (_sessionId, taskId) => ({ status: "not-found", taskId }),
       },
     });
     const agent = new Agent<OpenAiAgentsRunContext>({
-      name: "Status availability",
+      name: "Tool availability",
       instructions: "Test tool availability.",
       model: "unused-model",
     });
-    const context = (trigger: OpenAiAgentsRunContext["trigger"]) =>
-      new RunContext<OpenAiAgentsRunContext>({
-        runId: "run-status-availability",
-        sessionId: "session-current",
-        trigger,
-      });
+    const isEnabled = (trigger: OpenAiAgentsRunContext["trigger"]) =>
+      tool.isEnabled(runContext(trigger), agent);
 
-    await expect(tool.isEnabled(context("user"), agent)).resolves.toBe(true);
-    await expect(
-      tool.isEnabled(context("agent_call_input_required"), agent),
-    ).resolves.toBe(true);
-    await expect(
-      tool.isEnabled(context("agent_call_terminal"), agent),
-    ).resolves.toBe(false);
+    await expect(isEnabled("user")).resolves.toBe(true);
+    await expect(isEnabled("agent_call_input_required")).resolves.toBe(true);
+    await expect(isEnabled("agent_call_terminal")).resolves.toBe(false);
   });
 });

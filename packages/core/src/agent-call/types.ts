@@ -1,4 +1,14 @@
-import type { AgentCallId, RunId, SessionId } from "../shared/ids.js";
+import type {
+  AgentCallId,
+  HuanLinkTaskId,
+  RunId,
+  SessionId,
+} from "../shared/ids.js";
+import type {
+  AsyncToolTaskKindDefinition,
+  AsyncToolTaskPayload,
+  AsyncToolTaskState,
+} from "../async-tool-task/types.js";
 import type { TaskExecutionMode } from "../tasks/types.js";
 
 export type AgentCallTaskState =
@@ -19,9 +29,14 @@ export const AGENT_CALL_TERMINAL_STATES = [
   "rejected",
 ] as const satisfies readonly AgentCallTaskState[];
 
+export type AgentCallTerminalState =
+  (typeof AGENT_CALL_TERMINAL_STATES)[number];
+
 const terminalStates = new Set<AgentCallTaskState>(AGENT_CALL_TERMINAL_STATES);
 
-export function isAgentCallTerminalState(state: AgentCallTaskState): boolean {
+export function isAgentCallTerminalState(
+  state: AgentCallTaskState,
+): state is AgentCallTerminalState {
   return terminalStates.has(state);
 }
 
@@ -61,6 +76,22 @@ export type AgentCallInputQuestion = {
 };
 
 export type AgentCallInputAnswers = Record<string, string[]>;
+
+export const AGENT_CALL_TASK_KIND = "agent-call" as const;
+
+export type AgentCallTaskPublicPayload = {
+  readonly artifacts: readonly AgentCallArtifact[];
+  readonly questions?: readonly AgentCallInputQuestion[];
+};
+
+export const AGENT_CALL_TASK_KIND_DEFINITION: AsyncToolTaskKindDefinition = {
+  kind: AGENT_CALL_TASK_KIND,
+  validatePayload: validateAgentCallTaskPayload,
+  projectPublicStatus: ({ payload, statusMessage }) => ({
+    payload: validateAgentCallTaskPayload(payload),
+    ...(statusMessage === undefined ? {} : { statusMessage }),
+  }),
+};
 
 export type AgentCallTaskSnapshot = {
   taskId: string;
@@ -105,39 +136,71 @@ export interface AgentCallTransport {
   cancelTask(taskId: string): Promise<AgentCallTaskSnapshot>;
 }
 
-export type AgentCallRequest = {
+type AgentCallRequestBase = {
   runId: RunId;
   sessionId: SessionId;
   skillId: string;
   input: string;
-  executionMode: TaskExecutionMode;
   contextId?: string;
-  sourceToolCallId?: string;
   signal?: AbortSignal;
 };
 
+export type AgentCallAsyncRequest = AgentCallRequestBase & {
+  executionMode: "async";
+  toolName: string;
+  sourceToolCallId: string;
+};
+
+export type AgentCallBlockingRequest = AgentCallRequestBase & {
+  executionMode: "blocking";
+  toolName?: string;
+  sourceToolCallId?: string;
+};
+
+export type AgentCallRequest = AgentCallAsyncRequest | AgentCallBlockingRequest;
+
 export type AgentCallReceipt = {
   status: "accepted";
-  executionMode: TaskExecutionMode;
-  agentCallId: AgentCallId;
-  taskId: string;
+  taskId: HuanLinkTaskId;
   state: AgentCallTaskState;
 };
+
+export type AgentCallTaskLimitResult = {
+  status: "error";
+  error: "task-limit-reached";
+  maxActiveTasksPerSession: number;
+};
+
+export type AgentCallPreacceptRejectedResult = {
+  status: "error";
+  error: "task-preaccept-rejected";
+};
+
+export type AgentCallAsyncInvocationResult =
+  | AgentCallReceipt
+  | AgentCallTaskLimitResult
+  | AgentCallPreacceptRejectedResult;
 
 export type AgentCallBlockingResult = {
   status: "result";
   executionMode: "blocking";
-  agentCallId: AgentCallId;
-  taskId: string;
-  state: AgentCallTaskState;
+  state: AgentCallTerminalState;
   artifacts: AgentCallArtifact[];
+  statusMessage?: string;
+};
+
+export type AgentCallBlockingInterruptedResult = {
+  status: "blocking-interrupted";
+  executionMode: "blocking";
+  state: "input-required" | "auth-required";
   questions?: AgentCallInputQuestion[];
   statusMessage?: string;
 };
 
 export type AgentCallInvocationResult =
-  | AgentCallReceipt
-  | AgentCallBlockingResult;
+  | AgentCallAsyncInvocationResult
+  | AgentCallBlockingResult
+  | AgentCallBlockingInterruptedResult;
 
 export type AgentCallRecord = {
   agentCallId: AgentCallId;
@@ -154,7 +217,6 @@ export type AgentCallRecord = {
   artifacts: AgentCallArtifact[];
   questions?: AgentCallInputQuestion[];
   statusMessage?: string;
-  terminalNotificationError?: string;
   createdAt: string;
   updatedAt: string;
 };
@@ -165,30 +227,134 @@ export interface AgentCallReader {
 }
 
 export interface AgentCallSubmitter {
-  submit(request: AgentCallRequest): Promise<AgentCallReceipt>;
+  submit(
+    request: AgentCallAsyncRequest,
+  ): Promise<AgentCallAsyncInvocationResult>;
 }
 
 export interface AgentCallInvoker {
   invoke(request: AgentCallRequest): Promise<AgentCallInvocationResult>;
 }
 
+export type AgentCallContinueRequest = {
+  sessionId: SessionId;
+  taskId: HuanLinkTaskId;
+  answers: AgentCallInputAnswers;
+  signal?: AbortSignal;
+};
+
+export type AgentCallContinueResult =
+  | { status: "not-found"; taskId: HuanLinkTaskId }
+  | {
+      status: "unsupported";
+      taskId: HuanLinkTaskId;
+      operation: "continue";
+    }
+  | {
+      status: "invalid-state";
+      taskId: HuanLinkTaskId;
+      state: AsyncToolTaskState;
+    }
+  | { status: "invalid-answers"; taskId: HuanLinkTaskId; error: string }
+  | {
+      status: "continued";
+      taskId: HuanLinkTaskId;
+      state: AgentCallTaskState;
+    };
+
 export interface AgentCallContinuator {
   continueTask(
-    taskId: string,
-    answers: AgentCallInputAnswers,
-    signal?: AbortSignal,
-  ): Promise<AgentCallRecord>;
+    request: AgentCallContinueRequest,
+  ): Promise<AgentCallContinueResult>;
 }
-
-export type AgentCallTerminalListener = (
-  record: AgentCallRecord,
-) => Promise<void> | void;
-
-export type AgentCallPausedListener = (
-  record: AgentCallRecord,
-) => Promise<void> | void;
 
 export type AgentCallBackgroundErrorListener = (
   error: Error,
   record: AgentCallRecord | undefined,
 ) => Promise<void> | void;
+
+function validateAgentCallTaskPayload(payload: unknown): AsyncToolTaskPayload {
+  if (!isRecord(payload) || !Array.isArray(payload.artifacts)) {
+    throw new Error("AgentCall Task payload must contain artifacts");
+  }
+  const artifacts = payload.artifacts.map((artifact) => {
+    if (!isRecord(artifact) || typeof artifact.id !== "string") {
+      throw new Error("AgentCall Task artifact must contain an ID");
+    }
+    return copyOptionalStrings(artifact, ["id", "name", "description", "text"]);
+  });
+  const questions =
+    payload.questions === undefined
+      ? undefined
+      : validateAgentCallTaskQuestions(payload.questions);
+  return {
+    artifacts,
+    ...(questions === undefined ? {} : { questions }),
+  };
+}
+
+function validateAgentCallTaskQuestions(
+  value: unknown,
+): AsyncToolTaskPayload["questions"] {
+  if (!Array.isArray(value)) {
+    throw new Error("AgentCall Task questions must be an array");
+  }
+  return value.map((question) => {
+    if (
+      !isRecord(question) ||
+      typeof question.header !== "string" ||
+      typeof question.id !== "string" ||
+      typeof question.isOther !== "boolean" ||
+      typeof question.isSecret !== "boolean" ||
+      typeof question.question !== "string" ||
+      (question.options !== null && !Array.isArray(question.options))
+    ) {
+      throw new Error("AgentCall Task question is invalid");
+    }
+    const options =
+      question.options === null
+        ? null
+        : question.options.map((option) => {
+            if (
+              !isRecord(option) ||
+              typeof option.description !== "string" ||
+              typeof option.label !== "string"
+            ) {
+              throw new Error("AgentCall Task question option is invalid");
+            }
+            return {
+              description: option.description,
+              label: option.label,
+            };
+          });
+    return {
+      header: question.header,
+      id: question.id,
+      isOther: question.isOther,
+      isSecret: question.isSecret,
+      options,
+      question: question.question,
+    };
+  });
+}
+
+function copyOptionalStrings(
+  value: Record<string, unknown>,
+  keys: readonly string[],
+): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const key of keys) {
+    const candidate = value[key];
+    if (candidate !== undefined && typeof candidate !== "string") {
+      throw new Error(`AgentCall Task field ${key} must be a string`);
+    }
+    if (candidate !== undefined) {
+      result[key] = candidate;
+    }
+  }
+  return result;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}

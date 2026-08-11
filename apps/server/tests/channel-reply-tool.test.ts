@@ -651,20 +651,17 @@ describe("current-session reply Tool", () => {
     });
     const observedTools: string[][] = [];
     const runtime = createPhase3MainAgentRuntime({
-      invoker: {
+      agentCallInvoker: {
         invoke: async () => ({
           status: "accepted",
-          executionMode: "async",
-          agentCallId: "unused-agent-call",
-          taskId: "unused-a2a-task",
+          taskId: "unused-huanlink-task",
           state: "submitted",
         }),
       },
-      taskReader: {
-        getByAgentCallId: () => undefined,
-        getByTaskId: () => undefined,
+      taskStatusReader: {
+        getStatus: (_sessionId, taskId) => ({ status: "not-found", taskId }),
       },
-      taskContinuator: {
+      agentCallContinuator: {
         continueTask: async () => {
           throw new Error("Unexpected continuation");
         },

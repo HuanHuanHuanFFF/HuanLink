@@ -29,21 +29,18 @@ describe("real DeepSeek MainAgent smoke", () => {
       invocations.push(request);
       return {
         status: "accepted" as const,
-        executionMode: request.executionMode,
-        agentCallId: "real-deepseek-agent-call",
-        taskId: "real-deepseek-a2a-task",
+        taskId: "real-deepseek-huanlink-task",
         state: "submitted" as const,
       };
     });
-    const getByAgentCallId = vi.fn(() => undefined);
-    const getByTaskId = vi.fn(() => undefined);
+    const getStatus = vi.fn((_sessionId: string, taskId: string) => ({
+      status: "not-found" as const,
+      taskId,
+    }));
     const runtime = createPhase3MainAgentRuntime({
-      invoker: { invoke },
-      taskReader: {
-        getByAgentCallId,
-        getByTaskId,
-      },
-      taskContinuator: {
+      agentCallInvoker: { invoke },
+      taskStatusReader: { getStatus },
+      agentCallContinuator: {
         continueTask: vi.fn(async () => {
           throw new Error("Unexpected task continuation in this smoke test");
         }),
@@ -70,8 +67,7 @@ describe("real DeepSeek MainAgent smoke", () => {
     });
 
     expect(invoke).toHaveBeenCalledTimes(1);
-    expect(getByAgentCallId).not.toHaveBeenCalled();
-    expect(getByTaskId).not.toHaveBeenCalled();
+    expect(getStatus).not.toHaveBeenCalled();
     expect(invocations).toHaveLength(1);
     expect(invocations[0]).toMatchObject({
       runId: "run-real-deepseek",

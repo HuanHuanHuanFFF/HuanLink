@@ -1,6 +1,8 @@
 import { describe, expect, test, vi } from "vitest";
 
 import {
+  AGENT_CALL_TASK_KIND_DEFINITION,
+  AsyncToolTaskService,
   type ChannelAdapter,
   type ChannelMessageListener,
   type DeliveryReceipt,
@@ -158,6 +160,11 @@ describe("HuanLinkServerRuntime", () => {
     const projectedInputs: string[] = [];
     let getLatestContext!: (sessionId: string) => string;
     let historyRecorder!: SessionToolHistoryRecorder;
+    let receivedTaskService!: AsyncToolTaskService;
+    const taskService = new AsyncToolTaskService({
+      maxActiveTasksPerSession: 2,
+      taskKinds: [AGENT_CALL_TASK_KIND_DEFINITION],
+    });
     const phase3 = {
       runMainAgent: vi.fn(async ({ sessionId }: { sessionId: string }) => {
         projectedInputs.push(getLatestContext(sessionId));
@@ -173,10 +180,12 @@ describe("HuanLinkServerRuntime", () => {
       input: ChannelRuntimeMessage,
     ) => Promise<void> | void;
     const runtime = await assembleHuanLinkServerRuntime({
+      taskService,
       createStore: () => ({ sessionStore, storeOwner }),
       createPhase3: (input) => {
         getLatestContext = input.getLatestContext;
         historyRecorder = input.historyRecorder;
+        receivedTaskService = input.taskService;
         return phase3;
       },
       createChannels: ({ onChannelMessage: handler }) => {
@@ -221,6 +230,7 @@ describe("HuanLinkServerRuntime", () => {
     expect(projectedInputs).toHaveLength(1);
     expect(projectedInputs[0]).toContain("@HuanLink inspect this");
     expect(projectedInputs[0]?.match(/\"route\":/g)).toHaveLength(1);
+    expect(receivedTaskService).toBe(taskService);
 
     historyRecorder.recordToolCall("channel:qq-main:group:10001", {
       runId: "run-tool-history",
@@ -271,6 +281,7 @@ describe("HuanLinkServerRuntime", () => {
       },
     );
     const runtime = await assembleHuanLinkServerRuntime({
+      taskService: testTaskService(),
       createStore: () => ({
         sessionStore,
         storeOwner: { close: vi.fn() },
@@ -346,6 +357,7 @@ describe("HuanLinkServerRuntime", () => {
     };
 
     const operation = assembleHuanLinkServerRuntime({
+      taskService: testTaskService(),
       createStore: () => {
         events.push("store:create");
         return { sessionStore, storeOwner };
@@ -534,3 +546,10 @@ describe("HuanLinkServerRuntime", () => {
     } satisfies Partial<HuanLinkServerRuntimeStateError>);
   });
 });
+
+function testTaskService(): AsyncToolTaskService {
+  return new AsyncToolTaskService({
+    maxActiveTasksPerSession: 2,
+    taskKinds: [AGENT_CALL_TASK_KIND_DEFINITION],
+  });
+}

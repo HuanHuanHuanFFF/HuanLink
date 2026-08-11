@@ -1,6 +1,7 @@
 import {
   ConversationSessionStoreToolHistoryRecorder,
   projectConversationSessionContext,
+  type AsyncToolTaskService,
   type ConversationSessionStore,
   type SessionId,
   type SessionToolHistoryRecorder,
@@ -56,9 +57,11 @@ export type HuanLinkServerStoreResource = {
 };
 
 export type AssembleHuanLinkServerRuntimeOptions = {
+  readonly taskService: AsyncToolTaskService;
   readonly createStore: () => Awaitable<HuanLinkServerStoreResource>;
   readonly createPhase3: (input: {
     readonly sessionStore: ConversationSessionStore;
+    readonly taskService: AsyncToolTaskService;
     readonly getLatestContext: (sessionId: SessionId) => string;
     readonly historyRecorder: SessionToolHistoryRecorder;
   }) => Awaitable<HuanLinkServerPhase3Runtime>;
@@ -129,6 +132,7 @@ export async function assembleHuanLinkServerRuntime(
 
     const phase3 = await options.createPhase3({
       sessionStore,
+      taskService: options.taskService,
       historyRecorder: new ConversationSessionStoreToolHistoryRecorder(
         sessionStore,
       ),
