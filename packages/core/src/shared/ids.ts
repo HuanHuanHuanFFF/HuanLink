@@ -8,3 +8,6 @@ export type SessionId = string;
 
 // 一次外部 Agent 异步调用的唯一标识。
 export type AgentCallId = string;
+
+// HuanLink 延迟 Tool Task 对模型公开的唯一标识。
+export type HuanLinkTaskId = string;

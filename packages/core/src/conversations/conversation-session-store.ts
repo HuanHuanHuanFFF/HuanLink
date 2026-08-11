@@ -1,9 +1,10 @@
 import type { InboundChannelMessage } from "../channels/contract.js";
-import type { SessionId } from "../shared/ids.js";
+import type { RunId, SessionId } from "../shared/ids.js";
 
 import type {
   AppendConversationAgentToolCall,
   AppendConversationAgentToolResult,
+  ConversationAgentToolCallEntry,
   ConversationSession,
   ConversationSessionContextWindow,
   ConversationSessionMetadata,
@@ -28,6 +29,11 @@ export interface ConversationSessionStore {
     sessionId: SessionId,
     result: AppendConversationAgentToolResult,
   ): void;
+  getAgentToolCall(
+    sessionId: SessionId,
+    runId: RunId,
+    toolCallId: string,
+  ): ConversationAgentToolCallEntry | undefined;
   getSession(sessionId: SessionId): ConversationSession | undefined;
   getSessionContextWindow(
     sessionId: SessionId,

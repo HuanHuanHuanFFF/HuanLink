@@ -139,6 +139,77 @@ function defineConversationSessionStoreContract(
       ).toThrow(/exactly one of arguments or rawArguments/i);
     });
 
+    test("reads a structured Tool Call by session, run, and SDK Call ID as a defensive copy", () => {
+      const store = createStore();
+      store.appendChannelMessage("session-a", inboundMessage("message-1"));
+      store.appendAgentToolCall("session-a", {
+        runId: "run-1",
+        toolCallId: "call-lookup",
+        toolName: "submit_codex_agent_call",
+        arguments: { task: "inspect status" },
+      });
+
+      const call = store.getAgentToolCall("session-a", "run-1", "call-lookup");
+
+      expect(call).toEqual({
+        type: "agent_tool_call",
+        runId: "run-1",
+        toolCallId: "call-lookup",
+        toolName: "submit_codex_agent_call",
+        arguments: { task: "inspect status" },
+      });
+      (call?.arguments as { task: string }).task = "mutated";
+      expect(
+        store.getAgentToolCall("session-a", "run-1", "call-lookup"),
+      ).toMatchObject({ arguments: { task: "inspect status" } });
+    });
+
+    test("reads raw Tool Calls only from the matching Session and run", () => {
+      const store = createStore();
+      store.appendChannelMessage("session-a", inboundMessage("message-a"));
+      store.appendChannelMessage("session-b", inboundMessage("message-b"));
+      store.appendAgentToolCall("session-a", {
+        runId: "run-1",
+        toolCallId: "call-shared",
+        toolName: "reply",
+        rawArguments: '{"content":',
+      });
+      store.appendAgentToolCall("session-b", {
+        runId: "run-1",
+        toolCallId: "call-shared",
+        toolName: "reply",
+        arguments: { content: "other Session" },
+      });
+      store.appendAgentToolCall("session-a", {
+        runId: "run-2",
+        toolCallId: "call-shared",
+        toolName: "reply",
+        arguments: { content: "other run" },
+      });
+
+      expect(
+        store.getAgentToolCall("session-a", "run-1", "call-shared"),
+      ).toEqual({
+        type: "agent_tool_call",
+        runId: "run-1",
+        toolCallId: "call-shared",
+        toolName: "reply",
+        rawArguments: '{"content":',
+      });
+      expect(
+        store.getAgentToolCall("session-b", "run-1", "call-shared"),
+      ).toMatchObject({ arguments: { content: "other Session" } });
+      expect(
+        store.getAgentToolCall("session-a", "run-2", "call-shared"),
+      ).toMatchObject({ arguments: { content: "other run" } });
+      expect(
+        store.getAgentToolCall("session-a", "run-missing", "call-shared"),
+      ).toBeUndefined();
+      expect(
+        store.getAgentToolCall("session-missing", "run-1", "call-shared"),
+      ).toBeUndefined();
+    });
+
     test("reads a defensive context window with stable entry indexes", () => {
       const store = createStore();
       const first = inboundMessage("message-1");

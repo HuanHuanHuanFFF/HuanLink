@@ -3,7 +3,7 @@ import {
   type ChannelConversationRoute,
   type InboundChannelMessage,
 } from "../channels/contract.js";
-import type { SessionId } from "../shared/ids.js";
+import type { RunId, SessionId } from "../shared/ids.js";
 
 import type {
   AppendConversationAgentToolCall,
@@ -330,6 +330,27 @@ export class InMemoryConversationSessionStore implements ConversationSessionStor
       0,
       session.entryIndexes[callIndex]! + 1,
     );
+  }
+
+  getAgentToolCall(
+    sessionId: SessionId,
+    runId: RunId,
+    toolCallId: string,
+  ): ConversationAgentToolCallEntry | undefined {
+    const session = this.sessions.get(sessionId);
+    const call =
+      session === undefined
+        ? undefined
+        : findToolCall(session.timeline, runId, toolCallId);
+    return call === undefined
+      ? undefined
+      : {
+          type: "agent_tool_call",
+          runId: call.runId,
+          toolCallId: call.toolCallId,
+          toolName: call.toolName,
+          ...cloneConversationAgentToolCallPayload(call),
+        };
   }
 
   /** 返回结构化 Session 的完整防御性副本。 */

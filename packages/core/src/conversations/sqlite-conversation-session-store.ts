@@ -5,7 +5,7 @@ import {
   type ChannelConversationRoute,
   type InboundChannelMessage,
 } from "../channels/contract.js";
-import type { SessionId } from "../shared/ids.js";
+import type { RunId, SessionId } from "../shared/ids.js";
 
 import {
   cloneConversationSession,
@@ -397,6 +397,48 @@ export class SqliteConversationSessionStore implements ConversationSessionStore 
           call.entry_index + 1,
         );
     });
+  }
+
+  getAgentToolCall(
+    sessionId: SessionId,
+    runId: RunId,
+    toolCallId: string,
+  ): ConversationAgentToolCallEntry | undefined {
+    this.assertOpen();
+    const call = this.findToolCall(sessionId, runId, toolCallId);
+    if (call === undefined) {
+      return undefined;
+    }
+    const row = this.database
+      .prepare(
+        `SELECT entry_index, payload_json
+         FROM conversation_entries
+         WHERE session_id = ? AND entry_index = ?`,
+      )
+      .get(sessionId, call.entry_index) as SqliteEntryRow | undefined;
+    if (row === undefined) {
+      throw new Error("SQLite conversation Tool Call index is inconsistent");
+    }
+    const entry = parseSqliteStoredEntry(row);
+    if (entry.type !== "agent_tool_call") {
+      throw new Error(
+        "SQLite conversation Tool Call index points to a non-Tool-Call entry",
+      );
+    }
+    if (
+      entry.runId !== runId ||
+      entry.toolCallId !== toolCallId ||
+      entry.toolName !== call.tool_name
+    ) {
+      throw new Error("SQLite conversation Tool Call index is inconsistent");
+    }
+    return {
+      type: "agent_tool_call",
+      runId: entry.runId,
+      toolCallId: entry.toolCallId,
+      toolName: entry.toolName,
+      ...cloneConversationAgentToolCallPayload(entry),
+    };
   }
 
   getSession(sessionId: SessionId): ConversationSession | undefined {

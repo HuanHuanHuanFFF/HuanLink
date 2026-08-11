@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 
 import { afterEach, describe, expect, test } from "vitest";
 
@@ -211,6 +212,86 @@ describe("SqliteConversationSessionStore", () => {
       },
     ]);
     reopened.close();
+  });
+
+  test("reads a persisted Tool Call directly by Session, run, and SDK Call ID after reopening", () => {
+    const directory = mkdtempSync(join(tmpdir(), "huanlink-sqlite-store-"));
+    temporaryDirectories.push(directory);
+    const databasePath = join(directory, "conversation.sqlite");
+    const first = openStore(databasePath);
+    first.appendChannelMessage("session-a", inboundMessage("message-1"));
+    first.appendAgentToolCall("session-a", {
+      runId: "run-lookup",
+      toolCallId: "call-lookup",
+      toolName: "submit_codex_agent_call",
+      arguments: { task: "inspect status" },
+    });
+    first.close();
+
+    const reopened = openStore(databasePath);
+    expect(
+      reopened.getAgentToolCall("session-a", "run-lookup", "call-lookup"),
+    ).toEqual({
+      type: "agent_tool_call",
+      runId: "run-lookup",
+      toolCallId: "call-lookup",
+      toolName: "submit_codex_agent_call",
+      arguments: { task: "inspect status" },
+    });
+    expect(
+      reopened.getAgentToolCall("session-a", "run-lookup", "call-missing"),
+    ).toBeUndefined();
+    reopened.close();
+  });
+
+  test("rejects a direct Tool Call read after close", () => {
+    const store = openStore();
+    store.close();
+
+    expect(() =>
+      store.getAgentToolCall("session-a", "run-lookup", "call-lookup"),
+    ).toThrow(/SQLite Conversation Store is closed/i);
+  });
+
+  test("rejects a corrupted Tool Call index instead of returning another call", () => {
+    const directory = mkdtempSync(join(tmpdir(), "huanlink-sqlite-store-"));
+    temporaryDirectories.push(directory);
+    const databasePath = join(directory, "conversation.sqlite");
+    const first = openStore(databasePath);
+    first.appendChannelMessage("session-a", inboundMessage("message-1"));
+    first.appendAgentToolCall("session-a", {
+      runId: "run-lookup",
+      toolCallId: "call-first",
+      toolName: "reply",
+      arguments: { content: "first" },
+    });
+    first.appendAgentToolCall("session-a", {
+      runId: "run-lookup",
+      toolCallId: "call-second",
+      toolName: "reply",
+      arguments: { content: "second" },
+    });
+    first.close();
+
+    const database = new DatabaseSync(databasePath);
+    const second = database
+      .prepare(
+        "SELECT entry_index FROM conversation_tool_calls WHERE session_id = ? AND run_id = ? AND tool_call_id = ?",
+      )
+      .get("session-a", "run-lookup", "call-second") as {
+      entry_index: number;
+    };
+    database
+      .prepare(
+        "UPDATE conversation_tool_calls SET entry_index = ? WHERE session_id = ? AND run_id = ? AND tool_call_id = ?",
+      )
+      .run(second.entry_index, "session-a", "run-lookup", "call-first");
+    database.close();
+
+    const reopened = openStore(databasePath);
+    expect(() =>
+      reopened.getAgentToolCall("session-a", "run-lookup", "call-first"),
+    ).toThrow(/index is inconsistent/i);
   });
 
   test("returns fixed metadata and defensive session copies", () => {
