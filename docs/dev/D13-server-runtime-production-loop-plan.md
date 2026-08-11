@@ -258,9 +258,11 @@ B02 完成测试与压力审查后报告；不得顺手实现队列、watermark 
 - B04-A：终态事实先保存并释放名额，再通知下游 re-entry；listener 失败不得回滚已观察的终态，也不得静默吞掉，必须通过错误回调或调用方异常变得可观察。
 - B04-A：Task 来源固定保存 `sessionId + sourceRunId + sourceToolCallId`；为 `ConversationSessionStore` 增加按该复合键定向读取原 Tool Call 的只读接口。In-memory 可按现有 timeline 查找，SQLite 复用现有复合查询键，不新增 migration。
 - B04-A：提供一个非 A2A 的 Fake 延迟 Tool 公共接缝测试，证明 Task 能力不是 AgentCall 的改名；本计划不新增第二个真实生产 Tool。
-- B04-B：将 AgentCall 的异步模式接入通用 Task Service，公开返回统一为 `{ status: "accepted", taskId, state }`；A2A ID 仅在 AgentCall 内部与脱敏日志中保留为 `a2aTaskId`。显式 `blocking` 模式继续等待终态并直接返回最终 Result，不返回 `accepted`，也不产生 terminal re-entry。
-- B04-B：把 `get_task_status` 改为只按当前 Session 的 HuanLink `taskId` 查询任意 Task；`continue_task` 同样接收该 ID，但只有支持继续的 AgentCall 类型可执行。
-- B04-B：Task 终态不补写原 Tool Call 的第二个 Result；它在同 Session 队列取得槽位后，组合“定向取回的原 Tool Call + 最终结果 + 最新上下文”发起 re-entry。
+- B04-B：将 AgentCall 的异步模式接入通用 Task Service，公开返回统一为 `{ status: "accepted", taskId, state }`；HuanLink `taskId` 复用现有本地 AgentCall UUID，不再形成第三个模型可见 ID，A2A ID 仅在 AgentCall 内部与脱敏日志中保留为 `a2aTaskId`。
+- B04-B：显式 `blocking` 模式不注册通用 Task，正常完成时直接返回最终 Result，不返回 `accepted`，也不产生 terminal re-entry；若远端进入 `input-required | auth-required`，尽力取消远端任务并返回稳定的 `blocking-interrupted` 结果，不临时升级为异步 Task。
+- B04-B：把 `get_task_status` 改为只按当前 Session 的 HuanLink `taskId` 查询任意 Task；`continue_task` 同样接收该 ID，但只有支持继续的 AgentCall 类型可执行。AgentCall 的模型可见状态只投影 `statusMessage`、问题与产物，不公开原始输入或任何内部 ID。
+- B04-B：Task 终态不补写原 Tool Call 的第二个 Result；`input-required` 与 terminal re-entry 都在同 Session 队列取得槽位后，组合“定向取回的原 Tool Call + 当前 Task 结果 + 最新上下文”发起 re-entry。
+- B04-B：当前只识别并保存 A2A `auth-required` 状态，不实现凭证协商、认证恢复或凭证转发；这些能力留给后续独立认证模块。
 - B04-C：将配置字段从 `agentCallPolicy` 收敛为 `taskPolicy`，不保留旧别名；Server 从唯一配置树注入默认上限 2。
 - 保持当前单个显式 Codex Agent 目标；不实现多个 Agent 的动态路由。
 - 从正式配置构造 DeepSeek MainAgent model binding，只在真正接线时解析 API Key。
@@ -291,6 +293,14 @@ B02 完成测试与压力审查后报告；不得顺手实现队列、watermark 
 若真实 Codex smoke 只能通过修改正式 Server 工作树或依赖未接入的 Adapter JSON 配置才能运行，停止并单独报告 Adapter 入口缺口。
 
 B04 只建立进程内通用 Task。若实现需要新增 Task SQLite 表、重启后自动 `GetTask`、重建 watcher、重投递或恢复 re-entry，停止并另立持久任务计划。
+
+### B04-B 实施结果（2026-08-12）
+
+- AgentCall 的异步提交、状态查询和继续操作已统一使用 HuanLink `taskId`；A2A `taskId` 只留在内部记录。`blocking` 不创建通用 Task，遇到 `input-required | auth-required` 时按计划返回 `blocking-interrupted`。
+- 外部受理前失败返回结构化 `task-preaccept-rejected` 并释放名额；外部已经受理但本地关联异常时保留为 `accepted + unknown`，继续占用名额且不自动重试。
+- `input-required` 与 terminal 事件已统一从 Task Service 进入同 Session 调度器；轮到执行后才读取来源 Tool Call、公开 Task 状态和最新 Context Window。过期事件会跳过，来源 Call 缺失时 fail-closed。
+- In-memory 组合测试已覆盖初始受理和 terminal re-entry 均显式调用 `reply`；当前仍未接正式 `main.ts`、SQLite 生命周期或真实 QQ/Codex smoke，这些边界分别留给 B04-C、B05 和后续真实验收。
+- 新鲜验证为全仓 `typecheck`、Prettier 和差异检查通过；按包串行共 `798` 个测试通过、`2` 个既有条件测试跳过。两路独立压力审查修复状态竞态与跨包测试迁移后，未留下 P0/P1/P2。完整根构建在本机仍被 Windows 对既有 `dist` 文件的 `EPERM` 占用锁阻断；Core 与 OpenAI Integration 的独立构建已通过。
 
 ## 10. B05：SQLite 正式生命周期（P0.5）
 
