@@ -63,19 +63,20 @@ P0 不实现消息聚合队列，也不实现门禁 Agent。当前策略为：
 
 本计划不提前建立空队列、队列配置、watermark、overflow、重试或门禁 Agent 合同。未来能力必须以独立计划进入。
 
-### 3.3 活动异步 Tool Task 上限
+### 3.3 A2A Task 与普通异步 Tool Task 分池上限
 
 - “异步 Tool Task”特指 Tool 选择异步模式、已立即返回 `accepted`，但后台操作仍继续执行的顶层任务；普通 `Promise` Tool 或显式 `blocking` 模式若等待完成后才返回最终 Result，仍属于阻塞完成路径，不创建模型可查询的异步 Task。
 - 异步 Tool 必须先完成 Tool 存在性检查、参数解析与校验，并构造出完整的执行请求，才允许调用外部 Handler/Transport。此前任何失败都必须在当前 Tool 调用内立即失败；并发限额所需的内部预占可以存在，但失败后必须转为 `rejected` 并释放名额，不得伪装为 `accepted` 或进入异步回流队列。限额和 AgentCall 受理前失败继续返回稳定的 HuanLink 结构化错误；未知 Tool 与参数校验错误当前沿用 SDK 错误合同。
 - 外部已经受理后的 `failed | canceled | rejected` 与成功终态采用同一 Session 排队回流机制；它们不打断当前 MainAgent Run，轮到执行时再读取来源 Tool Call、当前公开 Task 状态和最新上下文。只有受理前失败立即返回，不产生第二次回流。
-- 每个 Session 的活动异步 Tool Task 数量可配置，默认上限为 `2`。
-- 限制语义按 HuanLink 可观察的顶层异步 Tool Task 计算；AgentCall/A2A 只是当前第一个 Task 类型，不按 MainAgent turn、普通同步 Tool 或外部 Agent 内部子线程计算。
-- `submitting`、`unknown`、`submitted`、`working`、`input-required` 和 `auth-required` 等所有非终态都占用名额；只有 `completed`、`failed`、`canceled` 和 `rejected` 释放名额。
+- 每个 Session 使用两个独立名额池：A2A Task 默认上限为 `2`；非 A2A 的普通异步 Tool Task 默认上限为 `3`。
+- AgentCall/A2A Task 无论选择 `async` 还是 `blocking`，都只占 A2A 名额；其中 `blocking` 只在当前调用执行期间占位，`async` 则持续占位到终态。未来接入的非 A2A 异步 Tool 只占普通异步 Tool 名额。异步 A2A 不重复占用普通异步 Tool 名额。
+- 限制语义按 HuanLink 可观察的顶层 Task 计算，不按 MainAgent turn、普通同步 Tool 或外部 Agent 内部子线程计算。
+- 对已经注册为通用异步 Task 的调用，`submitting`、`unknown`、`submitted`、`working`、`input-required` 和 `auth-required` 等所有非终态都占用所属名额；只有 `completed`、`failed`、`canceled` 和 `rejected` 释放名额。
 - `continue_task` 继续原 Task，不新增名额；terminal re-entry 本身也不新增名额。
 - 不同 Session 独立计数；同一外部 Task 内部的 Codex 子线程、子 Agent 或 Tool 并行不计入 HuanLink 上限。
 - 同一 Session 的多个 Task 终态按 HuanLink 实际观察顺序串行 re-entry；每个 Task 各自决定是否显式 `reply`，但本阶段不承诺不同 Task 的后台完成顺序，也不把后来到达的普通消息自动归属于某个既有 Task。
 - 并发提交必须先原子预占名额；达到上限时不得调用外部 Transport，而应返回稳定的结构化错误，由 MainAgent 决定如何说明或等待。
-- P0 仍显式选择一个 Codex A2A Agent；默认上限为 2 是为了允许同一 Session 存在两个顶层外部 Task，并为后续多 Agent 协作保留空间，不代表 D13 已实现多 Agent 路由。
+- P0 仍显式选择一个 Codex A2A Agent；A2A 默认上限为 2 是为了允许同一 Session 存在两个顶层外部 Task，并为后续多 Agent 协作保留空间，不代表 D13 已实现多 Agent 路由。普通异步 Tool 默认上限 3 与该池相互独立。
 
 配置固定放在独立的 `.huanlink/config/server/orchestration.json` 中，由 `config.json.server.orchestration` 显式引用，而不是混入 MainAgent 模型文件或 Agent Adapter 配置：
 
@@ -83,13 +84,16 @@ P0 不实现消息聚合队列，也不实现门禁 Agent。当前策略为：
 {
   "version": 1,
   "defaultAgentId": "codex-local",
-  "taskPolicy": {
+  "a2aTaskPolicy": {
     "maxActiveTasksPerSession": 2
+  },
+  "asyncToolTaskPolicy": {
+    "maxActiveTasksPerSession": 3
   }
 }
 ```
 
-`maxActiveTasksPerSession` 为必填正整数，仓库默认配置写 `2`；缺少或非法时启动失败，不使用第二配置根、目录扫描或其他隐式来源。
+两个 Policy 的 `maxActiveTasksPerSession` 都是必填正整数；仓库默认分别写 `2` 和 `3`。缺少或非法时启动失败，不使用第二配置根、目录扫描或其他隐式来源。
 
 ### 3.4 回复与消息事实
 
@@ -126,7 +130,7 @@ P0 不实现消息聚合队列，也不实现门禁 Agent。当前策略为：
 - Server 总 Runtime 组合对象与正式 `main.ts` 接线；
 - Channel 下游 `SessionIngressCoordinator`；
 - 当前触发策略与未来队列/门禁替换边界；
-- 每 Session 活动异步 Tool Task 上限及默认值 `2`；
+- 每 Session 独立的 A2A Task 与普通异步 Tool Task 上限，默认分别为 `2` 和 `3`；
 - 显式 `agentId` 选择、MainAgent 模型密钥解析和 A2A 目标预检；
 - 最小 Session 上下文投影与 MainAgent Tool Call/Result 历史；
 - Phase3/MainAgent/AgentCall/A2A/re-entry 与当前会话 `reply` 组合；
@@ -178,7 +182,7 @@ apps/server/main.ts
 
 - 新建 Server 总 Runtime，使用依赖注入持有 Channel Runtime、Conversation Store 和 Phase3 Runtime；第一版测试使用 Fake 组件。
 - 定义启动预检、运行和关闭顺序，并以 Fake 预检器锁定“所有预检通过后才启动 Channel”的生命周期；B01 不解析真实密钥、不访问 A2A 网络，也不启动正式 Channel。
-- 在唯一配置树中接入 `./server/orchestration.json`，实现必填 `defaultAgentId` 和 `maxActiveTasksPerSession`；仓库默认值写 2。
+- 在唯一配置树中接入 `./server/orchestration.json`，实现必填 `defaultAgentId` 和初始 AgentCall `maxActiveTasksPerSession`；仓库默认值写 2。B04-C 再将该旧字段无兼容迁移为独立的 A2A 与普通异步 Tool Policy。
 - 静态解析显式 `defaultAgentId`，要求目标 Agent 存在、启用、transport 为 A2A，并校验其 origin、skillId 与 `apiKeyEnv` 引用名称；不得隐式选择第一个 enabled Agent。
 - 暂不修改正式 `main.ts`，先建立可测试组合缝隙。
 
@@ -266,7 +270,8 @@ B02 完成测试与压力审查后报告；不得顺手实现队列、watermark 
 - B04-B：把 `get_task_status` 改为只按当前 Session 的 HuanLink `taskId` 查询任意 Task；`continue_task` 同样接收该 ID，但只有支持继续的 AgentCall 类型可执行。AgentCall 的模型可见状态只投影 `statusMessage`、问题与产物，不公开原始输入或任何内部 ID。
 - B04-B：Task 终态不补写原 Tool Call 的第二个 Result；`input-required` 与 terminal re-entry 都在同 Session 队列取得槽位后，组合“定向取回的原 Tool Call + 当前 Task 结果 + 最新上下文”发起 re-entry。
 - B04-B：当前只识别并保存 A2A `auth-required` 状态，不实现凭证协商、认证恢复或凭证转发；这些能力留给后续独立认证模块。
-- B04-C：将配置字段从 `agentCallPolicy` 收敛为 `taskPolicy`，不保留旧别名；Server 从唯一配置树注入默认上限 2。
+- B04-C：将配置字段从 `agentCallPolicy` 无兼容迁移为 `a2aTaskPolicy` 与 `asyncToolTaskPolicy`，不保留旧别名；Server 从唯一配置树分别注入默认上限 `2` 和 `3`。
+- B04-C：将准入计数改为按 Task 类别选择独立名额池。AgentCall 的 `async | blocking` 都只使用 A2A 池；非 A2A 的普通异步 Tool 只使用普通异步 Tool 池；异步 A2A 不双重计数。
 - B04-C：让 Store 的来源 Tool Call 精确查询同时返回稳定 `entryIndex`；re-entry 只比较该位置与 Context Window 的 `throughEntryIndex`。来源位置位于游标之前时补入一次，否则依赖 Window 的“包含游标后全部条目”不变量直接使用，禁止为判断来源是否存在而遍历整个窗口。
 - B04-C：将 A2A 派发结果显式区分为 `not_dispatched | accepted | dispatch_uncertain`。只有本地能够证明没有派发时才释放 Task 并允许立即失败；请求已经交给远端但响应丢失、解码失败或无法确认时保留 HuanLink Task 为 `accepted + unknown`，占用名额、禁止自动重试并等待后续对账。
 - 保持当前单个显式 Codex Agent 目标；不实现多个 Agent 的动态路由。
@@ -279,11 +284,12 @@ B02 完成测试与压力审查后报告；不得顺手实现队列、watermark 
 
 ### 验收
 
-- 同 Session 前两个活动 Task 可提交；第三个在任何外部 Handler/Transport 调用前收到结构化上限错误。
-- 不同 Session 独立计数；Task 终态释放；`unknown`、`input-required` 和 `auth-required` 等非终态占位；`continue_task` 不新增名额。
+- 同 Session 前两个活动 A2A Task 可提交，第三个在任何外部 Handler/Transport 调用前收到 A2A 池结构化上限错误；这不阻止该 Session 提交普通异步 Tool。
+- 同 Session 前三个普通异步 Tool Task 可提交，第四个在调用其外部 Handler/Transport 前收到普通异步 Tool 池结构化上限错误；这不阻止该 Session 提交 A2A Task。
+- 不同 Session、不同名额池独立计数；Task 终态释放；异步 Task 的 `unknown`、`input-required` 和 `auth-required` 等非终态占位；`continue_task` 不新增名额。
 - 外部接受前的明确失败必须把预占 Task 转为 `rejected` 并释放名额，且不得产生 terminal re-entry；已接受后的未知结果不得自动重试。
 - Tool 不存在、参数非法或执行请求未完成构造时，必须在调用任何外部 Handler/Transport 前于当前 Tool 调用内立即失败；只有外部已经受理的 Task 才能返回 `accepted`，其后观察到的错误终态按同 Session 顺序 re-entry。
-- 并发提交不能越过上限；外部 Agent 内部子线程不影响计数。
+- 并发提交不能越过各自上限；异步 A2A 只占 A2A 池，外部 Agent 内部子线程不影响计数。
 - 普通同步 Tool 不产生 Task；Fake 非 A2A 延迟 Tool 与 AgentCall 使用同一 `taskId`、查询和限额合同。
 - `blocking` AgentCall 直接返回最终 Result，不返回 `accepted`、不进入 `get_task_status` 工作流，也不在完成后产生第二次 re-entry。
 - 提交、查询和继续的模型可见输入输出不包含 SDK `toolCallId` 或 A2A `taskId`；使用这些内部 ID 查询应返回 `not-found`。
@@ -395,7 +401,7 @@ B05-A 完成后先单独报告 Task 的真实持久化与重开边界；B05-B �
 - 正式 `main.ts` 不再是 Channel-only 日志出口，而是装配完整 Server Runtime；
 - Channel 仍保持纯平台接入、名单和顺序边界；Session/Agent 决策只存在于下游 Coordinator；
 - 当前触发策略与未来队列/门禁替换边界有自动化证据；
-- 每 Session 活动异步 Tool Task 上限可配置且默认 2，并发不能越界；普通同步 Tool 不占用名额；
+- 每 Session 的 A2A Task 与普通异步 Tool Task 使用独立可配置名额池，默认分别为 2 和 3；异步 A2A 不双重计数，并发不能越界，普通同步 Tool 不占用名额；
 - AgentCall 与 Fake 非 A2A 延迟 Tool 共用 HuanLink `taskId`、状态查询和终态回流合同，模型不需要使用 SDK 或 A2A 内部 ID；
 - MainAgent fresh turn、AgentCall、A2A、terminal re-entry 与显式 `reply` 形成组合闭环；
 - 模型上下文包含可追溯 Channel 消息和结构化配对的 Tool Call/Result，且没有冒充完整 SDK Session；
