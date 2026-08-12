@@ -66,6 +66,8 @@ P0 不实现消息聚合队列，也不实现门禁 Agent。当前策略为：
 ### 3.3 活动异步 Tool Task 上限
 
 - “异步 Tool Task”特指 Tool 选择异步模式、已立即返回 `accepted`，但后台操作仍继续执行的顶层任务；普通 `Promise` Tool 或显式 `blocking` 模式若等待完成后才返回最终 Result，仍属于阻塞完成路径，不创建模型可查询的异步 Task。
+- 异步 Tool 必须先完成 Tool 存在性检查、参数解析与校验，并构造出完整的执行请求，才允许调用外部 Handler/Transport。此前任何失败都必须在当前 Tool 调用内立即失败；并发限额所需的内部预占可以存在，但失败后必须转为 `rejected` 并释放名额，不得伪装为 `accepted` 或进入异步回流队列。限额和 AgentCall 受理前失败继续返回稳定的 HuanLink 结构化错误；未知 Tool 与参数校验错误当前沿用 SDK 错误合同。
+- 外部已经受理后的 `failed | canceled | rejected` 与成功终态采用同一 Session 排队回流机制；它们不打断当前 MainAgent Run，轮到执行时再读取来源 Tool Call、当前公开 Task 状态和最新上下文。只有受理前失败立即返回，不产生第二次回流。
 - 每个 Session 的活动异步 Tool Task 数量可配置，默认上限为 `2`。
 - 限制语义按 HuanLink 可观察的顶层异步 Tool Task 计算；AgentCall/A2A 只是当前第一个 Task 类型，不按 MainAgent turn、普通同步 Tool 或外部 Agent 内部子线程计算。
 - `submitting`、`unknown`、`submitted`、`working`、`input-required` 和 `auth-required` 等所有非终态都占用名额；只有 `completed`、`failed`、`canceled` 和 `rejected` 释放名额。
@@ -110,8 +112,8 @@ P0 不实现消息聚合队列，也不实现门禁 Agent。当前策略为：
 - Tool Call 写入失败时不得执行对应 Tool；外部操作已确认成功但 Result 历史写入失败时，仍返回真实成功结果并附带 `historyWarning`，不能改报失败或 `uncertain` 来诱导重试。
 - 所有选择异步模式并立即返回的 Tool 共用协议无关 `AsyncToolTask`；AgentCall 是当前第一个具体类型，普通同步或 `blocking` Tool 不创建模型可查询的异步 Task。创建成功时，原 Tool Call 的直接 Result 只返回 `{ status: "accepted", taskId, state }`；只有已经完成外部接受标记的 Task 后续进入 `completed | failed | canceled | rejected` 终态时才产生新的同 Session re-entry，本地接受前的 `rejected` 只释放预占。终态不重复写成旧 Tool Call 的第二个 Result，也不打断正在运行的 MainAgent turn。
 - HuanLink `taskId` 是唯一对模型公开的任务查询 ID；SDK `toolCallId` 只关联来源 Call，A2A `taskId` 只保留为 AgentCall 内部的 `a2aTaskId`。`get_task_status` 与 `continue_task` 均接收 HuanLink `taskId`，不要求模型理解外部协议 ID。
-- Task 保存 `(sessionId, sourceRunId, sourceToolCallId)` 来源定位，不复制整段 Session。终态真正取得同 Session 调度槽位后，定向读取原 Tool Call、任务结果与当前最新 Context Window；即使来源 Call 位于未来压缩游标之前，也不依赖扫描或摘要猜测原指令。
-- 当前 Task 状态仍只在进程内持有；D13 不新增 Task 持久化表、不宣称跨重启查询或恢复。Conversation 原始 Tool Call/Result 继续持久化，压缩只推进投影游标而不删除这些事实。
+- Task 保存 `(sessionId, sourceRunId, sourceToolCallId)` 来源定位，不复制整段 Session。终态真正取得同 Session 调度槽位后，Store 定向返回原 Tool Call 及其稳定 `entryIndex`，再与 Context Window 的 `throughEntryIndex` 比较；不扫描窗口，也不依赖摘要猜测原指令。
+- B04 的 Task 状态仍只在进程内持有；B05-A 新增通用 Task 与 AgentCall 私有外部引用的 SQLite 持久化，但不自动恢复 watcher、重新派发或调用 A2A `GetTask`。Conversation 原始 Tool Call/Result 继续持久化，压缩只推进投影游标而不删除这些事实。
 - HuanLink 自有 `runId` 与 `taskId` 使用 UUID；`toolCallId`、A2A `taskId` 和平台 `messageId` 保留真实来源 ID，不改为数据库自增 ID。Conversation 时间线继续使用每 Session 的稳定顺序键，而不是把顺序绑定到全局自增主键。
 - P0 不实现自动上下文压缩、摘要 checkpoint、token 预算策略或长期记忆。若当前窗口超出模型限制，必须明确报错，不能暗中截断并破坏 Tool 配对。
 - fresh turn、`input-required` 续跑和 terminal re-entry 必须共用同一个按 Session 串行的 Agent turn 调度边界；Phase3 不得让 re-entry 绕过该边界直接并发调用 MainAgent。
@@ -258,12 +260,15 @@ B02 完成测试与压力审查后报告；不得顺手实现队列、watermark 
 - B04-A：终态事实先保存并释放名额，再通知下游 re-entry；listener 失败不得回滚已观察的终态，也不得静默吞掉，必须通过错误回调或调用方异常变得可观察。
 - B04-A：Task 来源固定保存 `sessionId + sourceRunId + sourceToolCallId`；为 `ConversationSessionStore` 增加按该复合键定向读取原 Tool Call 的只读接口。In-memory 可按现有 timeline 查找，SQLite 复用现有复合查询键，不新增 migration。
 - B04-A：提供一个非 A2A 的 Fake 延迟 Tool 公共接缝测试，证明 Task 能力不是 AgentCall 的改名；本计划不新增第二个真实生产 Tool。
+- 后续接入普通异步 Tool 时，必须显式注册 Task kind、模型可见状态投影和执行/继续能力，并复用本节统一的 HuanLink `taskId`、Session 隔离、限额、状态查询与排队回流合同；不得让任意普通 Tool 因为返回 `Promise` 就自动注册为异步 Task。
 - B04-B：将 AgentCall 的异步模式接入通用 Task Service，公开返回统一为 `{ status: "accepted", taskId, state }`；HuanLink `taskId` 复用现有本地 AgentCall UUID，不再形成第三个模型可见 ID，A2A ID 仅在 AgentCall 内部与脱敏日志中保留为 `a2aTaskId`。
 - B04-B：显式 `blocking` 模式不注册通用 Task，正常完成时直接返回最终 Result，不返回 `accepted`，也不产生 terminal re-entry；若远端进入 `input-required | auth-required`，尽力取消远端任务并返回稳定的 `blocking-interrupted` 结果，不临时升级为异步 Task。
 - B04-B：把 `get_task_status` 改为只按当前 Session 的 HuanLink `taskId` 查询任意 Task；`continue_task` 同样接收该 ID，但只有支持继续的 AgentCall 类型可执行。AgentCall 的模型可见状态只投影 `statusMessage`、问题与产物，不公开原始输入或任何内部 ID。
 - B04-B：Task 终态不补写原 Tool Call 的第二个 Result；`input-required` 与 terminal re-entry 都在同 Session 队列取得槽位后，组合“定向取回的原 Tool Call + 当前 Task 结果 + 最新上下文”发起 re-entry。
 - B04-B：当前只识别并保存 A2A `auth-required` 状态，不实现凭证协商、认证恢复或凭证转发；这些能力留给后续独立认证模块。
 - B04-C：将配置字段从 `agentCallPolicy` 收敛为 `taskPolicy`，不保留旧别名；Server 从唯一配置树注入默认上限 2。
+- B04-C：让 Store 的来源 Tool Call 精确查询同时返回稳定 `entryIndex`；re-entry 只比较该位置与 Context Window 的 `throughEntryIndex`。来源位置位于游标之前时补入一次，否则依赖 Window 的“包含游标后全部条目”不变量直接使用，禁止为判断来源是否存在而遍历整个窗口。
+- B04-C：将 A2A 派发结果显式区分为 `not_dispatched | accepted | dispatch_uncertain`。只有本地能够证明没有派发时才释放 Task 并允许立即失败；请求已经交给远端但响应丢失、解码失败或无法确认时保留 HuanLink Task 为 `accepted + unknown`，占用名额、禁止自动重试并等待后续对账。
 - 保持当前单个显式 Codex Agent 目标；不实现多个 Agent 的动态路由。
 - 从正式配置构造 DeepSeek MainAgent model binding，只在真正接线时解析 API Key。
 - 在 Channel 启动前验证 A2A origin 可发现、Agent Card 可读取、目标 skill 可用。
@@ -277,22 +282,27 @@ B02 完成测试与压力审查后报告；不得顺手实现队列、watermark 
 - 同 Session 前两个活动 Task 可提交；第三个在任何外部 Handler/Transport 调用前收到结构化上限错误。
 - 不同 Session 独立计数；Task 终态释放；`unknown`、`input-required` 和 `auth-required` 等非终态占位；`continue_task` 不新增名额。
 - 外部接受前的明确失败必须把预占 Task 转为 `rejected` 并释放名额，且不得产生 terminal re-entry；已接受后的未知结果不得自动重试。
+- Tool 不存在、参数非法或执行请求未完成构造时，必须在调用任何外部 Handler/Transport 前于当前 Tool 调用内立即失败；只有外部已经受理的 Task 才能返回 `accepted`，其后观察到的错误终态按同 Session 顺序 re-entry。
 - 并发提交不能越过上限；外部 Agent 内部子线程不影响计数。
 - 普通同步 Tool 不产生 Task；Fake 非 A2A 延迟 Tool 与 AgentCall 使用同一 `taskId`、查询和限额合同。
 - `blocking` AgentCall 直接返回最终 Result，不返回 `accepted`、不进入 `get_task_status` 工作流，也不在完成后产生第二次 re-entry。
 - 提交、查询和继续的模型可见输入输出不包含 SDK `toolCallId` 或 A2A `taskId`；使用这些内部 ID 查询应返回 `not-found`。
 - 对不支持继续的 Task，`continue_task` 稳定返回 `{ status: "unsupported", taskId, operation: "continue" }`，不伪装成 `not-found` 或模糊状态错误。
-- 来源 Tool Call 即使位于 Context Window 游标之前，终态 re-entry 仍能按复合键定向取回精确原指令，并同时读取轮到执行时的最新上下文；若该 Call 已在最新 Window 中，则不重复附加，否则只补入一次并明确标为来源 Call。
+- 来源 Tool Call 即使位于 Context Window 游标之前，终态 re-entry 仍能按复合键定向取回精确原指令，并同时读取轮到执行时的最新上下文；是否补入只由来源 `entryIndex` 与压缩游标决定，不扫描 Window。来源位于游标之前时只补入一次并明确标为来源 Call，否则不重复附加。
+- 来源 Tool Call 缺失时必须 fail-closed，记录包含 Session、HuanLink `taskId` 和错误阶段的脱敏错误，不启动 MainAgent、不猜测来源且不自动重试。
 - 同一 Session 的两个 Task 同时进入终态时，按观察顺序串行 re-entry，二者的 Tool 历史和 `reply` 关联不能串线。
 - fresh mention/command 与同 Session 的 terminal 或 `input-required` re-entry 交错到达时也必须串行执行，并在轮到各自执行时读取最新 Session 投影。
 - 初始受理与 terminal re-entry 的成功场景都实际调用 `reply`；只返回 final text 不算外部成功。
 - A2A 预检失败时 Channel 尚未启动；运行期 A2A 失败保留明确错误语义。
+- A2A 请求已经交给远端后出现响应丢失或响应校验失败时，不得降级成可安全重试的受理前失败；返回 HuanLink `taskId` 与 `unknown` 状态，且不创建第二个远端任务。
 
 ### 停点
 
 若真实 Codex smoke 只能通过修改正式 Server 工作树或依赖未接入的 Adapter JSON 配置才能运行，停止并单独报告 Adapter 入口缺口。
 
-B04 只建立进程内通用 Task。若实现需要新增 Task SQLite 表、重启后自动 `GetTask`、重建 watcher、重投递或恢复 re-entry，停止并另立持久任务计划。
+B04 只建立进程内通用 Task。Task SQLite 表与重开语义按 B05-A 实施；重启后自动 `GetTask`、重建 watcher、重投递或恢复 re-entry 仍不在本计划内。
+
+普通异步 Tool 的生产接入属于后续独立计划；B05-A 只持久化通用 Task 事实与提供受限的跨重启查询，不自动恢复执行。
 
 ### B04-B 实施结果（2026-08-12）
 
@@ -302,9 +312,27 @@ B04 只建立进程内通用 Task。若实现需要新增 Task SQLite 表、重�
 - In-memory 组合测试已覆盖初始受理和 terminal re-entry 均显式调用 `reply`；当前仍未接正式 `main.ts`、SQLite 生命周期或真实 QQ/Codex smoke，这些边界分别留给 B04-C、B05 和后续真实验收。
 - 新鲜验证为全仓 `typecheck`、Prettier 和差异检查通过；按包串行共 `798` 个测试通过、`2` 个既有条件测试跳过。两路独立压力审查修复状态竞态与跨包测试迁移后，未留下 P0/P1/P2。完整根构建在本机仍被 Windows 对既有 `dist` 文件的 `EPERM` 占用锁阻断；Core 与 OpenAI Integration 的独立构建已通过。
 
-## 10. B05：SQLite 正式生命周期（P0.5）
+## 10. B05：Task 持久化与 SQLite 正式生命周期（P0.5）
 
-### 修改
+### B05-A：通用 Task 持久化
+
+#### 修改
+
+- 新增 `async_tool_tasks` 表，保存 HuanLink `taskId`、Session、来源 Run/Tool Call、kind、toolName、状态、受控 payload、状态说明和时间戳；状态更新与活动名额释放必须在同一 Store 操作中保持一致。
+- 为 AgentCall 增加只在内部使用的持久关联，保存 HuanLink `taskId` 与 A2A `taskId` 等未来人工对账所需的最小引用；这些字段不得进入通用公开 Task 投影、普通日志或模型上下文。
+- `AsyncToolTaskService` 通过协议无关 Store 读写 Task，而不是自行选择 SQLite 路径；In-memory 实现继续用于单元测试和隔离测试。
+- 重开后终态 Task 保持可查询；重启时仍非终态的 Task 对外统一为 `unknown` 并明确标记需要对账，继续占用活动名额。不自动恢复 watcher、不自动 re-entry、不自动重新派发，也不自动调用 A2A `GetTask`。
+
+#### 验收
+
+- SQLite 重开后，终态 Task 的 HuanLink `taskId`、状态和公开结果保持一致；A2A 内部 ID 不会出现在模型可见状态中。
+- 重启时非终态 Task 稳定返回 `unknown` 与需要对账的状态说明，且不能被自动重试或误判为终态释放名额。
+- 每次状态变化、终态释放、重复终态和冲突更新都有事务与重开测试；数据库失败不得只更新内存而伪造成功状态。
+- 本批不提供自动或手动 `GetTask` 对账 Tool；该能力继续按价值优先路线后移。
+
+### B05-B：生产 SQLite 生命周期
+
+#### 修改
 
 - 将 `reply` 与 OneBot Tool 的 Store 类型改为 `ConversationSessionStore` 合同。
 - 在 Server 组合根创建 `.huanlink/data`，使用固定路径 `.huanlink/data/huanlink.sqlite` 构造 `SqliteConversationSessionStore`。
@@ -312,18 +340,17 @@ B04 只建立进程内通用 Task。若实现需要新增 Task SQLite 表、重�
 - 正式 `main.ts` 切换到总 Runtime；生产入口直接使用 SQLite，In-memory 只留给单元测试、Fake Runtime 与隔离测试。
 - 关闭顺序固定为：停止新 Channel 入站并中止/排空 handler，关闭 Phase3 AgentCall/re-entry，最后关闭 SQLite Store 和 Logger。
 
-### 验收
+#### 验收
 
 - 真实临时 SQLite 文件完成启动、消息写入、Tool 历史、发送回执、关闭、重开和自身消息关联测试。
 - 重启后 Session、消息去重、Tool 历史与 pending delivery 可读；重复消息不产生第二个 fresh turn。
-- 不恢复旧 MainAgent Run，不恢复或自动查询 A2A Task，不自动重发任何消息。
-- `AsyncToolTaskService` 仍是进程内状态；SQLite 重开后只恢复 Conversation 事实，不恢复、查询或续跑旧 Task。
-- 重启前返回的 HuanLink `taskId` 在新进程中通过 `get_task_status` 或 `continue_task` 查询时稳定返回 `not-found`，不得据此自动探测外部 Task 或重建状态。
+- 不恢复旧 MainAgent Run，不自动查询或续跑 A2A Task，不自动重发任何消息。
+- 重启前返回的 HuanLink `taskId` 可按 B05-A 查询持久化状态；非终态只返回 `unknown` 与需要对账，不得据此自动探测外部 Task、重建 watcher 或触发 re-entry。
 - 创建目录、migration 或 Runtime 启动失败时不留下仍被占用的数据库句柄。
 
 ### 停点
 
-B05 完成后先报告 P0.5 的真实持久化边界，不能把数据可读写成任务已自动恢复。
+B05-A 完成后先单独报告 Task 的真实持久化与重开边界；B05-B 完成后再报告生产 SQLite 生命周期。不能把 Task 可查询写成任务已自动恢复。
 
 ## 11. B06：整体回归、压力审查与真实验收
 
