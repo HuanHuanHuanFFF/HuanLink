@@ -105,10 +105,13 @@ export function createCodexAgentCallTool(
             sourceToolCallId,
           };
         } else {
+          if (sourceToolCallId === undefined) {
+            throw new Error("Blocking AgentCall requires the SDK Tool Call ID");
+          }
           request = {
             ...baseRequest,
             executionMode: "blocking",
-            ...(sourceToolCallId === undefined ? {} : { sourceToolCallId }),
+            sourceToolCallId,
           };
         }
         const result = publicAgentCallResult(
@@ -131,7 +134,9 @@ export function createCodexAgentCallTool(
                         maxActiveTasksPerSession:
                           result.maxActiveTasksPerSession,
                       }
-                    : {}),
+                    : result.error === "remote-task-conflict"
+                      ? { retrySafe: false }
+                      : {}),
                 }
               : {
                   status: result.status,
@@ -175,6 +180,13 @@ function publicAgentCallResult(
         maxActiveTasksPerSession: result.maxActiveTasksPerSession,
       };
     }
+    if (result.error === "remote-task-conflict") {
+      return {
+        status: "error",
+        error: "remote-task-conflict",
+        retrySafe: false,
+      };
+    }
     return {
       status: "error",
       error: "task-preaccept-rejected",
@@ -189,6 +201,15 @@ function publicAgentCallResult(
       ...(result.statusMessage === undefined
         ? {}
         : { statusMessage: result.statusMessage }),
+    };
+  }
+  if (result.status === "blocking-uncertain") {
+    return {
+      status: "blocking-uncertain",
+      executionMode: "blocking",
+      taskId: result.taskId,
+      state: "unknown",
+      retrySafe: false,
     };
   }
   return {

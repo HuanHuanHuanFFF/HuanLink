@@ -1,6 +1,7 @@
 import {
   projectConversationSessionContext,
   type ConversationAgentToolCallEntry,
+  type ConversationAgentToolCallLocation,
   type ConversationJsonValue,
   type ConversationSessionContextWindow,
   type AsyncToolTaskStatus,
@@ -16,15 +17,12 @@ import {
  */
 export function buildTaskReentrySessionContext(
   window: ConversationSessionContextWindow,
-  sourceToolCall: ConversationAgentToolCallEntry,
+  sourceToolCall: ConversationAgentToolCallLocation,
 ): string {
   const projected = projectConversationSessionContext(window);
-  const sourceIsInWindow = window.entries.some(
-    ({ entry }) =>
-      entry.type === "agent_tool_call" &&
-      entry.runId === sourceToolCall.runId &&
-      entry.toolCallId === sourceToolCall.toolCallId,
-  );
+  const sourceIsInWindow =
+    window.summary === undefined ||
+    sourceToolCall.entryIndex > window.summary.throughEntryIndex;
 
   if (sourceIsInWindow) {
     return projected;
@@ -39,7 +37,7 @@ export function buildTaskReentrySessionContext(
   }
   return JSON.stringify({
     ...context,
-    sourceToolCall: projectSourceToolCall(sourceToolCall),
+    sourceToolCall: projectSourceToolCall(sourceToolCall.entry),
   });
 }
 

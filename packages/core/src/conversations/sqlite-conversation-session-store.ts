@@ -21,6 +21,7 @@ import type {
   AppendConversationAgentToolResult,
   ConversationChannelMessageEntry,
   ConversationAgentToolCallEntry,
+  ConversationAgentToolCallLocation,
   ConversationAgentToolResultEntry,
   ConversationSession,
   ConversationSessionContextWindow,
@@ -403,7 +404,7 @@ export class SqliteConversationSessionStore implements ConversationSessionStore 
     sessionId: SessionId,
     runId: RunId,
     toolCallId: string,
-  ): ConversationAgentToolCallEntry | undefined {
+  ): ConversationAgentToolCallLocation | undefined {
     this.assertOpen();
     const call = this.findToolCall(sessionId, runId, toolCallId);
     if (call === undefined) {
@@ -433,11 +434,14 @@ export class SqliteConversationSessionStore implements ConversationSessionStore 
       throw new Error("SQLite conversation Tool Call index is inconsistent");
     }
     return {
-      type: "agent_tool_call",
-      runId: entry.runId,
-      toolCallId: entry.toolCallId,
-      toolName: entry.toolName,
-      ...cloneConversationAgentToolCallPayload(entry),
+      entryIndex: call.entry_index,
+      entry: {
+        type: "agent_tool_call",
+        runId: entry.runId,
+        toolCallId: entry.toolCallId,
+        toolName: entry.toolName,
+        ...cloneConversationAgentToolCallPayload(entry),
+      },
     };
   }
 

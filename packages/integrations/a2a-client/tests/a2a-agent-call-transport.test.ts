@@ -352,12 +352,14 @@ describe("A2aAgentCallTransport", () => {
       name: "Codex code task",
     });
 
-    const submitted = await transport.submitTask({
-      messageId: "message-phase3-01",
-      skillId: capability.id,
-      input,
-      contextId: "session-phase3-01",
-    });
+    const submitted = expectAcceptedSubmission(
+      await transport.submitTask({
+        messageId: "message-phase3-01",
+        skillId: capability.id,
+        input,
+        contextId: "session-phase3-01",
+      }),
+    );
     expect(submitted.taskId).not.toBe("");
     expect(["submitted", "working"]).toContain(submitted.state);
     expect(submitted.contextId).toBe("session-phase3-01");
@@ -563,11 +565,13 @@ describe("A2aAgentCallTransport", () => {
 
   test("reconciles a task that completed before the subscription began", async () => {
     const transport = await startTransport(new GateExecutor(Promise.resolve()));
-    const submitted = await transport.submitTask({
-      messageId: "message-phase3-fast",
-      skillId: "codex-code-task",
-      input: "finish immediately",
-    });
+    const submitted = expectAcceptedSubmission(
+      await transport.submitTask({
+        messageId: "message-phase3-fast",
+        skillId: "codex-code-task",
+        input: "finish immediately",
+      }),
+    );
 
     await new Promise<void>((resolve) => setImmediate(resolve));
     const snapshots = [];
@@ -1055,11 +1059,13 @@ describe("A2aAgentCallTransport", () => {
     const transport = await startTransport(
       new PauseThenContinueExecutor(completion.promise),
     );
-    const submitted = await transport.submitTask({
-      skillId: "codex-code-task",
-      input: "Pause and continue the same task",
-      messageId: "message-initial",
-    });
+    const submitted = expectAcceptedSubmission(
+      await transport.submitTask({
+        skillId: "codex-code-task",
+        input: "Pause and continue the same task",
+        messageId: "message-initial",
+      }),
+    );
     const pausedSnapshots = [];
     for await (const snapshot of transport.watchTask(submitted.taskId, {
       signal: new AbortController().signal,
@@ -1189,6 +1195,162 @@ describe("A2aAgentCallTransport", () => {
     expect(JSON.stringify(logger.entries)).not.toContain("Adapter only");
   });
 
+  test("classifies capability discovery failure before SendMessage as not dispatched", async () => {
+    const discoveryError = new Error("capability discovery failed");
+    const sendMessage = vi.fn();
+    const client = {
+      protocolVersion: A2A_PROTOCOL_VERSION,
+      getAgentCard: vi.fn(async () => Promise.reject(discoveryError)),
+      sendMessage,
+    } as unknown as Client;
+    vi.spyOn(ClientFactory.prototype, "createFromUrl").mockResolvedValue(
+      client,
+    );
+    const transport = new A2aAgentCallTransport({
+      origin: "http://127.0.0.1:1",
+    });
+
+    await expect(
+      transport.submitTask({
+        messageId: "message-not-dispatched",
+        skillId: "codex-code-task",
+        input: "do not send this request",
+      }),
+    ).resolves.toEqual({
+      outcome: "not-dispatched",
+      error: discoveryError,
+    });
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  test("classifies local request construction failure before SendMessage as not dispatched", async () => {
+    const constructionError = new Error("local request construction failed");
+    const sendMessage = vi.fn();
+    const client = {
+      protocolVersion: A2A_PROTOCOL_VERSION,
+      getAgentCard: vi.fn(async () => testAgentCard()),
+      sendMessage,
+    } as unknown as Client;
+    vi.spyOn(ClientFactory.prototype, "createFromUrl").mockResolvedValue(
+      client,
+    );
+    const transport = new A2aAgentCallTransport({
+      origin: "http://127.0.0.1:1",
+    });
+    const request = {
+      messageId: "message-construction-failed",
+      skillId: "codex-code-task",
+      get input(): string {
+        throw constructionError;
+      },
+    };
+
+    await expect(transport.submitTask(request)).resolves.toEqual({
+      outcome: "not-dispatched",
+      error: constructionError,
+    });
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    {
+      label: "response loss",
+      failure: Object.assign(new Error("socket closed after dispatch"), {
+        code: "ECONNRESET",
+      }),
+    },
+    {
+      label: "response decoding",
+      failure: new SyntaxError("invalid JSON response"),
+    },
+  ])(
+    "classifies $label failure after entering SendMessage as dispatch uncertain",
+    async ({ failure }) => {
+      const client = {
+        protocolVersion: A2A_PROTOCOL_VERSION,
+        getAgentCard: vi.fn(async () => testAgentCard()),
+        sendMessage: vi.fn(async () => Promise.reject(failure)),
+      } as unknown as Client;
+      vi.spyOn(ClientFactory.prototype, "createFromUrl").mockResolvedValue(
+        client,
+      );
+      const transport = new A2aAgentCallTransport({
+        origin: "http://127.0.0.1:1",
+      });
+
+      await expect(
+        transport.submitTask({
+          messageId: "message-dispatch-uncertain",
+          skillId: "codex-code-task",
+          input: "the remote may already have accepted this request",
+        }),
+      ).resolves.toEqual({
+        outcome: "dispatch-uncertain",
+        error: failure,
+      });
+    },
+  );
+
+  test("classifies a Message response as dispatch uncertain instead of a safe rejection", async () => {
+    const client = {
+      protocolVersion: A2A_PROTOCOL_VERSION,
+      getAgentCard: vi.fn(async () => testAgentCard()),
+      sendMessage: vi.fn(async () =>
+        Message.fromJSON({
+          messageId: "remote-message-response",
+          role: "ROLE_AGENT",
+          parts: [{ text: "request was already observed" }],
+        }),
+      ),
+    } as unknown as Client;
+    vi.spyOn(ClientFactory.prototype, "createFromUrl").mockResolvedValue(
+      client,
+    );
+    const transport = new A2aAgentCallTransport({
+      origin: "http://127.0.0.1:1",
+    });
+
+    const result = await transport.submitTask({
+      messageId: "message-response-not-task",
+      skillId: "codex-code-task",
+      input: "return a Task",
+    });
+
+    expect(result).toMatchObject({ outcome: "dispatch-uncertain" });
+    if (result.outcome !== "dispatch-uncertain") {
+      throw new Error(
+        `Expected uncertain dispatch, received ${result.outcome}`,
+      );
+    }
+    expect(result.error).toBeInstanceOf(Error);
+  });
+
+  test("classifies an invalid Task snapshot as dispatch uncertain", async () => {
+    const invalidTask = {
+      ...remoteTask(TaskState.TASK_STATE_SUBMITTED),
+      id: "",
+    };
+    const client = {
+      protocolVersion: A2A_PROTOCOL_VERSION,
+      getAgentCard: vi.fn(async () => testAgentCard()),
+      sendMessage: vi.fn(async () => invalidTask),
+    } as unknown as Client;
+    vi.spyOn(ClientFactory.prototype, "createFromUrl").mockResolvedValue(
+      client,
+    );
+    const transport = new A2aAgentCallTransport({
+      origin: "http://127.0.0.1:1",
+    });
+
+    const result = await transport.submitTask({
+      messageId: "message-invalid-task",
+      skillId: "codex-code-task",
+      input: "return a valid Task",
+    });
+
+    expect(result).toMatchObject({ outcome: "dispatch-uncertain" });
+  });
+
   test("logs failed A2A operations without raw SDK payloads or answers", async () => {
     const logger = new RecordingLogger();
     const sdkError = Object.assign(
@@ -1229,7 +1391,10 @@ describe("A2aAgentCallTransport", () => {
         skillId: "codex-code-task",
         input,
       }),
-    ).rejects.toBe(sdkError);
+    ).resolves.toEqual({
+      outcome: "dispatch-uncertain",
+      error: sdkError,
+    });
     await expect(
       transport.continueTask({
         messageId: "message-failed-continuation",
@@ -1361,6 +1526,15 @@ function remoteTask(state: TaskState): Task {
     history: [],
     metadata: undefined,
   };
+}
+
+function expectAcceptedSubmission(
+  result: Awaited<ReturnType<A2aAgentCallTransport["submitTask"]>>,
+): AgentCallTaskSnapshot {
+  if (result.outcome !== "accepted") {
+    throw new Error(`Expected accepted submission, received ${result.outcome}`);
+  }
+  return result.snapshot;
 }
 
 function remoteInputRequiredTask(): Task {

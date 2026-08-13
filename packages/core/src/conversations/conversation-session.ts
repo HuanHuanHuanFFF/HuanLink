@@ -96,6 +96,12 @@ export type ConversationSessionContextEntry = {
   readonly entry: ConversationTimelineEntry;
 };
 
+/** Stable location and immutable facts for one precisely addressed Tool Call. */
+export type ConversationAgentToolCallLocation = {
+  readonly entryIndex: ConversationSessionEntryIndex;
+  readonly entry: ConversationAgentToolCallEntry;
+};
+
 /** Future compaction boundary; current Stores do not write summaries. */
 export type ConversationSessionContextSummary = {
   readonly text: string;

@@ -1,8 +1,14 @@
 import { randomUUID } from "node:crypto";
 
 import type { HuanLinkTaskId } from "../shared/ids.js";
+import {
+  SessionTaskQuotaService,
+  type SessionTaskQuotaLease,
+} from "../tasks/session-task-quota-service.js";
 import type {
   AsyncToolTaskAcceptedUpdate,
+  AsyncToolTaskAdoptAcceptedRequest,
+  AsyncToolTaskAdoptAcceptedResult,
   AsyncToolTask,
   AsyncToolTaskJsonValue,
   AsyncToolTaskInputRequiredListener,
@@ -18,7 +24,10 @@ import type {
 import { isAsyncToolTaskState, isAsyncToolTaskTerminalState } from "./types.js";
 
 export type AsyncToolTaskServiceOptions = {
-  readonly maxActiveTasksPerSession: number;
+  /** Shared quota owner used when Task categories must have independent pools. */
+  readonly quotaService?: SessionTaskQuotaService;
+  /** Transitional isolated-test shorthand; production composition injects quotaService. */
+  readonly maxActiveTasksPerSession?: number;
   readonly taskKinds: readonly AsyncToolTaskKindDefinition[];
   readonly createTaskId?: () => HuanLinkTaskId;
   readonly now?: () => Date;
@@ -28,7 +37,8 @@ export type AsyncToolTaskServiceOptions = {
 };
 
 export class AsyncToolTaskService implements AsyncToolTaskStatusReader {
-  private readonly maxActiveTasksPerSession: number;
+  /** Shared admission owner for callers that must reserve the same Task pool. */
+  readonly taskQuotaService: SessionTaskQuotaService;
   private readonly taskKinds: ReadonlyMap<string, AsyncToolTaskKindDefinition>;
   private readonly createTaskId: () => HuanLinkTaskId;
   private readonly now: () => Date;
@@ -37,8 +47,10 @@ export class AsyncToolTaskService implements AsyncToolTaskStatusReader {
     | undefined;
   private readonly tasks = new Map<HuanLinkTaskId, AsyncToolTask>();
   private readonly taskIdBySource = new Map<string, HuanLinkTaskId>();
-  private readonly activeCountBySession = new Map<string, number>();
-  private readonly pendingReservationCountBySession = new Map<string, number>();
+  private readonly quotaLeaseByTaskId = new Map<
+    HuanLinkTaskId,
+    SessionTaskQuotaLease
+  >();
   private readonly acceptedTaskIds = new Set<HuanLinkTaskId>();
   private readonly terminalNotifiedTaskIds = new Set<HuanLinkTaskId>();
   private readonly inputRequiredNotifiedTaskIds = new Set<HuanLinkTaskId>();
@@ -47,13 +59,22 @@ export class AsyncToolTaskService implements AsyncToolTaskStatusReader {
     new Set<AsyncToolTaskInputRequiredListener>();
 
   constructor(options: AsyncToolTaskServiceOptions) {
-    if (!Number.isSafeInteger(options.maxActiveTasksPerSession)) {
-      throw new Error("maxActiveTasksPerSession must be a safe integer");
+    if (
+      options.quotaService !== undefined &&
+      options.maxActiveTasksPerSession !== undefined
+    ) {
+      throw new Error(
+        "AsyncToolTaskService accepts quotaService or maxActiveTasksPerSession, not both",
+      );
     }
-    if (options.maxActiveTasksPerSession <= 0) {
-      throw new Error("maxActiveTasksPerSession must be positive");
-    }
-    this.maxActiveTasksPerSession = options.maxActiveTasksPerSession;
+    this.taskQuotaService =
+      options.quotaService ??
+      new SessionTaskQuotaService({
+        limits: {
+          a2a: requireLegacyLimit(options.maxActiveTasksPerSession),
+          "async-tool": requireLegacyLimit(options.maxActiveTasksPerSession),
+        },
+      });
     this.taskKinds = validateTaskKinds(options.taskKinds);
     this.createTaskId = options.createTaskId ?? randomUUID;
     this.now = options.now ?? (() => new Date());
@@ -88,19 +109,18 @@ export class AsyncToolTaskService implements AsyncToolTaskStatusReader {
         task: cloneTask(existing),
       };
     }
-    if (
-      this.occupiedTaskCount(request.sessionId) >= this.maxActiveTasksPerSession
-    ) {
+    const quota = this.taskQuotaService.acquire(
+      request.sessionId,
+      kind.quotaPool,
+    );
+    if (quota.status === "limit-reached") {
       return {
         status: "limit-reached",
-        maxActiveTasksPerSession: this.maxActiveTasksPerSession,
+        quotaPool: quota.quotaPool,
+        maxActiveTasksPerSession: quota.maxActiveTasksPerSession,
       };
     }
-    this.adjustCount(
-      this.pendingReservationCountBySession,
-      request.sessionId,
-      1,
-    );
+    let ownedLease: SessionTaskQuotaLease | undefined;
     try {
       const taskId = this.createTaskId();
       requireNonBlank(taskId, "task ID");
@@ -129,22 +149,120 @@ export class AsyncToolTaskService implements AsyncToolTaskStatusReader {
         createdAt: timestamp,
         updatedAt: timestamp,
       };
+      ownedLease = quota.lease.transfer();
       this.tasks.set(taskId, task);
       this.taskIdBySource.set(sourceKey, taskId);
-      this.adjustCount(this.activeCountBySession, request.sessionId, 1);
+      this.quotaLeaseByTaskId.set(taskId, ownedLease);
       return { status: "reserved", task: cloneTask(task) };
+    } catch (error) {
+      ownedLease?.release();
+      throw error;
     } finally {
-      this.adjustCount(
-        this.pendingReservationCountBySession,
-        request.sessionId,
-        -1,
-      );
+      quota.lease.release();
+    }
+  }
+
+  adoptAcceptedTask(
+    request: AsyncToolTaskAdoptAcceptedRequest,
+  ): AsyncToolTaskAdoptAcceptedResult {
+    requireNonBlank(request.taskId, "taskId");
+    requireNonBlank(request.sessionId, "sessionId");
+    requireNonBlank(request.sourceRunId, "sourceRunId");
+    requireNonBlank(request.sourceToolCallId, "sourceToolCallId");
+    requireNonBlank(request.toolName, "toolName");
+    const kind = this.taskKinds.get(request.kind);
+    if (kind === undefined) {
+      throw new Error(`Async Tool Task kind ${request.kind} is not registered`);
+    }
+    if (
+      request.quotaLease.sessionId !== request.sessionId ||
+      request.quotaLease.quotaPool !== kind.quotaPool
+    ) {
+      throw new Error("Async Tool Task quota lease does not match its Task");
+    }
+    if (
+      request.statusMessage !== undefined &&
+      typeof request.statusMessage !== "string"
+    ) {
+      throw new Error("Async Tool Task statusMessage must be a string");
+    }
+    const payload = clonePayload(kind.validatePayload(request.payload));
+    const sourceKey = sourceKeyFor(request);
+    const existingTaskId = this.taskIdBySource.get(sourceKey);
+    const existingByTaskId = this.tasks.get(request.taskId);
+    if (existingTaskId !== undefined || existingByTaskId !== undefined) {
+      const existing =
+        existingTaskId === undefined
+          ? existingByTaskId
+          : this.tasks.get(existingTaskId);
+      if (
+        existing === undefined ||
+        existing.taskId !== request.taskId ||
+        existing.sessionId !== request.sessionId ||
+        existing.sourceRunId !== request.sourceRunId ||
+        existing.sourceToolCallId !== request.sourceToolCallId ||
+        existing.kind !== kind.kind ||
+        existing.toolName !== request.toolName ||
+        !isSamePayload(existing.payload, payload)
+      ) {
+        throw new Error(
+          "Accepted Async Tool Task conflicts with an existing task or source",
+        );
+      }
+      request.quotaLease.release();
+      return { status: "duplicate", task: cloneTask(existing) };
+    }
+    const timestamp = this.now().toISOString();
+    const task: AsyncToolTask = {
+      taskId: request.taskId,
+      kind: kind.kind,
+      sessionId: request.sessionId,
+      sourceRunId: request.sourceRunId,
+      sourceToolCallId: request.sourceToolCallId,
+      toolName: request.toolName,
+      state: "unknown",
+      payload,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      ...(request.statusMessage === undefined
+        ? {}
+        : { statusMessage: request.statusMessage }),
+    };
+    let ownedLease: SessionTaskQuotaLease | undefined;
+    try {
+      ownedLease = request.quotaLease.transfer();
+      this.tasks.set(task.taskId, task);
+      this.taskIdBySource.set(sourceKey, task.taskId);
+      this.quotaLeaseByTaskId.set(task.taskId, ownedLease);
+      this.acceptedTaskIds.add(task.taskId);
+      return { status: "adopted", task: cloneTask(task) };
+    } catch (error) {
+      ownedLease?.release();
+      throw error;
     }
   }
 
   get(sessionId: string, taskId: HuanLinkTaskId): AsyncToolTask | undefined {
     const task = this.tasks.get(taskId);
     return task?.sessionId === sessionId ? cloneTask(task) : undefined;
+  }
+
+  getBySource(
+    sessionId: string,
+    sourceRunId: string,
+    sourceToolCallId: string,
+  ): AsyncToolTask | undefined {
+    requireNonBlank(sessionId, "sessionId");
+    requireNonBlank(sourceRunId, "sourceRunId");
+    requireNonBlank(sourceToolCallId, "sourceToolCallId");
+    const taskId = this.taskIdBySource.get(
+      sourceKeyFor({ sessionId, sourceRunId, sourceToolCallId }),
+    );
+    if (taskId === undefined) {
+      return undefined;
+    }
+    const task = this.tasks.get(taskId);
+    return task === undefined ? undefined : cloneTask(task);
   }
 
   getStatus(
@@ -230,7 +348,7 @@ export class AsyncToolTaskService implements AsyncToolTaskStatusReader {
       updatedAt: this.now().toISOString(),
     };
     this.tasks.set(taskId, rejected);
-    this.adjustCount(this.activeCountBySession, task.sessionId, -1);
+    this.releaseQuota(taskId);
     return cloneTask(rejected);
   }
 
@@ -293,7 +411,7 @@ export class AsyncToolTaskService implements AsyncToolTaskStatusReader {
       !isAsyncToolTaskTerminalState(task.state) &&
       isAsyncToolTaskTerminalState(next.state)
     ) {
-      this.adjustCount(this.activeCountBySession, task.sessionId, -1);
+      this.releaseQuota(next.taskId);
       this.notifyTerminal(next);
     }
     return cloneTask(next);
@@ -396,31 +514,22 @@ export class AsyncToolTaskService implements AsyncToolTaskStatusReader {
     return { status: "duplicate", task: cloneTask(existing) };
   }
 
-  private occupiedTaskCount(sessionId: string): number {
-    return (
-      (this.activeCountBySession.get(sessionId) ?? 0) +
-      (this.pendingReservationCountBySession.get(sessionId) ?? 0)
-    );
-  }
-
-  private adjustCount(
-    counts: Map<string, number>,
-    sessionId: string,
-    delta: 1 | -1,
-  ): void {
-    const next = (counts.get(sessionId) ?? 0) + delta;
-    if (next < 0) {
-      throw new Error("Async Tool Task Session count is inconsistent");
+  private releaseQuota(taskId: HuanLinkTaskId): void {
+    const lease = this.quotaLeaseByTaskId.get(taskId);
+    if (lease === undefined) {
+      throw new Error(`Async Tool Task ${taskId} has no quota lease`);
     }
-    if (next === 0) {
-      counts.delete(sessionId);
-      return;
-    }
-    counts.set(sessionId, next);
+    lease.release();
+    this.quotaLeaseByTaskId.delete(taskId);
   }
 }
 
-function sourceKeyFor(request: AsyncToolTaskReserveRequest): string {
+function sourceKeyFor(
+  request: Pick<
+    AsyncToolTaskReserveRequest,
+    "sessionId" | "sourceRunId" | "sourceToolCallId"
+  >,
+): string {
   return JSON.stringify([
     request.sessionId,
     request.sourceRunId,
@@ -454,6 +563,16 @@ function requireNonBlank(value: string, label: string): void {
   if (value.trim().length === 0) {
     throw new Error(`${label} must not be blank`);
   }
+}
+
+function requireLegacyLimit(value: number | undefined): number {
+  if (!Number.isSafeInteger(value)) {
+    throw new Error("maxActiveTasksPerSession must be a safe integer");
+  }
+  if (value! <= 0) {
+    throw new Error("maxActiveTasksPerSession must be positive");
+  }
+  return value!;
 }
 
 function assertAcceptedUpdate(update: AsyncToolTaskAcceptedUpdate): void {

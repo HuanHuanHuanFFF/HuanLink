@@ -1,4 +1,8 @@
 import type { HuanLinkTaskId, RunId, SessionId } from "../shared/ids.js";
+import type {
+  SessionTaskQuotaLease,
+  TaskQuotaPool,
+} from "../tasks/session-task-quota-service.js";
 
 export const ASYNC_TOOL_TASK_STATES = [
   "submitting",
@@ -66,6 +70,8 @@ export type AsyncToolTaskPublicStatusProjection = {
 
 export type AsyncToolTaskKindDefinition = {
   readonly kind: string;
+  /** Selects the independent per-Session quota pool used by this Task kind. */
+  readonly quotaPool: TaskQuotaPool;
   validatePayload(payload: unknown): AsyncToolTaskPayload;
   /** Explicitly selects the model-visible fields for this Task kind. */
   projectPublicStatus(
@@ -103,8 +109,27 @@ export type AsyncToolTaskReserveResult =
     }
   | {
       readonly status: "limit-reached";
+      readonly quotaPool: TaskQuotaPool;
       readonly maxActiveTasksPerSession: number;
     };
+
+export type AsyncToolTaskAdoptAcceptedRequest = {
+  readonly taskId: HuanLinkTaskId;
+  readonly sessionId: SessionId;
+  readonly sourceRunId: RunId;
+  readonly sourceToolCallId: string;
+  readonly toolName: string;
+  readonly kind: string;
+  readonly payload: unknown;
+  readonly state: "unknown";
+  readonly quotaLease: SessionTaskQuotaLease;
+  readonly statusMessage?: string;
+};
+
+export type AsyncToolTaskAdoptAcceptedResult = {
+  readonly status: "adopted" | "duplicate";
+  readonly task: AsyncToolTask;
+};
 
 /** Safe task view for a same-Session status query. */
 export type AsyncToolTaskStatus = {

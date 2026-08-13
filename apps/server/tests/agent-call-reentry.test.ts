@@ -3,6 +3,7 @@ import { describe, expect, test } from "vitest";
 import {
   projectConversationSessionContext,
   type ConversationAgentToolCallEntry,
+  type ConversationAgentToolCallLocation,
   type ConversationSessionContextWindow,
 } from "@huanlink/core";
 
@@ -14,6 +15,11 @@ const sourceToolCall: ConversationAgentToolCallEntry = {
   toolCallId: "sdk-call-private",
   toolName: "submit_codex_agent_call",
   arguments: { task: "update the parser" },
+};
+
+const sourceToolCallLocation: ConversationAgentToolCallLocation = {
+  entryIndex: 1,
+  entry: sourceToolCall,
 };
 
 const metadata: ConversationSessionContextWindow["metadata"] = {
@@ -34,7 +40,7 @@ describe("Task re-entry Session context", () => {
     };
     const reentryContext = buildTaskReentrySessionContext(
       window,
-      sourceToolCall,
+      sourceToolCallLocation,
     );
     const projected = JSON.parse(reentryContext) as {
       entries: Array<Record<string, unknown>>;
@@ -54,7 +60,7 @@ describe("Task re-entry Session context", () => {
     ]);
   });
 
-  test("appends one marked source Tool Call when it is before the latest Window", () => {
+  test("appends one marked source Tool Call when it is covered by the latest cursor", () => {
     const projected = JSON.parse(
       buildTaskReentrySessionContext(
         {
@@ -86,7 +92,10 @@ describe("Task re-entry Session context", () => {
             },
           ],
         },
-        sourceToolCall,
+        {
+          entryIndex: 4,
+          entry: sourceToolCall,
+        },
       ),
     ) as {
       entries: Array<Record<string, unknown>>;
@@ -105,5 +114,27 @@ describe("Task re-entry Session context", () => {
     expect(JSON.stringify(projected)).not.toMatch(
       /run-source-private|sdk-call-private|runId|toolCallId/,
     );
+  });
+
+  test("keeps the projected source Tool Call when it is after the latest cursor", () => {
+    const window: ConversationSessionContextWindow = {
+      metadata,
+      summary: {
+        text: "Earlier work was compacted.",
+        throughEntryIndex: 4,
+      },
+      entries: [{ entryIndex: 5, entry: sourceToolCall }],
+    };
+
+    const reentryContext = buildTaskReentrySessionContext(window, {
+      entryIndex: 5,
+      entry: sourceToolCall,
+    });
+    const projected = JSON.parse(reentryContext) as {
+      sourceToolCall?: unknown;
+    };
+
+    expect(reentryContext).toBe(projectConversationSessionContext(window));
+    expect(projected.sourceToolCall).toBeUndefined();
   });
 });

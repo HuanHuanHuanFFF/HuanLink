@@ -14,6 +14,7 @@ import {
   type RuntimeLogger,
 } from "../src/index.js";
 import {
+  acceptedTask,
   deferred,
   rejectUnexpectedContinuation,
   task,
@@ -138,7 +139,7 @@ describe("AgentCallService", () => {
     const transport: AgentCallTransport = {
       discoverCapability: async (skillId) => ({ id: skillId, name: skillId }),
       submitTask: async () =>
-        task("submitted", { contextId: "context-log-lifecycle" }),
+        acceptedTask("submitted", { contextId: "context-log-lifecycle" }),
       async *watchTask() {
         watchCycle += 1;
         if (watchCycle === 1) {
@@ -299,7 +300,7 @@ describe("AgentCallService", () => {
     const transport: AgentCallTransport = {
       discoverCapability: async (skillId) => ({ id: skillId, name: skillId }),
       submitTask: async () =>
-        task("submitted", { contextId: "context-log-cancel" }),
+        acceptedTask("submitted", { contextId: "context-log-cancel" }),
       async *watchTask(_taskId, options) {
         await new Promise<void>((resolve) => {
           options.signal.addEventListener("abort", () => resolve(), {
@@ -379,9 +380,9 @@ describe("AgentCallService", () => {
       submitTask: async () => {
         submitAttempt += 1;
         if (submitAttempt === 1) {
-          throw submitError;
+          return { outcome: "not-dispatched", error: submitError };
         }
-        return task("input-required", {
+        return acceptedTask("input-required", {
           contextId: "context-log-failures",
           questions: [
             {
@@ -489,7 +490,7 @@ describe("AgentCallService", () => {
       discoverCapability: async (skillId) => ({ id: skillId, name: skillId }),
       submitTask: async () => {
         taskSequence += 1;
-        return task("completed", {
+        return acceptedTask("completed", {
           taskId: `a2a-task-${taskSequence}`,
           artifacts: [
             { id: `artifact-${taskSequence}`, text: `result-${taskSequence}` },
@@ -542,7 +543,7 @@ describe("AgentCallService", () => {
   test("preserves the source Tool Call association in defensive record copies", async () => {
     const transport: AgentCallTransport = {
       discoverCapability: async (skillId) => ({ id: skillId, name: skillId }),
-      submitTask: async () => task("completed"),
+      submitTask: async () => acceptedTask("completed"),
       async *watchTask() {},
       continueTask: rejectUnexpectedContinuation,
       cancelTask: async (taskId) => task("canceled", { taskId }),
@@ -584,7 +585,7 @@ describe("AgentCallService", () => {
         id: skillId,
         name: "Codex code task",
       }),
-      submitTask: async () => task("submitted"),
+      submitTask: async () => acceptedTask("submitted"),
       async *watchTask() {
         await releaseCompletion.promise;
         yield task("completed");
@@ -637,7 +638,7 @@ describe("AgentCallService", () => {
         id: skillId,
         name: "Codex code task",
       }),
-      submitTask: async () => task("submitted"),
+      submitTask: async () => acceptedTask("submitted"),
       async *watchTask() {
         watchStarted.resolve();
         yield task("working");
@@ -665,6 +666,8 @@ describe("AgentCallService", () => {
         skillId: "codex-code-task",
         input: "block until completion",
         executionMode: "blocking",
+        toolName: "submit_codex_agent_call",
+        sourceToolCallId: nextSourceToolCallId(),
       })
       .finally(() => {
         invocationSettled = true;
@@ -690,7 +693,7 @@ describe("AgentCallService", () => {
     let watcherSignal: AbortSignal | undefined;
     const transport: AgentCallTransport = {
       discoverCapability: async (skillId) => ({ id: skillId, name: skillId }),
-      submitTask: async () => task("submitted"),
+      submitTask: async () => acceptedTask("submitted"),
       async *watchTask(_taskId, options) {
         watcherSignal = options.signal;
         subscriptionHeldOpen.resolve();
@@ -716,6 +719,8 @@ describe("AgentCallService", () => {
         skillId: "codex-code-task",
         input: "block until input is needed",
         executionMode: "blocking",
+        toolName: "submit_codex_agent_call",
+        sourceToolCallId: nextSourceToolCallId(),
       })
       .finally(() => {
         invocationSettled = true;
@@ -746,7 +751,9 @@ describe("AgentCallService", () => {
     const transport: AgentCallTransport = {
       discoverCapability: async (skillId) => ({ id: skillId, name: skillId }),
       submitTask: async () =>
-        task("auth-required", { statusMessage: "sign in is required" }),
+        acceptedTask("auth-required", {
+          statusMessage: "sign in is required",
+        }),
       watchTask,
       continueTask: rejectUnexpectedContinuation,
       cancelTask: async () => task("canceled"),
@@ -763,6 +770,8 @@ describe("AgentCallService", () => {
         skillId: "codex-code-task",
         input: "return the initial auth request",
         executionMode: "blocking",
+        toolName: "submit_codex_agent_call",
+        sourceToolCallId: nextSourceToolCallId(),
       }),
     ).resolves.toMatchObject({
       status: "blocking-interrupted",
@@ -788,7 +797,7 @@ describe("AgentCallService", () => {
     let watcherSignal: AbortSignal | undefined;
     const transport: AgentCallTransport = {
       discoverCapability: async (skillId) => ({ id: skillId, name: skillId }),
-      submitTask: async () => task("submitted"),
+      submitTask: async () => acceptedTask("submitted"),
       async *watchTask(_taskId, options) {
         watcherSignal = options.signal;
         watchStarted.resolve();
@@ -813,6 +822,8 @@ describe("AgentCallService", () => {
         skillId: "codex-code-task",
         input: "cancel the blocking invocation with its caller",
         executionMode: "blocking",
+        toolName: "submit_codex_agent_call",
+        sourceToolCallId: nextSourceToolCallId(),
         signal: controller.signal,
       })
       .finally(() => {
@@ -853,7 +864,7 @@ describe("AgentCallService", () => {
         id: skillId,
         name: "Codex code task",
       })),
-      submitTask: vi.fn(async () => task("submitted")),
+      submitTask: vi.fn(async () => acceptedTask("submitted")),
       async *watchTask() {
         yield task("working");
         await releaseCompletion.promise;
@@ -917,7 +928,7 @@ describe("AgentCallService", () => {
         id: skillId,
         name: "Codex code task",
       }),
-      submitTask: async () => task("submitted"),
+      submitTask: async () => acceptedTask("submitted"),
       async *watchTask() {
         throw new Error("subscription disconnected");
       },
@@ -966,7 +977,7 @@ describe("AgentCallService", () => {
     const terminalListener = vi.fn();
     const transport: AgentCallTransport = {
       discoverCapability: async (skillId) => ({ id: skillId, name: skillId }),
-      submitTask: async () => task("submitted"),
+      submitTask: async () => acceptedTask("submitted"),
       async *watchTask() {
         yield task("input-required", {
           statusMessage: "approval is required",
@@ -1002,7 +1013,7 @@ describe("AgentCallService", () => {
   test("preserves structured questions from an input-required snapshot", async () => {
     const transport: AgentCallTransport = {
       discoverCapability: async (skillId) => ({ id: skillId, name: skillId }),
-      submitTask: async () => task("submitted"),
+      submitTask: async () => acceptedTask("submitted"),
       async *watchTask() {
         yield task("input-required", {
           statusMessage: "Scope: Which files may be changed?",
@@ -1057,7 +1068,7 @@ describe("AgentCallService", () => {
     const terminalListener = vi.fn();
     const transport: AgentCallTransport = {
       discoverCapability: async (skillId) => ({ id: skillId, name: skillId }),
-      submitTask: async () => task("submitted"),
+      submitTask: async () => acceptedTask("submitted"),
       async *watchTask() {
         watchCycle += 1;
         if (watchCycle === 1) {
@@ -1142,7 +1153,7 @@ describe("AgentCallService", () => {
     });
     const transport: AgentCallTransport = {
       discoverCapability: async (skillId) => ({ id: skillId, name: skillId }),
-      submitTask: async () => task("submitted"),
+      submitTask: async () => acceptedTask("submitted"),
       async *watchTask() {
         watchCycle += 1;
         if (watchCycle === 1) {
@@ -1216,7 +1227,7 @@ describe("AgentCallService", () => {
     const cancelTask = vi.fn(async () => task("canceled"));
     const transport: AgentCallTransport = {
       discoverCapability: async (skillId) => ({ id: skillId, name: skillId }),
-      submitTask: async () => task("submitted"),
+      submitTask: async () => acceptedTask("submitted"),
       async *watchTask() {
         watchCycle += 1;
         if (watchCycle === 1) {
@@ -1299,7 +1310,7 @@ describe("AgentCallService", () => {
     const cancelTask = vi.fn(async () => task("canceled"));
     const transport: AgentCallTransport = {
       discoverCapability: async (skillId) => ({ id: skillId, name: skillId }),
-      submitTask: async () => task("submitted"),
+      submitTask: async () => acceptedTask("submitted"),
       async *watchTask() {
         watchCycle += 1;
         if (watchCycle === 1) {
@@ -1375,7 +1386,7 @@ describe("AgentCallService", () => {
     );
     const transport: AgentCallTransport = {
       discoverCapability: async (skillId) => ({ id: skillId, name: skillId }),
-      submitTask: async () => task("submitted"),
+      submitTask: async () => acceptedTask("submitted"),
       async *watchTask() {
         yield task("input-required", {
           questions: [
@@ -1407,6 +1418,8 @@ describe("AgentCallService", () => {
         skillId: "codex-code-task",
         input: "pause this blocking call",
         executionMode: "blocking",
+        toolName: "submit_codex_agent_call",
+        sourceToolCallId: nextSourceToolCallId(),
       }),
     ).resolves.toMatchObject({
       status: "blocking-interrupted",
@@ -1433,7 +1446,7 @@ describe("AgentCallService", () => {
     const continueTask = vi.fn(async () => task("working"));
     const transport: AgentCallTransport = {
       discoverCapability: async (skillId) => ({ id: skillId, name: skillId }),
-      submitTask: async () => task("working"),
+      submitTask: async () => acceptedTask("working"),
       async *watchTask() {},
       continueTask,
       cancelTask: async () => task("canceled"),
@@ -1471,7 +1484,7 @@ describe("AgentCallService", () => {
     const terminalListener = vi.fn();
     const transport: AgentCallTransport = {
       discoverCapability: async (skillId) => ({ id: skillId, name: skillId }),
-      submitTask: async () => task("submitted"),
+      submitTask: async () => acceptedTask("submitted"),
       async *watchTask(_taskId, options) {
         await Promise.race([
           never.promise,
@@ -1520,7 +1533,7 @@ describe("AgentCallService", () => {
       submitTask: async () => {
         submitStarted.resolve();
         await releaseSubmit.promise;
-        return task("submitted");
+        return acceptedTask("submitted");
       },
       async *watchTask() {},
       continueTask: rejectUnexpectedContinuation,
@@ -1559,7 +1572,7 @@ describe("AgentCallService", () => {
     const backgroundError = vi.fn();
     const transport: AgentCallTransport = {
       discoverCapability: async (skillId) => ({ id: skillId, name: skillId }),
-      submitTask: async () => task("submitted"),
+      submitTask: async () => acceptedTask("submitted"),
       async *watchTask() {
         yield task("completed");
       },

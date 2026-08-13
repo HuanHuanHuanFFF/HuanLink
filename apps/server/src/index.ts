@@ -11,5 +11,6 @@ export * from "./phase3-runtime.js";
 export * from "./process-lifecycle.js";
 export * from "./huanlink-server-runtime.js";
 export * from "./server-runtime.js";
+export * from "./configured-server-runtime.js";
 export * from "./server-runtime-logger.js";
 export * from "./session-ingress-coordinator.js";

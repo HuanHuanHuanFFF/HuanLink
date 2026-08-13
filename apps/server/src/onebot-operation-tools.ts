@@ -451,8 +451,17 @@ export function createOneBot11OperationTools(
               "Run one named destructive OneBot 11 operation. This Tool currently has no approval, target-list, or message-ownership protection and executes immediately.",
             parameters: privilegedParameters,
             strict: true,
-            isEnabled: ({ runContext }) =>
-              isExternalSession(options, runContext.context.sessionId),
+            isEnabled: ({ runContext }) => {
+              const metadata = options.sessions.getSessionMetadata(
+                runContext.context.sessionId,
+              );
+              return (
+                metadata?.kind === "external_channel" &&
+                options.isUnsafePrivilegedOperationsEnabled?.(
+                  metadata.route.channelId,
+                ) === true
+              );
+            },
             errorFunction: (_context, error) =>
               JSON.stringify(errorResult(ONEBOT11_PRIVILEGED_TOOL_NAME, error)),
             execute: async (input, runContext, details) =>

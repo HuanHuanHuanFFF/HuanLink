@@ -149,19 +149,26 @@ function defineConversationSessionStoreContract(
         arguments: { task: "inspect status" },
       });
 
-      const call = store.getAgentToolCall("session-a", "run-1", "call-lookup");
+      const location = store.getAgentToolCall(
+        "session-a",
+        "run-1",
+        "call-lookup",
+      );
 
-      expect(call).toEqual({
-        type: "agent_tool_call",
-        runId: "run-1",
-        toolCallId: "call-lookup",
-        toolName: "submit_codex_agent_call",
-        arguments: { task: "inspect status" },
+      expect(location).toEqual({
+        entryIndex: 2048,
+        entry: {
+          type: "agent_tool_call",
+          runId: "run-1",
+          toolCallId: "call-lookup",
+          toolName: "submit_codex_agent_call",
+          arguments: { task: "inspect status" },
+        },
       });
-      (call?.arguments as { task: string }).task = "mutated";
+      (location?.entry.arguments as { task: string }).task = "mutated";
       expect(
         store.getAgentToolCall("session-a", "run-1", "call-lookup"),
-      ).toMatchObject({ arguments: { task: "inspect status" } });
+      ).toMatchObject({ entry: { arguments: { task: "inspect status" } } });
     });
 
     test("reads raw Tool Calls only from the matching Session and run", () => {
@@ -190,18 +197,23 @@ function defineConversationSessionStoreContract(
       expect(
         store.getAgentToolCall("session-a", "run-1", "call-shared"),
       ).toEqual({
-        type: "agent_tool_call",
-        runId: "run-1",
-        toolCallId: "call-shared",
-        toolName: "reply",
-        rawArguments: '{"content":',
+        entryIndex: 2048,
+        entry: {
+          type: "agent_tool_call",
+          runId: "run-1",
+          toolCallId: "call-shared",
+          toolName: "reply",
+          rawArguments: '{"content":',
+        },
       });
       expect(
         store.getAgentToolCall("session-b", "run-1", "call-shared"),
-      ).toMatchObject({ arguments: { content: "other Session" } });
+      ).toMatchObject({
+        entry: { arguments: { content: "other Session" } },
+      });
       expect(
         store.getAgentToolCall("session-a", "run-2", "call-shared"),
-      ).toMatchObject({ arguments: { content: "other run" } });
+      ).toMatchObject({ entry: { arguments: { content: "other run" } } });
       expect(
         store.getAgentToolCall("session-a", "run-missing", "call-shared"),
       ).toBeUndefined();

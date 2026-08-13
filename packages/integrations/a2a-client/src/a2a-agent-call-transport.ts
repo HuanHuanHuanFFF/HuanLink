@@ -18,6 +18,7 @@ import {
   type AgentCallTransport,
   type AgentCallTransportContinueRequest,
   type AgentCallTransportSubmitRequest,
+  type AgentCallTransportSubmitResult,
 } from "@huanlink/core";
 import {
   isPaused,
@@ -103,7 +104,7 @@ export class A2aAgentCallTransport implements AgentCallTransport {
 
   async submitTask(
     request: AgentCallTransportSubmitRequest,
-  ): Promise<AgentCallTaskSnapshot> {
+  ): Promise<AgentCallTransportSubmitResult> {
     const fields: RuntimeLogFields = {
       messageId: request.messageId,
       skillId: request.skillId,
@@ -112,38 +113,61 @@ export class A2aAgentCallTransport implements AgentCallTransport {
         : { contextId: request.contextId }),
     };
     this.writeLog("info", "a2a.submit.started", fields);
+    let sendRequest: SendMessageRequest;
+    try {
+      sendRequest = SendMessageRequest.fromJSON({
+        message: {
+          messageId: request.messageId,
+          ...(request.contextId === undefined
+            ? {}
+            : { contextId: request.contextId }),
+          role: "ROLE_USER",
+          parts: [{ text: request.input }],
+        },
+        configuration: { returnImmediately: true },
+      });
+    } catch (error) {
+      this.writeLog("error", "a2a.submit.failed", {
+        ...fields,
+        dispatchOutcome: "not-dispatched",
+        ...errorLogFields(error),
+      });
+      return { outcome: "not-dispatched", error };
+    }
+    let client: Client;
     try {
       await this.discoverCapability(request.skillId, {
         signal: request.signal,
       });
-      const client = await this.getClient();
+      client = await this.getClient();
+    } catch (error) {
+      this.writeLog("error", "a2a.submit.failed", {
+        ...fields,
+        dispatchOutcome: "not-dispatched",
+        ...errorLogFields(error),
+      });
+      return { outcome: "not-dispatched", error };
+    }
+
+    try {
       const result = await client.sendMessage(
-        SendMessageRequest.fromJSON({
-          message: {
-            messageId: request.messageId,
-            ...(request.contextId === undefined
-              ? {}
-              : { contextId: request.contextId }),
-            role: "ROLE_USER",
-            parts: [{ text: request.input }],
-          },
-          configuration: { returnImmediately: true },
-        }),
+        sendRequest,
         request.signal === undefined ? undefined : { signal: request.signal },
       );
 
-      const snapshot = snapshotFromTask(requireTask(result));
+      const snapshot = snapshotFromTask(requireAcceptedTask(result));
       this.writeLog("info", "a2a.submit.completed", {
         ...fields,
         ...snapshotLogFields(snapshot),
       });
-      return snapshot;
+      return { outcome: "accepted", snapshot };
     } catch (error) {
       this.writeLog("error", "a2a.submit.failed", {
         ...fields,
+        dispatchOutcome: "dispatch-uncertain",
         ...errorLogFields(error),
       });
-      throw error;
+      return { outcome: "dispatch-uncertain", error };
     }
   }
 
@@ -459,6 +483,22 @@ function requireTask(result: SendMessageResult): Task {
     );
   }
   return result;
+}
+
+function requireAcceptedTask(result: SendMessageResult): Task {
+  const task = requireTask(result);
+  requireNonBlank(task.id, "A2A Task ID");
+  requireNonBlank(task.contextId, "A2A Task context ID");
+  if (task.status === undefined) {
+    throw new A2aProtocolError("A2A SendMessage Task has no status");
+  }
+  return task;
+}
+
+function requireNonBlank(value: string, label: string): void {
+  if (value.trim().length === 0) {
+    throw new A2aProtocolError(`${label} must not be blank`);
+  }
 }
 
 function subscriptionRetryDelayMs(attempt: number): number {

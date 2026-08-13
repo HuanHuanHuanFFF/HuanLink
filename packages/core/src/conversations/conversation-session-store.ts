@@ -4,7 +4,7 @@ import type { RunId, SessionId } from "../shared/ids.js";
 import type {
   AppendConversationAgentToolCall,
   AppendConversationAgentToolResult,
-  ConversationAgentToolCallEntry,
+  ConversationAgentToolCallLocation,
   ConversationSession,
   ConversationSessionContextWindow,
   ConversationSessionMetadata,
@@ -33,7 +33,7 @@ export interface ConversationSessionStore {
     sessionId: SessionId,
     runId: RunId,
     toolCallId: string,
-  ): ConversationAgentToolCallEntry | undefined;
+  ): ConversationAgentToolCallLocation | undefined;
   getSession(sessionId: SessionId): ConversationSession | undefined;
   getSessionContextWindow(
     sessionId: SessionId,

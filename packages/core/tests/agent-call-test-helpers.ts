@@ -1,6 +1,7 @@
 import type {
   AgentCallTaskSnapshot,
   AgentCallTransport,
+  AgentCallTransportSubmitResult,
 } from "../src/index.js";
 
 export function deferred<T = void>() {
@@ -21,6 +22,16 @@ export function task(
     state,
     artifacts: [],
     ...overrides,
+  };
+}
+
+export function acceptedTask(
+  state: AgentCallTaskSnapshot["state"],
+  overrides: Partial<AgentCallTaskSnapshot> = {},
+): AgentCallTransportSubmitResult {
+  return {
+    outcome: "accepted",
+    snapshot: task(state, overrides),
   };
 }
 

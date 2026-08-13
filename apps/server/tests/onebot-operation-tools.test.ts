@@ -240,9 +240,20 @@ describe("OneBot 11 operation Tools", () => {
   });
 
   test("exposes explicitly enabled privileged operations without claiming approval protection", async () => {
-    const { logger, tools } = createFixture({
+    const { logger, sessions, tools } = createFixture({
       unsafePrivilegedChannelIds: ["qq-main"],
     });
+    const disabledSessionId = "session:qq-secondary:group:10001";
+    sessions.appendChannelMessage(
+      disabledSessionId,
+      inboundMessage("102", {
+        route: {
+          channelId: "qq-secondary",
+          conversationKind: "group",
+          conversationId: "10001",
+        },
+      }),
+    );
     const agent = new Agent<OpenAiAgentsRunContext>({
       name: "OneBot privileged Tool availability test",
       instructions: "Test privileged tool availability.",
@@ -253,6 +264,12 @@ describe("OneBot 11 operation Tools", () => {
     await expect(
       tools.privileged?.isEnabled(context("internal-session"), agent),
     ).resolves.toBe(false);
+    await expect(
+      tools.privileged?.isEnabled(context(disabledSessionId), agent),
+    ).resolves.toBe(false);
+    await expect(tools.privileged?.isEnabled(context(), agent)).resolves.toBe(
+      true,
+    );
     await expect(
       tools.privileged?.needsApproval(
         context(),

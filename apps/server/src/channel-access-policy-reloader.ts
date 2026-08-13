@@ -199,9 +199,14 @@ function snapshotConfig(
       : {
           orchestration: {
             defaultAgentId: config.orchestration.defaultAgentId,
-            agentCallPolicy: {
+            a2aTaskPolicy: {
               maxActiveTasksPerSession:
-                config.orchestration.agentCallPolicy.maxActiveTasksPerSession,
+                config.orchestration.a2aTaskPolicy.maxActiveTasksPerSession,
+            },
+            asyncToolTaskPolicy: {
+              maxActiveTasksPerSession:
+                config.orchestration.asyncToolTaskPolicy
+                  .maxActiveTasksPerSession,
             },
           },
         }),

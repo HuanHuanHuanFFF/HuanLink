@@ -424,10 +424,13 @@ function terminalTransport(state: AgentCallTaskState): AgentCallTransport {
       name: "Codex code task",
     }),
     submitTask: async () => ({
-      taskId: `task-${state}`,
-      contextId: "session-phase3",
-      state: "submitted",
-      artifacts: [],
+      outcome: "accepted",
+      snapshot: {
+        taskId: `task-${state}`,
+        contextId: "session-phase3",
+        state: "submitted",
+        artifacts: [],
+      },
     }),
     async *watchTask() {
       yield {
@@ -454,10 +457,13 @@ function sequentialTerminalTransport() {
     async (request) => {
       submissionCount += 1;
       return {
-        taskId: `a2a-task-sequence-${submissionCount}`,
-        contextId: request.contextId,
-        state: "working",
-        artifacts: [],
+        outcome: "accepted",
+        snapshot: {
+          taskId: `a2a-task-sequence-${submissionCount}`,
+          contextId: request.contextId,
+          state: "working",
+          artifacts: [],
+        },
       };
     },
   );
@@ -501,11 +507,14 @@ function sequentialTerminalTransport() {
 function pendingTransport() {
   const submitTask = vi.fn<AgentCallTransport["submitTask"]>(
     async (request) => ({
-      taskId: "a2a-task-status-query",
-      contextId: request.contextId,
-      state: "working",
-      artifacts: [],
-      statusMessage: "Codex is working",
+      outcome: "accepted",
+      snapshot: {
+        taskId: "a2a-task-status-query",
+        contextId: request.contextId,
+        state: "working",
+        artifacts: [],
+        statusMessage: "Codex is working",
+      },
     }),
   );
   const transport: AgentCallTransport = {
@@ -530,10 +539,13 @@ function pendingTransport() {
 function pausedTransport() {
   const submitTask = vi.fn<AgentCallTransport["submitTask"]>(
     async (request) => ({
-      taskId: "a2a-task-input-required",
-      contextId: request.contextId,
-      state: "working",
-      artifacts: [],
+      outcome: "accepted",
+      snapshot: {
+        taskId: "a2a-task-input-required",
+        contextId: request.contextId,
+        state: "working",
+        artifacts: [],
+      },
     }),
   );
   const transport: AgentCallTransport = {
@@ -587,10 +599,13 @@ function resumablePausedTransport() {
   const taskId = "a2a-task-resumable";
   const submitTask = vi.fn<AgentCallTransport["submitTask"]>(
     async (request) => ({
-      taskId,
-      contextId: request.contextId,
-      state: "working",
-      artifacts: [],
+      outcome: "accepted",
+      snapshot: {
+        taskId,
+        contextId: request.contextId,
+        state: "working",
+        artifacts: [],
+      },
     }),
   );
   const continueTask = vi.fn<AgentCallTransport["continueTask"]>(

@@ -9,6 +9,7 @@ import type {
   AppendConversationAgentToolCall,
   AppendConversationAgentToolResult,
   ConversationAgentToolCallEntry,
+  ConversationAgentToolCallLocation,
   ConversationChannelMessageEntry,
   ConversationSession,
   ConversationSessionContextWindow,
@@ -336,21 +337,31 @@ export class InMemoryConversationSessionStore implements ConversationSessionStor
     sessionId: SessionId,
     runId: RunId,
     toolCallId: string,
-  ): ConversationAgentToolCallEntry | undefined {
+  ): ConversationAgentToolCallLocation | undefined {
     const session = this.sessions.get(sessionId);
-    const call =
-      session === undefined
-        ? undefined
-        : findToolCall(session.timeline, runId, toolCallId);
-    return call === undefined
-      ? undefined
-      : {
-          type: "agent_tool_call",
-          runId: call.runId,
-          toolCallId: call.toolCallId,
-          toolName: call.toolName,
-          ...cloneConversationAgentToolCallPayload(call),
-        };
+    if (session === undefined) {
+      return undefined;
+    }
+    const callIndex = session.timeline.findIndex(
+      (entry) =>
+        entry.type === "agent_tool_call" &&
+        entry.runId === runId &&
+        entry.toolCallId === toolCallId,
+    );
+    if (callIndex < 0) {
+      return undefined;
+    }
+    const call = session.timeline[callIndex] as ConversationAgentToolCallEntry;
+    return {
+      entryIndex: session.entryIndexes[callIndex]!,
+      entry: {
+        type: "agent_tool_call",
+        runId: call.runId,
+        toolCallId: call.toolCallId,
+        toolName: call.toolName,
+        ...cloneConversationAgentToolCallPayload(call),
+      },
+    };
   }
 
   /** 返回结构化 Session 的完整防御性副本。 */

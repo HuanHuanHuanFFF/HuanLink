@@ -30,6 +30,7 @@ import {
 
 const delayedToolKind: AsyncToolTaskKindDefinition = {
   kind: "fake-delayed-tool",
+  quotaPool: "async-tool",
   validatePayload: () => ({
     artifacts: [{ name: "result.txt", text: "parser updated" }],
   }),
@@ -300,6 +301,7 @@ describe("Phase 3 Task re-entry", () => {
           input: "wait for completion",
           executionMode: "blocking",
           toolName: "submit_codex_agent_call",
+          sourceToolCallId: "call-blocking-completed",
         }),
       ).resolves.toMatchObject({
         status: "result",
@@ -347,6 +349,7 @@ describe("Phase 3 Task re-entry", () => {
           input: "pause for one choice",
           executionMode: "blocking",
           toolName: "submit_codex_agent_call",
+          sourceToolCallId: "call-blocking-input-required",
         }),
       ).resolves.toMatchObject({
         status: "blocking-interrupted",
@@ -961,9 +964,12 @@ function immediatelyCompletedAgentCallTransport(): AgentCallTransport {
       name: "Codex code task",
     }),
     submitTask: async () => ({
-      taskId: "a2a-private-task",
-      state: "submitted",
-      artifacts: [],
+      outcome: "accepted",
+      snapshot: {
+        taskId: "a2a-private-task",
+        state: "submitted",
+        artifacts: [],
+      },
     }),
     continueTask: async () => {
       throw new Error("Unexpected continuation");
@@ -999,10 +1005,13 @@ function resumableAgentCallTransport() {
       name: "Codex code task",
     }),
     submitTask: async (request) => ({
-      taskId: "a2a-resumable-private",
-      contextId: request.contextId,
-      state: "working",
-      artifacts: [],
+      outcome: "accepted",
+      snapshot: {
+        taskId: "a2a-resumable-private",
+        contextId: request.contextId,
+        state: "working",
+        artifacts: [],
+      },
     }),
     async *watchTask(taskId) {
       watchCount += 1;

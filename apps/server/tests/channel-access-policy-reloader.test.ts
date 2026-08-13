@@ -139,7 +139,7 @@ describe("Channel access policy reloader", () => {
       debounceMs: 5,
     });
 
-    initialConfig.orchestration!.agentCallPolicy.maxActiveTasksPerSession = 7;
+    initialConfig.orchestration!.a2aTaskPolicy.maxActiveTasksPerSession = 7;
     initialConfig.sources.orchestration = "server/alternate-orchestration.json";
     watch.watcher.emitChange("server/channels/onebot11.json");
     await wait(30);
@@ -158,7 +158,7 @@ describe("Channel access policy reloader", () => {
       const watch = new FakeWatchFactory();
       const candidate = config({ groups: { mode: "denylist", ids: [] } });
       if (changedField === "configuration") {
-        candidate.orchestration!.agentCallPolicy.maxActiveTasksPerSession = 3;
+        candidate.orchestration!.asyncToolTaskPolicy.maxActiveTasksPerSession = 4;
       } else {
         candidate.sources.orchestration = "server/alternate-orchestration.json";
       }
@@ -443,7 +443,8 @@ function config(
     ],
     orchestration: {
       defaultAgentId: "codex-local",
-      agentCallPolicy: { maxActiveTasksPerSession: 2 },
+      a2aTaskPolicy: { maxActiveTasksPerSession: 2 },
+      asyncToolTaskPolicy: { maxActiveTasksPerSession: 3 },
     },
     sources: {
       mainAgent: "server/main-agent.json",

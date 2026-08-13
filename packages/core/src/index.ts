@@ -22,6 +22,7 @@ export * from "./async-tool-task/types.js";
 export * from "./async-tool-task/async-tool-task-service.js";
 export * from "./orchestration/agent-turn-scheduler.js";
 export * from "./tasks/types.js";
+export * from "./tasks/session-task-quota-service.js";
 export * from "./channels/contract.js";
 export * from "./channels/session-key.js";
 export * from "./conversations/conversation-session.js";

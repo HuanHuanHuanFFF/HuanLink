@@ -86,6 +86,7 @@ export type AgentCallTaskPublicPayload = {
 
 export const AGENT_CALL_TASK_KIND_DEFINITION: AsyncToolTaskKindDefinition = {
   kind: AGENT_CALL_TASK_KIND,
+  quotaPool: "a2a",
   validatePayload: validateAgentCallTaskPayload,
   projectPublicStatus: ({ payload, statusMessage }) => ({
     payload: validateAgentCallTaskPayload(payload),
@@ -118,6 +119,26 @@ export type AgentCallTransportContinueRequest = {
   taskId: string;
 };
 
+/**
+ * Describes what is known at the transport dispatch boundary.
+ *
+ * `dispatch-uncertain` means the request entered the remote send operation,
+ * but HuanLink could not prove whether the remote Agent accepted it.
+ */
+export type AgentCallTransportSubmitResult =
+  | {
+      outcome: "accepted";
+      snapshot: AgentCallTaskSnapshot;
+    }
+  | {
+      outcome: "not-dispatched";
+      error: unknown;
+    }
+  | {
+      outcome: "dispatch-uncertain";
+      error: unknown;
+    };
+
 export interface AgentCallTransport {
   discoverCapability(
     skillId: string,
@@ -125,7 +146,7 @@ export interface AgentCallTransport {
   ): Promise<AgentCallCapability>;
   submitTask(
     request: AgentCallTransportSubmitRequest,
-  ): Promise<AgentCallTaskSnapshot>;
+  ): Promise<AgentCallTransportSubmitResult>;
   continueTask(
     request: AgentCallTransportContinueRequest,
   ): Promise<AgentCallTaskSnapshot>;
@@ -153,8 +174,8 @@ export type AgentCallAsyncRequest = AgentCallRequestBase & {
 
 export type AgentCallBlockingRequest = AgentCallRequestBase & {
   executionMode: "blocking";
-  toolName?: string;
-  sourceToolCallId?: string;
+  toolName: string;
+  sourceToolCallId: string;
 };
 
 export type AgentCallRequest = AgentCallAsyncRequest | AgentCallBlockingRequest;
@@ -176,10 +197,17 @@ export type AgentCallPreacceptRejectedResult = {
   error: "task-preaccept-rejected";
 };
 
+export type AgentCallNonRetryableErrorResult = {
+  status: "error";
+  error: "remote-task-conflict";
+  retrySafe: false;
+};
+
 export type AgentCallAsyncInvocationResult =
   | AgentCallReceipt
   | AgentCallTaskLimitResult
-  | AgentCallPreacceptRejectedResult;
+  | AgentCallPreacceptRejectedResult
+  | AgentCallNonRetryableErrorResult;
 
 export type AgentCallBlockingResult = {
   status: "result";
@@ -197,10 +225,19 @@ export type AgentCallBlockingInterruptedResult = {
   statusMessage?: string;
 };
 
+export type AgentCallBlockingUncertainResult = {
+  status: "blocking-uncertain";
+  executionMode: "blocking";
+  taskId: HuanLinkTaskId;
+  state: "unknown";
+  retrySafe: false;
+};
+
 export type AgentCallInvocationResult =
   | AgentCallAsyncInvocationResult
   | AgentCallBlockingResult
-  | AgentCallBlockingInterruptedResult;
+  | AgentCallBlockingInterruptedResult
+  | AgentCallBlockingUncertainResult;
 
 export type AgentCallRecord = {
   agentCallId: AgentCallId;

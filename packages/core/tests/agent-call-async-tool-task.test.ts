@@ -4,14 +4,45 @@ import {
   AGENT_CALL_TASK_KIND_DEFINITION,
   AgentCallService,
   AsyncToolTaskService,
+  SessionTaskQuotaService,
   type AgentCallInputAnswers,
   type AgentCallTransport,
 } from "../src/index.js";
 import {
+  acceptedTask,
   deferred,
   rejectUnexpectedContinuation,
   task,
 } from "./agent-call-test-helpers.js";
+
+test("rejects split quota owners before any AgentCall can run", () => {
+  const taskService = new AsyncToolTaskService({
+    quotaService: new SessionTaskQuotaService({
+      limits: { a2a: 2, "async-tool": 3 },
+    }),
+    taskKinds: [AGENT_CALL_TASK_KIND_DEFINITION],
+  });
+
+  expect(
+    () =>
+      new AgentCallService({
+        transport: {
+          discoverCapability: async (skillId) => ({
+            id: skillId,
+            name: skillId,
+          }),
+          submitTask: async () => acceptedTask("submitted"),
+          async *watchTask() {},
+          continueTask: rejectUnexpectedContinuation,
+          cancelTask: async (taskId) => task("canceled", { taskId }),
+        },
+        taskService,
+        quotaService: new SessionTaskQuotaService({
+          limits: { a2a: 2, "async-tool": 3 },
+        }),
+      }),
+  ).toThrow(/must share one quota service/);
+});
 
 test("reserves an async AgentCall before transport and returns only its HuanLink task ID", async () => {
   const taskService = new AsyncToolTaskService({
@@ -29,7 +60,7 @@ test("reserves an async AgentCall before transport and returns only its HuanLink
   });
   const transport: AgentCallTransport = {
     discoverCapability,
-    submitTask: async () => task("submitted"),
+    submitTask: async () => acceptedTask("submitted"),
     async *watchTask(_taskId, { signal }) {
       await new Promise<void>((resolve) => {
         if (signal.aborted) {
@@ -82,7 +113,7 @@ test("publishes AgentCall snapshots and terminal notification through the common
   taskService.onTerminal(taskTerminal);
   const transport: AgentCallTransport = {
     discoverCapability: async (skillId) => ({ id: skillId, name: skillId }),
-    submitTask: async () => task("submitted"),
+    submitTask: async () => acceptedTask("submitted"),
     async *watchTask() {
       yield task("working");
       yield task("completed", {
@@ -137,7 +168,7 @@ test("publishes input-required once through the common Task service with its que
   taskService.onInputRequired(inputRequired);
   const transport: AgentCallTransport = {
     discoverCapability: async (skillId) => ({ id: skillId, name: skillId }),
-    submitTask: async () => task("submitted"),
+    submitTask: async () => acceptedTask("submitted"),
     async *watchTask() {
       const paused = task("input-required", {
         questions: [
@@ -215,7 +246,7 @@ test("continues an initially input-required AgentCall without stale re-entry or 
   const transport: AgentCallTransport = {
     discoverCapability: async (skillId) => ({ id: skillId, name: skillId }),
     submitTask: async () =>
-      task("input-required", {
+      acceptedTask("input-required", {
         questions: [
           {
             id: "scope",
@@ -306,7 +337,7 @@ test("continues an input-required AgentCall by same-Session HuanLink task ID", a
   const continueTask = vi.fn(async () => task("working"));
   const transport: AgentCallTransport = {
     discoverCapability: async (skillId) => ({ id: skillId, name: skillId }),
-    submitTask: async () => task("submitted"),
+    submitTask: async () => acceptedTask("submitted"),
     async *watchTask(_taskId, { signal }) {
       watchCycle += 1;
       if (watchCycle === 1) {
@@ -394,7 +425,7 @@ test.each<{
     const continueTask = vi.fn(async () => task("working"));
     const transport: AgentCallTransport = {
       discoverCapability: async (skillId) => ({ id: skillId, name: skillId }),
-      submitTask: async () => task("submitted"),
+      submitTask: async () => acceptedTask("submitted"),
       async *watchTask() {
         yield task("input-required", {
           questions: [
@@ -459,7 +490,7 @@ test("rejects and releases an async reservation when transport fails before acce
       id: skillId,
       name: skillId,
     }));
-  const submitTask = vi.fn(async () => task("submitted"));
+  const submitTask = vi.fn(async () => acceptedTask("submitted"));
   const transport: AgentCallTransport = {
     discoverCapability,
     submitTask,
@@ -537,7 +568,7 @@ test("rejects and releases an async reservation when transport fails before acce
   await service.close();
 });
 
-test("does not classify a failure after transport acceptance as pre-accept rejection", async () => {
+test("fails closed when a remote Task ID conflicts after transport acceptance", async () => {
   const taskIds = ["huan-task-first", "huan-task-duplicate-remote-id"];
   const taskService = new AsyncToolTaskService({
     maxActiveTasksPerSession: 2,
@@ -548,7 +579,7 @@ test("does not classify a failure after transport acceptance as pre-accept rejec
     id: skillId,
     name: skillId,
   }));
-  const submitTask = vi.fn(async () => task("submitted"));
+  const submitTask = vi.fn(async () => acceptedTask("submitted"));
   const transport: AgentCallTransport = {
     discoverCapability,
     submitTask,
@@ -591,9 +622,9 @@ test("does not classify a failure after transport acceptance as pre-accept rejec
       sourceToolCallId: "tool-call-duplicate-remote-id",
     }),
   ).resolves.toEqual({
-    status: "accepted",
-    taskId: "huan-task-duplicate-remote-id",
-    state: "unknown",
+    status: "error",
+    error: "remote-task-conflict",
+    retrySafe: false,
   });
   expect(
     taskService.getStatus(
@@ -602,30 +633,426 @@ test("does not classify a failure after transport acceptance as pre-accept rejec
     ),
   ).toMatchObject({
     status: "found",
-    state: "unknown",
-    payload: { artifacts: [] },
+    taskId: "huan-task-duplicate-remote-id",
+    state: "rejected",
   });
   expect(backgroundError).toHaveBeenCalledTimes(1);
   expect(backgroundError.mock.calls[0]?.[0]).toMatchObject({
     message: "Remote task a2a-task-01 is already tracked",
   });
+  const remaining = taskService.taskQuotaService.acquire(
+    "session-post-accept-failure",
+    "a2a",
+  );
+  expect(remaining).toMatchObject({ status: "acquired" });
+  if (remaining.status === "acquired") {
+    remaining.lease.release();
+  }
+  expect(discoverCapability).toHaveBeenCalledTimes(2);
+  expect(submitTask).toHaveBeenCalledTimes(2);
+
+  await service.close();
+});
+
+test("keeps an async Task accepted as unknown when dispatch cannot be confirmed", async () => {
+  const quotaService = new SessionTaskQuotaService({
+    limits: { a2a: 1, "async-tool": 3 },
+  });
+  const taskService = new AsyncToolTaskService({
+    quotaService,
+    taskKinds: [AGENT_CALL_TASK_KIND_DEFINITION],
+    createTaskId: () => "huan-task-dispatch-uncertain",
+  });
+  const discoverCapability = vi.fn(async (skillId: string) => ({
+    id: skillId,
+    name: skillId,
+  }));
+  const transport: AgentCallTransport = {
+    discoverCapability,
+    submitTask: async () => ({
+      outcome: "dispatch-uncertain",
+      error: new Error("response lost after send"),
+    }),
+    async *watchTask() {},
+    continueTask: rejectUnexpectedContinuation,
+    cancelTask: async (taskId) => task("canceled", { taskId }),
+  };
+  const service = new AgentCallService({
+    transport,
+    taskService,
+    quotaService,
+  });
+
   await expect(
     service.invoke({
-      runId: "run-after-unknown",
-      sessionId: "session-post-accept-failure",
+      runId: "run-dispatch-uncertain",
+      sessionId: "session-dispatch-uncertain",
       skillId: "codex-code-task",
-      input: "must remain within the occupied Task limit",
+      input: "submit exactly once",
       executionMode: "async",
       toolName: "submit_codex_agent_call",
-      sourceToolCallId: "tool-call-after-unknown",
+      sourceToolCallId: "tool-call-dispatch-uncertain",
+    }),
+  ).resolves.toEqual({
+    status: "accepted",
+    taskId: "huan-task-dispatch-uncertain",
+    state: "unknown",
+  });
+  expect(
+    taskService.getStatus(
+      "session-dispatch-uncertain",
+      "huan-task-dispatch-uncertain",
+    ),
+  ).toMatchObject({ status: "found", state: "unknown" });
+
+  await expect(
+    service.invoke({
+      runId: "run-dispatch-again",
+      sessionId: "session-dispatch-uncertain",
+      skillId: "codex-code-task",
+      input: "must not get another A2A slot",
+      executionMode: "async",
+      toolName: "submit_codex_agent_call",
+      sourceToolCallId: "tool-call-dispatch-again",
     }),
   ).resolves.toEqual({
     status: "error",
     error: "task-limit-reached",
-    maxActiveTasksPerSession: 2,
+    maxActiveTasksPerSession: 1,
   });
-  expect(discoverCapability).toHaveBeenCalledTimes(2);
-  expect(submitTask).toHaveBeenCalledTimes(2);
+  expect(discoverCapability).toHaveBeenCalledTimes(1);
+
+  await service.close();
+});
+
+test("treats an unexpected transport throw after entering submit as uncertain", async () => {
+  const quotaService = new SessionTaskQuotaService({
+    limits: { a2a: 1, "async-tool": 3 },
+  });
+  const taskService = new AsyncToolTaskService({
+    quotaService,
+    taskKinds: [AGENT_CALL_TASK_KIND_DEFINITION],
+    createTaskId: () => "huan-task-transport-throw",
+  });
+  const transportFailure = new Error("transport response vanished");
+  const transport: AgentCallTransport = {
+    discoverCapability: async (skillId) => ({ id: skillId, name: skillId }),
+    submitTask: async () => {
+      throw transportFailure;
+    },
+    async *watchTask() {},
+    continueTask: rejectUnexpectedContinuation,
+    cancelTask: async (taskId) => task("canceled", { taskId }),
+  };
+  const service = new AgentCallService({
+    transport,
+    taskService,
+    quotaService,
+  });
+  const backgroundError = vi.fn();
+  service.onBackgroundError(backgroundError);
+
+  await expect(
+    service.invoke({
+      runId: "run-transport-throw",
+      sessionId: "session-transport-throw",
+      skillId: "codex-code-task",
+      input: "submit exactly once",
+      executionMode: "async",
+      toolName: "submit_codex_agent_call",
+      sourceToolCallId: "tool-call-transport-throw",
+    }),
+  ).resolves.toEqual({
+    status: "accepted",
+    taskId: "huan-task-transport-throw",
+    state: "unknown",
+  });
+  expect(
+    taskService.getStatus(
+      "session-transport-throw",
+      "huan-task-transport-throw",
+    ),
+  ).toMatchObject({ status: "found", state: "unknown" });
+  expect(backgroundError).toHaveBeenCalledWith(transportFailure, undefined);
+  expect(quotaService.acquire("session-transport-throw", "a2a")).toMatchObject({
+    status: "limit-reached",
+  });
+
+  await service.close();
+});
+
+test("upgrades only an uncertain blocking dispatch to a queryable unknown Task", async () => {
+  const quotaService = new SessionTaskQuotaService({
+    limits: { a2a: 1, "async-tool": 3 },
+  });
+  const taskService = new AsyncToolTaskService({
+    quotaService,
+    taskKinds: [AGENT_CALL_TASK_KIND_DEFINITION],
+  });
+  const transport: AgentCallTransport = {
+    discoverCapability: async (skillId) => ({ id: skillId, name: skillId }),
+    submitTask: async () => ({
+      outcome: "dispatch-uncertain",
+      error: new Error("response body timed out"),
+    }),
+    async *watchTask() {},
+    continueTask: rejectUnexpectedContinuation,
+    cancelTask: async (taskId) => task("canceled", { taskId }),
+  };
+  const service = new AgentCallService({
+    transport,
+    taskService,
+    quotaService,
+    createId: () => "huan-task-blocking-uncertain",
+  });
+
+  await expect(
+    service.invoke({
+      runId: "run-blocking-uncertain",
+      sessionId: "session-blocking-uncertain",
+      skillId: "codex-code-task",
+      input: "block unless delivery becomes uncertain",
+      executionMode: "blocking",
+      toolName: "submit_codex_agent_call",
+      sourceToolCallId: "tool-call-blocking-uncertain",
+    }),
+  ).resolves.toEqual({
+    status: "blocking-uncertain",
+    executionMode: "blocking",
+    taskId: "huan-task-blocking-uncertain",
+    state: "unknown",
+    retrySafe: false,
+  });
+  expect(
+    taskService.getStatus(
+      "session-blocking-uncertain",
+      "huan-task-blocking-uncertain",
+    ),
+  ).toMatchObject({ status: "found", state: "unknown" });
+  expect(
+    quotaService.acquire("session-blocking-uncertain", "a2a"),
+  ).toMatchObject({ status: "limit-reached" });
+
+  await service.close();
+});
+
+test("deduplicates concurrent and later retries of one uncertain blocking source before transport", async () => {
+  const quotaService = new SessionTaskQuotaService({
+    limits: { a2a: 2, "async-tool": 3 },
+  });
+  const taskService = new AsyncToolTaskService({
+    quotaService,
+    taskKinds: [AGENT_CALL_TASK_KIND_DEFINITION],
+  });
+  const releaseDispatch = deferred();
+  const submitTask = vi.fn(async () => {
+    await releaseDispatch.promise;
+    return {
+      outcome: "dispatch-uncertain" as const,
+      error: new Error("response lost"),
+    };
+  });
+  const service = new AgentCallService({
+    transport: {
+      discoverCapability: async (skillId) => ({ id: skillId, name: skillId }),
+      submitTask,
+      async *watchTask() {},
+      continueTask: rejectUnexpectedContinuation,
+      cancelTask: async (taskId) => task("canceled", { taskId }),
+    },
+    taskService,
+    quotaService,
+    createId: () => "huan-task-blocking-deduplicated",
+  });
+  const request = {
+    runId: "run-blocking-deduplicated",
+    sessionId: "session-blocking-deduplicated",
+    skillId: "codex-code-task",
+    input: "dispatch this source once",
+    executionMode: "blocking" as const,
+    toolName: "submit_codex_agent_call",
+    sourceToolCallId: "tool-call-blocking-deduplicated",
+  };
+
+  const first = service.invoke(request);
+  const concurrent = service.invoke(request);
+  releaseDispatch.resolve();
+
+  await expect(first).resolves.toEqual({
+    status: "blocking-uncertain",
+    executionMode: "blocking",
+    taskId: "huan-task-blocking-deduplicated",
+    state: "unknown",
+    retrySafe: false,
+  });
+  await expect(concurrent).resolves.toEqual({
+    status: "blocking-uncertain",
+    executionMode: "blocking",
+    taskId: "huan-task-blocking-deduplicated",
+    state: "unknown",
+    retrySafe: false,
+  });
+  await expect(service.invoke(request)).resolves.toEqual({
+    status: "blocking-uncertain",
+    executionMode: "blocking",
+    taskId: "huan-task-blocking-deduplicated",
+    state: "unknown",
+    retrySafe: false,
+  });
+  expect(submitTask).toHaveBeenCalledTimes(1);
+
+  await service.close();
+});
+
+test("keeps an accepted Task linked when local async bookkeeping fails before an initial terminal snapshot", async () => {
+  const quotaService = new SessionTaskQuotaService({
+    limits: { a2a: 1, "async-tool": 3 },
+  });
+  const taskService = new AsyncToolTaskService({
+    quotaService,
+    taskKinds: [AGENT_CALL_TASK_KIND_DEFINITION],
+    createTaskId: () => "huan-task-bookkeeping-recovery",
+  });
+  const terminal = vi.fn();
+  taskService.onTerminal(terminal);
+  const bookkeepingFailure = new Error("injected local bookkeeping failure");
+  const backgroundError = vi.fn();
+  const service = new AgentCallService({
+    transport: {
+      discoverCapability: async (skillId) => ({ id: skillId, name: skillId }),
+      submitTask: async () =>
+        acceptedTask("completed", {
+          artifacts: [{ id: "artifact-recovered", text: "completed remotely" }],
+        }),
+      async *watchTask() {},
+      continueTask: rejectUnexpectedContinuation,
+      cancelTask: async (taskId) => task("canceled", { taskId }),
+    },
+    taskService,
+    quotaService,
+    testHooks: {
+      beforeAsyncTaskAcceptance: () => {
+        throw bookkeepingFailure;
+      },
+    },
+  });
+  service.onBackgroundError(backgroundError);
+
+  await expect(
+    service.invoke({
+      runId: "run-bookkeeping-recovery",
+      sessionId: "session-bookkeeping-recovery",
+      skillId: "codex-code-task",
+      input: "complete before local bookkeeping finishes",
+      executionMode: "async",
+      toolName: "submit_codex_agent_call",
+      sourceToolCallId: "tool-call-bookkeeping-recovery",
+    }),
+  ).resolves.toEqual({
+    status: "accepted",
+    taskId: "huan-task-bookkeeping-recovery",
+    state: "unknown",
+  });
+  await service.waitForIdle();
+  expect(
+    taskService.getStatus(
+      "session-bookkeeping-recovery",
+      "huan-task-bookkeeping-recovery",
+    ),
+  ).toMatchObject({
+    status: "found",
+    state: "completed",
+    payload: {
+      artifacts: [{ id: "artifact-recovered", text: "completed remotely" }],
+    },
+  });
+  expect(terminal).toHaveBeenCalledTimes(1);
+  expect(backgroundError).toHaveBeenCalledWith(
+    bookkeepingFailure,
+    expect.objectContaining({ taskId: "a2a-task-01" }),
+  );
+  const released = quotaService.acquire("session-bookkeeping-recovery", "a2a");
+  expect(released).toMatchObject({ status: "acquired" });
+  if (released.status === "acquired") {
+    released.lease.release();
+  }
+
+  await service.close();
+});
+
+test("fails a blocking call closed when its accepted remote Task ID already belongs to another call", async () => {
+  const quotaService = new SessionTaskQuotaService({
+    limits: { a2a: 2, "async-tool": 3 },
+  });
+  const taskService = new AsyncToolTaskService({
+    quotaService,
+    taskKinds: [AGENT_CALL_TASK_KIND_DEFINITION],
+    createTaskId: () => "huan-task-first",
+  });
+  const transport: AgentCallTransport = {
+    discoverCapability: async (skillId) => ({ id: skillId, name: skillId }),
+    submitTask: async () => acceptedTask("submitted"),
+    async *watchTask(_taskId, { signal }) {
+      await new Promise<void>((resolve) => {
+        if (signal.aborted) {
+          resolve();
+          return;
+        }
+        signal.addEventListener("abort", () => resolve(), { once: true });
+      });
+    },
+    continueTask: rejectUnexpectedContinuation,
+    cancelTask: async (taskId) => task("canceled", { taskId }),
+  };
+  const ids = ["huan-task-first", "huan-task-blocking-local-failure"];
+  const service = new AgentCallService({
+    transport,
+    taskService,
+    quotaService,
+    createId: () => ids.shift()!,
+  });
+
+  await expect(
+    service.invoke({
+      runId: "run-first",
+      sessionId: "session-local-failure",
+      skillId: "codex-code-task",
+      input: "occupy the remote task mapping",
+      executionMode: "async",
+      toolName: "submit_codex_agent_call",
+      sourceToolCallId: "tool-call-first",
+    }),
+  ).resolves.toMatchObject({ status: "accepted" });
+
+  await expect(
+    service.invoke({
+      runId: "run-blocking-local-failure",
+      sessionId: "session-local-failure",
+      skillId: "codex-code-task",
+      input: "reuse the remote task ID",
+      executionMode: "blocking",
+      toolName: "submit_codex_agent_call",
+      sourceToolCallId: "tool-call-blocking-local-failure",
+    }),
+  ).resolves.toEqual({
+    status: "error",
+    error: "remote-task-conflict",
+    retrySafe: false,
+  });
+  expect(
+    taskService.getStatus(
+      "session-local-failure",
+      "huan-task-blocking-local-failure",
+    ),
+  ).toEqual({
+    status: "not-found",
+    taskId: "huan-task-blocking-local-failure",
+  });
+  const remaining = quotaService.acquire("session-local-failure", "a2a");
+  expect(remaining).toMatchObject({ status: "acquired" });
+  if (remaining.status === "acquired") {
+    remaining.lease.release();
+  }
 
   await service.close();
 });
@@ -646,7 +1073,7 @@ test("interrupts a paused blocking AgentCall without creating a common Task", as
   );
   const transport: AgentCallTransport = {
     discoverCapability: async (skillId) => ({ id: skillId, name: skillId }),
-    submitTask: async () => task("submitted"),
+    submitTask: async () => acceptedTask("submitted"),
     async *watchTask() {
       yield task("input-required", {
         statusMessage: "approval required",
@@ -677,6 +1104,8 @@ test("interrupts a paused blocking AgentCall without creating a common Task", as
     skillId: "codex-code-task",
     input: "block until input",
     executionMode: "blocking",
+    toolName: "submit_codex_agent_call",
+    sourceToolCallId: "tool-call-blocking-input",
   });
 
   expect(result).toEqual({

@@ -83,7 +83,16 @@ const orchestrationFileSchema = z
   .object({
     version: z.literal(1),
     defaultAgentId: stableIdSchema,
-    agentCallPolicy: z
+    a2aTaskPolicy: z
+      .object({
+        maxActiveTasksPerSession: z
+          .number()
+          .int()
+          .min(1)
+          .max(Number.MAX_SAFE_INTEGER),
+      })
+      .strict(),
+    asyncToolTaskPolicy: z
       .object({
         maxActiveTasksPerSession: z
           .number()
@@ -112,7 +121,7 @@ const serverConfigReferenceSchema = z
   })
   .strict();
 
-type ServerMainAgentStaticConfig = {
+export type ServerMainAgentStaticConfig = {
   provider: "deepseek";
   modelId: string;
   baseURL: string;
@@ -139,7 +148,10 @@ type ServerAgentConfig = {
 
 type ServerOrchestrationStaticConfig = {
   defaultAgentId: string;
-  agentCallPolicy: {
+  a2aTaskPolicy: {
+    maxActiveTasksPerSession: number;
+  };
+  asyncToolTaskPolicy: {
     maxActiveTasksPerSession: number;
   };
 };
@@ -198,6 +210,19 @@ export type ServerLocalUserConfig = {
   };
   channels: ServerChannelConfig[];
   agents: ServerAgentConfig[];
+};
+
+/**
+ * MainAgent 真正接线时使用的凭证已解析配置。
+ *
+ * 调用方必须先取得并校验 `HuanLinkServerStaticConfig`；本函数只从该快照
+ * 所声明的环境变量读取模型密钥，不会重新扫描或合并配置树。
+ */
+export type ServerMainAgentRuntimeConfig = {
+  provider: "deepseek";
+  modelId: string;
+  baseURL: string;
+  apiKey: string;
 };
 
 export type LoadServerLocalUserConfigInput = {
@@ -324,6 +349,27 @@ export async function loadHuanLinkServerStaticConfig(
       channels: [...sources.channels],
       agents: [...sources.agents],
     },
+  };
+}
+
+/**
+ * 从已经校验的正式静态配置解析 MainAgent 的唯一运行时秘密。
+ * 这让 Channel-only 配置加载保持无模型密钥，同时避免正式组装时二次读取配置树。
+ */
+export function resolveServerMainAgentRuntimeConfig(
+  config: HuanLinkServerStaticConfig,
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): ServerMainAgentRuntimeConfig {
+  return {
+    provider: config.mainAgent.provider,
+    modelId: config.mainAgent.modelId,
+    baseURL: config.mainAgent.baseURL,
+    apiKey: requireEnvironmentValue(
+      env,
+      config.mainAgent.apiKeyEnv,
+      config.sources.mainAgent,
+      "apiKeyEnv",
+    ),
   };
 }
 
@@ -549,9 +595,13 @@ function copyOrchestrationConfig(
 ): ServerOrchestrationStaticConfig {
   return {
     defaultAgentId: orchestration.defaultAgentId,
-    agentCallPolicy: {
+    a2aTaskPolicy: {
       maxActiveTasksPerSession:
-        orchestration.agentCallPolicy.maxActiveTasksPerSession,
+        orchestration.a2aTaskPolicy.maxActiveTasksPerSession,
+    },
+    asyncToolTaskPolicy: {
+      maxActiveTasksPerSession:
+        orchestration.asyncToolTaskPolicy.maxActiveTasksPerSession,
     },
   };
 }

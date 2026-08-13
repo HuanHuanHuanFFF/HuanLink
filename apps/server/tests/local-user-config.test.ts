@@ -17,6 +17,7 @@ import {
   loadServerChannelRuntimeConfig,
   loadServerLocalUserConfig,
   loadHuanLinkServerStaticConfig,
+  resolveServerMainAgentRuntimeConfig,
 } from "../src/local-user-config.js";
 
 const API_KEY = "main-agent-secret";
@@ -157,7 +158,8 @@ describe("loadServerLocalUserConfig", () => {
       agents: [{ agentId: "codex-local", transport: "a2a", enabled: true }],
       orchestration: {
         defaultAgentId: "codex-local",
-        agentCallPolicy: { maxActiveTasksPerSession: 2 },
+        a2aTaskPolicy: { maxActiveTasksPerSession: 2 },
+        asyncToolTaskPolicy: { maxActiveTasksPerSession: 3 },
       },
       sources: {
         orchestration: "server/orchestration.json",
@@ -165,6 +167,35 @@ describe("loadServerLocalUserConfig", () => {
     });
     expect(config.mainAgent).not.toHaveProperty("apiKey");
     expect(config.channels[0]).not.toHaveProperty("accessToken");
+  });
+
+  test("resolves the MainAgent key only from an already validated static snapshot", async () => {
+    await writeValidServerConfig(tempRoot);
+    const staticConfig = await loadHuanLinkServerStaticConfig({
+      configRoot: tempRoot,
+    });
+
+    expect(
+      resolveServerMainAgentRuntimeConfig(staticConfig, {
+        DEEPSEEK_API_KEY: "runtime-only-key",
+      }),
+    ).toEqual({
+      provider: "deepseek",
+      modelId: "deepseek-v4-flash",
+      baseURL: "https://api.deepseek.com/beta",
+      apiKey: "runtime-only-key",
+    });
+  });
+
+  test("reports the declared MainAgent source when late key resolution fails", async () => {
+    await writeValidServerConfig(tempRoot);
+    const staticConfig = await loadHuanLinkServerStaticConfig({
+      configRoot: tempRoot,
+    });
+
+    expect(() => resolveServerMainAgentRuntimeConfig(staticConfig, {})).toThrow(
+      /server\/main-agent\.json.*apiKeyEnv/,
+    );
   });
 
   test.each([
@@ -281,18 +312,26 @@ describe("loadServerLocalUserConfig", () => {
     },
   );
 
-  test.each([undefined, 0, 1.5, Number.MAX_SAFE_INTEGER + 1])(
-    "requires maxActiveTasksPerSession to be a safe positive integer (%s)",
-    async (maxActiveTasksPerSession) => {
+  test.each([
+    ["a2aTaskPolicy", undefined],
+    ["a2aTaskPolicy", 0],
+    ["a2aTaskPolicy", 1.5],
+    ["a2aTaskPolicy", Number.MAX_SAFE_INTEGER + 1],
+    ["asyncToolTaskPolicy", undefined],
+    ["asyncToolTaskPolicy", 0],
+    ["asyncToolTaskPolicy", 1.5],
+    ["asyncToolTaskPolicy", Number.MAX_SAFE_INTEGER + 1],
+  ])(
+    "requires %s.maxActiveTasksPerSession to be a safe positive integer (%s)",
+    async (policyName, maxActiveTasksPerSession) => {
       await writeValidServerConfig(tempRoot);
-      const agentCallPolicy =
+      const policy =
         maxActiveTasksPerSession === undefined
           ? {}
           : { maxActiveTasksPerSession };
       await writeJson(path.join(tempRoot, "server", "orchestration.json"), {
-        version: 1,
-        defaultAgentId: "codex-local",
-        agentCallPolicy,
+        ...orchestration,
+        [policyName]: policy,
       });
 
       await expect(
@@ -302,6 +341,21 @@ describe("loadServerLocalUserConfig", () => {
       );
     },
   );
+
+  test("rejects the removed agentCallPolicy alias", async () => {
+    await writeValidServerConfig(tempRoot);
+    await writeJson(path.join(tempRoot, "server", "orchestration.json"), {
+      version: 1,
+      defaultAgentId: "codex-local",
+      a2aTaskPolicy: { maxActiveTasksPerSession: 2 },
+      agentCallPolicy: { maxActiveTasksPerSession: 2 },
+      asyncToolTaskPolicy: { maxActiveTasksPerSession: 3 },
+    });
+
+    await expect(
+      loadHuanLinkServerStaticConfig({ configRoot: tempRoot }),
+    ).rejects.toThrow(/server\/orchestration\.json.*root/);
+  });
 
   test("loads a Channel-only Server configuration without MainAgent or external Agents", async () => {
     await writeValidServerConfig(tempRoot, {
@@ -1187,8 +1241,11 @@ const a2aAgent = {
 const orchestration = {
   version: 1,
   defaultAgentId: "codex-local",
-  agentCallPolicy: {
+  a2aTaskPolicy: {
     maxActiveTasksPerSession: 2,
+  },
+  asyncToolTaskPolicy: {
+    maxActiveTasksPerSession: 3,
   },
 };
 

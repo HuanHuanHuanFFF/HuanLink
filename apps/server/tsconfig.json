@@ -4,7 +4,10 @@
     "noEmit": true,
     "baseUrl": ".",
     "paths": {
-      "@huanlink/core": ["../../packages/core/src/index.ts"]
+      "@huanlink/core": ["../../packages/core/src/index.ts"],
+      "@huanlink/integration-a2a-client": [
+        "../../packages/integrations/a2a-client/src/index.ts"
+      ]
     }
   },
   "include": ["src/**/*.ts", "tests/**/*.ts"]

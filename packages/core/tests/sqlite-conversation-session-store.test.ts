@@ -214,7 +214,7 @@ describe("SqliteConversationSessionStore", () => {
     reopened.close();
   });
 
-  test("reads a persisted Tool Call directly by Session, run, and SDK Call ID after reopening", () => {
+  test("reads a persisted Tool Call location directly by Session, run, and SDK Call ID after reopening", () => {
     const directory = mkdtempSync(join(tmpdir(), "huanlink-sqlite-store-"));
     temporaryDirectories.push(directory);
     const databasePath = join(directory, "conversation.sqlite");
@@ -232,11 +232,14 @@ describe("SqliteConversationSessionStore", () => {
     expect(
       reopened.getAgentToolCall("session-a", "run-lookup", "call-lookup"),
     ).toEqual({
-      type: "agent_tool_call",
-      runId: "run-lookup",
-      toolCallId: "call-lookup",
-      toolName: "submit_codex_agent_call",
-      arguments: { task: "inspect status" },
+      entryIndex: 2048,
+      entry: {
+        type: "agent_tool_call",
+        runId: "run-lookup",
+        toolCallId: "call-lookup",
+        toolName: "submit_codex_agent_call",
+        arguments: { task: "inspect status" },
+      },
     });
     expect(
       reopened.getAgentToolCall("session-a", "run-lookup", "call-missing"),

@@ -2,11 +2,13 @@ import { describe, expect, test, vi } from "vitest";
 
 import {
   AsyncToolTaskService,
+  SessionTaskQuotaService,
   type AsyncToolTaskKindDefinition,
 } from "../src/index.js";
 
 const fakeKind: AsyncToolTaskKindDefinition = {
   kind: "fake-delayed-tool",
+  quotaPool: "async-tool",
   validatePayload: (value) => {
     if (
       typeof value !== "object" ||
@@ -30,6 +32,7 @@ const otherFakeKind: AsyncToolTaskKindDefinition = {
 
 const structuredFakeKind: AsyncToolTaskKindDefinition = {
   kind: "structured-fake-delayed-tool",
+  quotaPool: "async-tool",
   validatePayload: (value) => {
     if (
       typeof value !== "object" ||
@@ -46,6 +49,104 @@ const structuredFakeKind: AsyncToolTaskKindDefinition = {
 };
 
 describe("AsyncToolTaskService", () => {
+  test("exposes the shared Task quota service for blocking callers", () => {
+    const quotaService = new SessionTaskQuotaService({
+      limits: { a2a: 2, "async-tool": 3 },
+    });
+    const service = new AsyncToolTaskService({
+      quotaService,
+      taskKinds: [fakeKind],
+    });
+
+    expect(service.taskQuotaService).toBe(quotaService);
+  });
+
+  test("uses the Task kind quota pool without double-counting another pool", () => {
+    const a2aKind: AsyncToolTaskKindDefinition = {
+      ...fakeKind,
+      kind: "fake-a2a",
+      quotaPool: "a2a",
+    };
+    const service = new AsyncToolTaskService({
+      quotaService: quotaService({ a2a: 1, "async-tool": 1 }),
+      taskKinds: [fakeKind, a2aKind],
+      createTaskId: (() => {
+        const taskIds = ["async-task", "a2a-task"];
+        return () => taskIds.shift()!;
+      })(),
+    });
+    const request = {
+      sessionId: "session-a",
+      sourceRunId: "run-a",
+      toolName: "start_work",
+      payload: { label: "first" },
+    } as const;
+
+    expect(
+      service.reserve({
+        ...request,
+        sourceToolCallId: "async-call",
+        kind: fakeKind.kind,
+      }),
+    ).toMatchObject({ status: "reserved", task: { taskId: "async-task" } });
+    expect(
+      service.reserve({
+        ...request,
+        sourceToolCallId: "a2a-call",
+        kind: a2aKind.kind,
+      }),
+    ).toMatchObject({ status: "reserved", task: { taskId: "a2a-task" } });
+    expect(
+      service.reserve({
+        ...request,
+        sourceToolCallId: "second-async-call",
+        kind: fakeKind.kind,
+      }),
+    ).toEqual({
+      status: "limit-reached",
+      quotaPool: "async-tool",
+      maxActiveTasksPerSession: 1,
+    });
+  });
+
+  test("adopts an accepted Task and takes quota ownership from a blocking caller", () => {
+    const quotas = quotaService({ a2a: 1, "async-tool": 1 });
+    const service = new AsyncToolTaskService({
+      quotaService: quotas,
+      taskKinds: [fakeKind],
+    });
+    const acquired = quotas.acquire("session-a", "async-tool");
+    if (acquired.status !== "acquired") {
+      throw new Error("test setup must acquire a quota slot");
+    }
+
+    const adopted = service.adoptAcceptedTask({
+      taskId: "task-adopted",
+      sessionId: "session-a",
+      sourceRunId: "run-a",
+      sourceToolCallId: "sdk-call-a",
+      toolName: "start_fake_delayed_work",
+      kind: fakeKind.kind,
+      payload: { label: "first" },
+      state: "unknown",
+      quotaLease: acquired.lease,
+    });
+    acquired.lease.release();
+
+    expect(adopted).toMatchObject({
+      status: "adopted",
+      task: { taskId: "task-adopted", state: "unknown" },
+    });
+    expect(quotas.acquire("session-a", "async-tool")).toMatchObject({
+      status: "limit-reached",
+    });
+
+    service.updateAccepted("session-a", "task-adopted", {
+      state: "completed",
+    });
+    expect(quotas.acquire("session-a", "async-tool").status).toBe("acquired");
+  });
+
   test("reserves a HuanLink task and scopes it to its Session", () => {
     const service = new AsyncToolTaskService({
       maxActiveTasksPerSession: 2,
@@ -115,7 +216,11 @@ describe("AsyncToolTaskService", () => {
     ).toMatchObject({ status: "reserved", task: { taskId: "task-2" } });
     expect(
       service.reserve({ ...first, sourceToolCallId: "sdk-call-c" }),
-    ).toEqual({ status: "limit-reached", maxActiveTasksPerSession: 2 });
+    ).toEqual({
+      status: "limit-reached",
+      quotaPool: "async-tool",
+      maxActiveTasksPerSession: 2,
+    });
 
     expect(
       service.reserve({
@@ -326,6 +431,7 @@ describe("AsyncToolTaskService", () => {
   test("uses the kind public projection instead of exposing private task data", () => {
     const privateKind: AsyncToolTaskKindDefinition = {
       kind: "private-delayed-tool",
+      quotaPool: "async-tool",
       validatePayload: () => ({
         label: "safe label",
         a2aTaskId: "a2a-private",
@@ -369,6 +475,7 @@ describe("AsyncToolTaskService", () => {
   test("rejects internal identifier fields even if a kind public projection includes one", () => {
     const unsafeKind: AsyncToolTaskKindDefinition = {
       kind: "unsafe-public-tool",
+      quotaPool: "async-tool",
       validatePayload: () => ({ label: "safe" }),
       projectPublicStatus: ({ payload }) => ({
         payload: { ...payload, nested: { sdkToolCallId: "sdk-private" } },
@@ -564,6 +671,7 @@ describe("AsyncToolTaskService", () => {
     });
     expect(nested).toEqual({
       status: "limit-reached",
+      quotaPool: "async-tool",
       maxActiveTasksPerSession: 1,
     });
   });
@@ -588,7 +696,11 @@ describe("AsyncToolTaskService", () => {
     service.accept("session-a", "task-1", { state: "unknown" });
     expect(
       service.reserve({ ...request, sourceToolCallId: "sdk-call-b" }),
-    ).toEqual({ status: "limit-reached", maxActiveTasksPerSession: 1 });
+    ).toEqual({
+      status: "limit-reached",
+      quotaPool: "async-tool",
+      maxActiveTasksPerSession: 1,
+    });
 
     service.updateAccepted("session-a", "task-1", { state: "completed" });
     expect(
@@ -677,6 +789,7 @@ describe("AsyncToolTaskService", () => {
   test("rejects a kind payload that is not lossless JSON", () => {
     const invalidKind: AsyncToolTaskKindDefinition = {
       kind: "invalid-json-tool",
+      quotaPool: "async-tool",
       validatePayload: () =>
         ({ value: Number.NaN }) as unknown as ReturnType<
           AsyncToolTaskKindDefinition["validatePayload"]
@@ -705,3 +818,9 @@ describe("AsyncToolTaskService", () => {
     });
   });
 });
+
+function quotaService(
+  limits: ConstructorParameters<typeof SessionTaskQuotaService>[0]["limits"],
+): SessionTaskQuotaService {
+  return new SessionTaskQuotaService({ limits });
+}

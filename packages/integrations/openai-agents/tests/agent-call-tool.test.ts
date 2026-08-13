@@ -244,6 +244,59 @@ describe("createCodexAgentCallTool", () => {
     });
   });
 
+  test("returns a queryable HuanLink task when blocking dispatch becomes uncertain", async () => {
+    const invoke = vi.fn<AgentCallInvoker["invoke"]>(async () => ({
+      status: "blocking-uncertain",
+      executionMode: "blocking",
+      taskId: "huanlink-task-blocking-uncertain",
+      state: "unknown",
+      retrySafe: false,
+    }));
+    const logger = new RecordingRuntimeLogger();
+    const tool = createCodexAgentCallTool({ invoker: { invoke }, logger });
+    const context = new RunContext<OpenAiAgentsRunContext>({
+      runId: "run-tool-blocking-uncertain",
+      sessionId: "session-tool-blocking-uncertain",
+      trigger: "user",
+    });
+    const argumentsJson = JSON.stringify({
+      task: delegatedTask,
+      executionMode: "blocking",
+    });
+
+    const output = await tool.invoke(
+      context,
+      argumentsJson,
+      toolCallDetails("tool-call-blocking-uncertain", argumentsJson),
+    );
+
+    expect(JSON.parse(String(output))).toEqual({
+      status: "blocking-uncertain",
+      executionMode: "blocking",
+      taskId: "huanlink-task-blocking-uncertain",
+      state: "unknown",
+      retrySafe: false,
+    });
+    expect(invoke).toHaveBeenCalledWith({
+      runId: "run-tool-blocking-uncertain",
+      sessionId: "session-tool-blocking-uncertain",
+      contextId: "session-tool-blocking-uncertain",
+      skillId: "codex-code-task",
+      toolName: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
+      input: delegatedTask,
+      executionMode: "blocking",
+      sourceToolCallId: "tool-call-blocking-uncertain",
+    });
+    expect(logger.entries.at(-1)?.fields).toEqual({
+      runId: "run-tool-blocking-uncertain",
+      sessionId: "session-tool-blocking-uncertain",
+      toolName: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
+      status: "blocking-uncertain",
+      executionMode: "blocking",
+      state: "unknown",
+    });
+  });
+
   test("returns a structured task limit error as a normal Tool Result", async () => {
     const limitResult = {
       status: "error" as const,

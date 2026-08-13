@@ -128,9 +128,12 @@ describe("MainAgent Tool Session history integration", () => {
     const submitTask = vi.fn(async () => {
       submittedTaskNumber += 1;
       return {
-        taskId: `a2a-task-limit-${submittedTaskNumber}`,
-        state: "submitted" as const,
-        artifacts: [],
+        outcome: "accepted" as const,
+        snapshot: {
+          taskId: `a2a-task-limit-${submittedTaskNumber}`,
+          state: "submitted" as const,
+          artifacts: [],
+        },
       };
     });
     const transport: AgentCallTransport = {
