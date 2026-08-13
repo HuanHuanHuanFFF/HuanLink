@@ -273,7 +273,8 @@ B02 完成测试与压力审查后报告；不得顺手实现队列、watermark 
 - B04-C：将配置字段从 `agentCallPolicy` 无兼容迁移为 `a2aTaskPolicy` 与 `asyncToolTaskPolicy`，不保留旧别名；Server 从唯一配置树分别注入默认上限 `2` 和 `3`。
 - B04-C：将准入计数改为按 Task 类别选择独立名额池。AgentCall 的 `async | blocking` 都只使用 A2A 池；非 A2A 的普通异步 Tool 只使用普通异步 Tool 池；异步 A2A 不双重计数。
 - B04-C：让 Store 的来源 Tool Call 精确查询同时返回稳定 `entryIndex`；re-entry 只比较该位置与 Context Window 的 `throughEntryIndex`。来源位置位于游标之前时补入一次，否则依赖 Window 的“包含游标后全部条目”不变量直接使用，禁止为判断来源是否存在而遍历整个窗口。
-- B04-C：将 A2A 派发结果显式区分为 `not_dispatched | accepted | dispatch_uncertain`。只有本地能够证明没有派发时才释放 Task 并允许立即失败；请求已经交给远端但响应丢失、解码失败或无法确认时保留 HuanLink Task 为 `accepted + unknown`，占用名额、禁止自动重试并等待后续对账。
+- B04-C：将 A2A 派发结果显式区分为 `not-dispatched | accepted | dispatch-uncertain`。只有本地能够证明没有派发时才释放 Task 并允许立即失败；请求已经交给远端但响应丢失、解码失败或无法确认时保留 HuanLink Task 为 `accepted + unknown`，占用名额、禁止自动重试并等待后续对账。
+- B04-C：`blocking` 正常完成、受理前失败和 `input-required | auth-required` 仍保持原合同；仅当请求已进入远端派发但无法确认结果时，例外升级为可查询的 `unknown` Task，返回 `{ status: "blocking-uncertain", executionMode: "blocking", taskId, state: "unknown", retrySafe: false }`。该 Task 继续占用 A2A 名额，不自动重试，后续按普通 Task 对账与回流。
 - 保持当前单个显式 Codex Agent 目标；不实现多个 Agent 的动态路由。
 - 从正式配置构造 DeepSeek MainAgent model binding，只在真正接线时解析 API Key。
 - 在 Channel 启动前验证 A2A origin 可发现、Agent Card 可读取、目标 skill 可用。
@@ -291,7 +292,7 @@ B02 完成测试与压力审查后报告；不得顺手实现队列、watermark 
 - Tool 不存在、参数非法或执行请求未完成构造时，必须在调用任何外部 Handler/Transport 前于当前 Tool 调用内立即失败；只有外部已经受理的 Task 才能返回 `accepted`，其后观察到的错误终态按同 Session 顺序 re-entry。
 - 并发提交不能越过各自上限；异步 A2A 只占 A2A 池，外部 Agent 内部子线程不影响计数。
 - 普通同步 Tool 不产生 Task；Fake 非 A2A 延迟 Tool 与 AgentCall 使用同一 `taskId`、查询和限额合同。
-- `blocking` AgentCall 直接返回最终 Result，不返回 `accepted`、不进入 `get_task_status` 工作流，也不在完成后产生第二次 re-entry。
+- `blocking` AgentCall 正常路径直接返回最终 Result，不返回 `accepted`、不进入 `get_task_status` 工作流，也不在完成后产生第二次 re-entry；只有 `dispatch_uncertain` 异常路径按已确认规则升级为可查询的 `unknown` Task。
 - 提交、查询和继续的模型可见输入输出不包含 SDK `toolCallId` 或 A2A `taskId`；使用这些内部 ID 查询应返回 `not-found`。
 - 对不支持继续的 Task，`continue_task` 稳定返回 `{ status: "unsupported", taskId, operation: "continue" }`，不伪装成 `not-found` 或模糊状态错误。
 - 来源 Tool Call 即使位于 Context Window 游标之前，终态 re-entry 仍能按复合键定向取回精确原指令，并同时读取轮到执行时的最新上下文；是否补入只由来源 `entryIndex` 与压缩游标决定，不扫描 Window。来源位于游标之前时只补入一次并明确标为来源 Call，否则不重复附加。
@@ -309,6 +310,15 @@ B02 完成测试与压力审查后报告；不得顺手实现队列、watermark 
 B04 只建立进程内通用 Task。Task SQLite 表与重开语义按 B05-A 实施；重启后自动 `GetTask`、重建 watcher、重投递或恢复 re-entry 仍不在本计划内。
 
 普通异步 Tool 的生产接入属于后续独立计划；B05-A 只持久化通用 Task 事实与提供受限的跨重启查询，不自动恢复执行。
+
+### B04-C 实施结果（2026-08-13）
+
+- 已新增独立的 Session Task 配额服务，并由唯一组合根按配置创建 `a2a=2`、`async-tool=3` 两个名额池；AgentCall 的 async 与 blocking 共用 A2A 池，普通异步 Task 使用独立池。
+- A2A 派发已使用 `not-dispatched | accepted | dispatch-uncertain` 三态。受理前失败立即释放；无法确认的 async 调用保留 `accepted + unknown`；blocking 仅在派发不确定时升级为可查询的 `blocking-uncertain` Task，并按来源去重，禁止二次远端派发。
+- 远端 Task ID 冲突会 fail-closed 为 `remote-task-conflict`；远端已受理后的本地记账失败会保留私有 A2A 关联，后续终态仍能更新通用 Task、释放配额并触发一次 re-entry。
+- Store 的来源 Tool Call 查询已返回稳定 `entryIndex`；re-entry 仅比较该位置与摘要游标，不遍历 Context Window。
+- 已新增不接管进程入口的可配置 Server 组合根，完成模型、A2A 预检、Phase3、Channel、reply 与 OneBot Tool 的组装；危险 OneBot Tool 只对来源 Channel 已显式开启无保护开关的外部 Session 可见。
+- 当前仍未修改正式 `main.ts`，未接 Task SQLite 持久化，也未执行真实 QQ/Codex smoke；这些边界分别留给 B05 与 B06。
 
 ### B04-B 实施结果（2026-08-12）
 

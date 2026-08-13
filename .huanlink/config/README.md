@@ -25,7 +25,7 @@
 
 Server 正式入口已经只从本配置树装配 Channel；旧的单群号、命令前缀和 OneBot 地址环境变量入口不再生效。环境变量只承载 JSON 明确引用的秘密值。
 
-仓库默认 Server 配置还显式引用 `./server/orchestration.json`。B01 的总 Runtime 静态加载器要求 `mainAgent`、`orchestration` 和 `defaultAgentId` 全部存在；默认 Agent 必须已启用且使用 A2A。它校验 MainAgent 的 `apiKeyEnv` 名称以及目标 Agent 的 `origin`、`skillId`，但不读取任何环境变量中的秘密；`agentCallPolicy.maxActiveTasksPerSession` 必须是正安全整数，仓库默认值为 `2`。
+仓库默认 Server 配置还显式引用 `./server/orchestration.json`。B01 的总 Runtime 静态加载器要求 `mainAgent`、`orchestration` 和 `defaultAgentId` 全部存在；默认 Agent 必须已启用且使用 A2A。它校验 MainAgent 的 `apiKeyEnv` 名称以及目标 Agent 的 `origin`、`skillId`，但不读取任何环境变量中的秘密。`a2aTaskPolicy.maxActiveTasksPerSession` 与 `asyncToolTaskPolicy.maxActiveTasksPerSession` 都必须是正安全整数：前者限制同一 Session 的 A2A 异步与 blocking 调用总数，默认值为 `2`；后者独立限制普通非 A2A 异步 Tool Task，默认值为 `3`。异步 A2A Task 只占用 A2A 配额，不会重复占用普通异步 Tool 配额。
 
 当前 Channel-only 入口仍只解析实际建连所需的 Channel Token；它在 B05 前可以不声明 `orchestration`。即使声明了 MainAgent，也只校验 `apiKeyEnv` 名称而不读取对应 API Key。MainAgent 凭证会在 Agent Runtime 正式接线时再解析，因此缺少模型密钥不会阻塞纯 Channel 启动。
 
