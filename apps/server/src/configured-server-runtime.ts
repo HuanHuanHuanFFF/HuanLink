@@ -151,6 +151,7 @@ export async function createConfiguredServerRuntime(
       return createPhase3HuanLinkRuntime({
         codexA2aOrigin: defaultAgent.origin,
         codexSkillId: defaultAgent.skillId,
+        agentId: defaultAgent.agentId,
         transport,
         taskService,
         sessionStore,

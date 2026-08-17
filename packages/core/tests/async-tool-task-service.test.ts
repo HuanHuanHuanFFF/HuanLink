@@ -1,9 +1,13 @@
 import { describe, expect, test, vi } from "vitest";
 
 import {
+  InMemoryAsyncToolTaskStore,
   AsyncToolTaskService,
   SessionTaskQuotaService,
+  type AsyncToolTask,
   type AsyncToolTaskKindDefinition,
+  type AsyncToolTaskStore,
+  type AsyncToolTaskStoreReplaceOptions,
 } from "../src/index.js";
 
 const fakeKind: AsyncToolTaskKindDefinition = {
@@ -48,7 +52,302 @@ const structuredFakeKind: AsyncToolTaskKindDefinition = {
   projectPublicStatus: ({ payload }) => ({ payload }),
 };
 
+function reserveRequest(
+  overrides: Partial<{
+    sessionId: string;
+    sourceRunId: string;
+    sourceToolCallId: string;
+    toolName: string;
+    kind: string;
+    payload: { label: string };
+  }> = {},
+) {
+  return {
+    sessionId: "session-a",
+    sourceRunId: "run-a",
+    sourceToolCallId: "call-1",
+    toolName: "start_fake_delayed_work",
+    kind: fakeKind.kind,
+    payload: { label: "first" },
+    ...overrides,
+  };
+}
+
+function taskRecord(
+  overrides: Partial<AsyncToolTask> &
+    Pick<AsyncToolTask, "taskId" | "sourceToolCallId" | "state">,
+): AsyncToolTask {
+  return {
+    taskId: overrides.taskId,
+    kind: overrides.kind ?? fakeKind.kind,
+    quotaPool: overrides.quotaPool ?? fakeKind.quotaPool,
+    sessionId: overrides.sessionId ?? "session-a",
+    sourceRunId: overrides.sourceRunId ?? "run-a",
+    sourceToolCallId: overrides.sourceToolCallId,
+    toolName: overrides.toolName ?? "start_fake_delayed_work",
+    state: overrides.state,
+    payload: overrides.payload ?? { label: "persisted" },
+    createdAt: overrides.createdAt ?? "2026-08-13T00:00:00.000Z",
+    updatedAt: overrides.updatedAt ?? "2026-08-13T00:00:00.000Z",
+    ...(overrides.statusMessage === undefined
+      ? {}
+      : { statusMessage: overrides.statusMessage }),
+  };
+}
+
 describe("AsyncToolTaskService", () => {
+  test("recovers every durable state without notifying and only restores non-terminal quota", () => {
+    const states = [
+      "submitting",
+      "unknown",
+      "submitted",
+      "working",
+      "input-required",
+      "auth-required",
+      "completed",
+      "failed",
+      "canceled",
+      "rejected",
+    ] as const;
+    const store = new InMemoryAsyncToolTaskStore();
+    for (const [index, state] of states.entries()) {
+      store.insert(
+        taskRecord({
+          taskId: `task-${state}`,
+          sourceToolCallId: `call-${index}`,
+          state,
+        }),
+      );
+    }
+    const quotas = quotaService({ a2a: 1, "async-tool": 1 });
+    const service = new AsyncToolTaskService({
+      store,
+      quotaService: quotas,
+      taskKinds: [fakeKind],
+      createTaskId: () => "task-new",
+      now: () => new Date("2026-08-13T01:00:00.000Z"),
+    });
+    const terminal = vi.fn();
+    const inputRequired = vi.fn();
+    service.onTerminal(terminal);
+    service.onInputRequired(inputRequired);
+
+    for (const state of states) {
+      expect(service.get("session-a", `task-${state}`)).toMatchObject(
+        ["completed", "failed", "canceled", "rejected"].includes(state)
+          ? { state }
+          : {
+              state: "unknown",
+              statusMessage: "reconciliation-required",
+              updatedAt: "2026-08-13T01:00:00.000Z",
+            },
+      );
+    }
+    expect(terminal).not.toHaveBeenCalled();
+    expect(inputRequired).not.toHaveBeenCalled();
+    expect(
+      service.reserve({
+        sessionId: "session-a",
+        sourceRunId: "run-new",
+        sourceToolCallId: "call-new",
+        toolName: "start_fake_delayed_work",
+        kind: fakeKind.kind,
+        payload: { label: "new" },
+      }),
+    ).toEqual({
+      status: "limit-reached",
+      quotaPool: "async-tool",
+      maxActiveTasksPerSession: 1,
+    });
+  });
+
+  test("restores above a lowered limit while keeping quota pools and Sessions isolated", () => {
+    const a2aKind: AsyncToolTaskKindDefinition = {
+      ...fakeKind,
+      kind: "fake-a2a",
+      quotaPool: "a2a",
+    };
+    const store = new InMemoryAsyncToolTaskStore();
+    for (let index = 0; index < 3; index += 1) {
+      store.insert(
+        taskRecord({
+          taskId: `old-${index}`,
+          sourceToolCallId: `old-call-${index}`,
+          state: "working",
+        }),
+      );
+    }
+    const service = new AsyncToolTaskService({
+      store,
+      quotaService: quotaService({ a2a: 1, "async-tool": 1 }),
+      taskKinds: [fakeKind, a2aKind],
+      createTaskId: (() => {
+        const ids = ["a2a-new", "other-session-new"];
+        return () => ids.shift()!;
+      })(),
+    });
+
+    expect(
+      service.reserve(
+        reserveRequest({ sourceToolCallId: "blocked-same-pool" }),
+      ),
+    ).toMatchObject({ status: "limit-reached", quotaPool: "async-tool" });
+    expect(
+      service.reserve(
+        reserveRequest({
+          sourceToolCallId: "allowed-a2a",
+          kind: a2aKind.kind,
+        }),
+      ),
+    ).toMatchObject({ status: "reserved", task: { taskId: "a2a-new" } });
+    expect(
+      service.reserve(
+        reserveRequest({
+          sessionId: "session-b",
+          sourceToolCallId: "allowed-other-session",
+        }),
+      ),
+    ).toMatchObject({
+      status: "reserved",
+      task: { taskId: "other-session-new" },
+    });
+  });
+
+  test("fails closed when any persisted Task kind is unavailable or its quota pool changed", () => {
+    const terminalUnknownKind = new InMemoryAsyncToolTaskStore();
+    terminalUnknownKind.insert(
+      taskRecord({
+        taskId: "terminal-unknown",
+        sourceToolCallId: "call-terminal-unknown",
+        kind: "removed-kind",
+        quotaPool: "async-tool",
+        state: "completed",
+      }),
+    );
+    expect(
+      () =>
+        new AsyncToolTaskService({
+          store: terminalUnknownKind,
+          quotaService: quotaService({ a2a: 1, "async-tool": 1 }),
+          taskKinds: [fakeKind],
+        }),
+    ).toThrow(/kind removed-kind is not registered/i);
+
+    const changedPool = new InMemoryAsyncToolTaskStore();
+    changedPool.insert(
+      taskRecord({
+        taskId: "active-wrong-pool",
+        sourceToolCallId: "call-active-wrong-pool",
+        quotaPool: "a2a",
+        state: "working",
+      }),
+    );
+    expect(
+      () =>
+        new AsyncToolTaskService({
+          store: changedPool,
+          quotaService: quotaService({ a2a: 1, "async-tool": 1 }),
+          taskKinds: [fakeKind],
+        }),
+    ).toThrow(/quota pool/i);
+  });
+
+  test("commits Store mutations before changing quota or notifying listeners", () => {
+    const store = new InMemoryAsyncToolTaskStore();
+    const service = new AsyncToolTaskService({
+      store,
+      maxActiveTasksPerSession: 1,
+      taskKinds: [fakeKind],
+      createTaskId: () => "task-1",
+    });
+    const terminal = vi.fn();
+    service.onTerminal(terminal);
+    service.reserve(reserveRequest());
+    service.accept("session-a", "task-1", { state: "working" });
+    vi.spyOn(store, "replace").mockImplementationOnce(() => {
+      throw new Error("disk full");
+    });
+
+    expect(() =>
+      service.updateAccepted("session-a", "task-1", {
+        state: "completed",
+      }),
+    ).toThrow("disk full");
+    expect(service.get("session-a", "task-1")).toMatchObject({
+      state: "working",
+    });
+    expect(terminal).not.toHaveBeenCalled();
+    expect(
+      service.reserve(reserveRequest({ sourceToolCallId: "call-2" })),
+    ).toMatchObject({
+      status: "limit-reached",
+    });
+
+    service.updateAccepted("session-a", "task-1", { state: "completed" });
+    expect(terminal).toHaveBeenCalledTimes(1);
+  });
+
+  test("keeps a persistence-uncertain overlay until a later durable update succeeds", () => {
+    const store = new InMemoryAsyncToolTaskStore();
+    const service = new AsyncToolTaskService({
+      store,
+      maxActiveTasksPerSession: 1,
+      taskKinds: [fakeKind],
+      createTaskId: () => "task-1",
+    });
+    const terminal = vi.fn();
+    service.onTerminal(terminal);
+    service.reserve(reserveRequest());
+    const privateReference = {
+      namespace: "a2a",
+      agentId: "codex-local",
+      externalTaskId: "remote-1",
+    } as const;
+    service.retainPersistenceUncertain({
+      ...reserveRequest(),
+      taskId: "task-1",
+      state: "unknown",
+      statusMessage: "persistence-warning",
+      privateReference,
+    });
+
+    expect(service.get("session-a", "task-1")).toMatchObject({
+      state: "unknown",
+      statusMessage: "persistence-warning",
+    });
+    expect(service.getStatus("session-a", "task-1")).toMatchObject({
+      status: "found",
+      state: "unknown",
+    });
+    expect(store.get("session-a", "task-1")).toMatchObject({
+      state: "submitting",
+    });
+    vi.spyOn(store, "replace").mockImplementationOnce(() => {
+      throw new Error("database remains unavailable");
+    });
+    expect(() =>
+      service.updateAccepted("session-a", "task-1", {
+        state: "completed",
+      }),
+    ).toThrow("database remains unavailable");
+    expect(service.get("session-a", "task-1")).toMatchObject({
+      state: "unknown",
+    });
+    expect(terminal).not.toHaveBeenCalled();
+    expect(
+      service.reserve(reserveRequest({ sourceToolCallId: "call-2" })),
+    ).toMatchObject({
+      status: "limit-reached",
+    });
+
+    service.updateAccepted("session-a", "task-1", { state: "completed" });
+    expect(store.get("session-a", "task-1")).toMatchObject({
+      state: "completed",
+    });
+    expect(store.getPrivateReference("task-1")).toEqual(privateReference);
+    expect(terminal).toHaveBeenCalledTimes(1);
+  });
+
   test("exposes the shared Task quota service for blocking callers", () => {
     const quotaService = new SessionTaskQuotaService({
       limits: { a2a: 2, "async-tool": 3 },
@@ -173,6 +472,7 @@ describe("AsyncToolTaskService", () => {
       task: {
         taskId: "task-1",
         kind: "fake-delayed-tool",
+        quotaPool: "async-tool",
         sessionId: "session-a",
         sourceRunId: "run-a",
         sourceToolCallId: "sdk-call-a",

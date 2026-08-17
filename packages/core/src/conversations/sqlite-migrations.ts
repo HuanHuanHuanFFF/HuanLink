@@ -63,9 +63,36 @@ CREATE TABLE conversation_tool_results (
     REFERENCES conversation_tool_calls(session_id, run_id, tool_call_id)
 );`;
 
+const SCHEMA_V3_SQL = `
+CREATE TABLE async_tool_tasks (
+  task_id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  source_run_id TEXT NOT NULL,
+  source_tool_call_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  quota_pool TEXT NOT NULL,
+  tool_name TEXT NOT NULL,
+  state TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  status_message TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (session_id, source_run_id, source_tool_call_id)
+);
+CREATE TABLE async_tool_task_private_refs (
+  task_id TEXT PRIMARY KEY REFERENCES async_tool_tasks(task_id),
+  namespace TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  external_task_id TEXT,
+  context_id TEXT,
+  metadata_json TEXT,
+  UNIQUE (namespace, agent_id, external_task_id)
+);`;
+
 const MIGRATIONS: readonly SqliteConversationMigration[] = [
   defineMigration(1, "conversation-store-v1", SCHEMA_V1_SQL),
   defineMigration(2, "conversation-store-v2", SCHEMA_V2_SQL),
+  defineMigration(3, "async-tool-task-store-v3", SCHEMA_V3_SQL),
 ];
 
 /** Applies the embedded Conversation schema atomically and only in order. */

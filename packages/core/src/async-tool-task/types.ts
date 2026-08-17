@@ -3,6 +3,7 @@ import type {
   SessionTaskQuotaLease,
   TaskQuotaPool,
 } from "../tasks/session-task-quota-service.js";
+import type { AsyncToolTaskPrivateReference } from "./async-tool-task-store.js";
 
 export const ASYNC_TOOL_TASK_STATES = [
   "submitting",
@@ -82,6 +83,8 @@ export type AsyncToolTaskKindDefinition = {
 export type AsyncToolTask = {
   readonly taskId: HuanLinkTaskId;
   readonly kind: string;
+  /** Persisted admission ownership; a registered kind may never silently change it. */
+  readonly quotaPool: TaskQuotaPool;
   readonly sessionId: SessionId;
   readonly sourceRunId: RunId;
   readonly sourceToolCallId: string;
@@ -124,6 +127,7 @@ export type AsyncToolTaskAdoptAcceptedRequest = {
   readonly state: "unknown";
   readonly quotaLease: SessionTaskQuotaLease;
   readonly statusMessage?: string;
+  readonly privateReference?: AsyncToolTaskPrivateReference;
 };
 
 export type AsyncToolTaskAdoptAcceptedResult = {
@@ -162,6 +166,20 @@ export type AsyncToolTaskAcceptedUpdate = {
   readonly state: Exclude<AsyncToolTaskState, "submitting">;
   readonly payload?: unknown;
   readonly statusMessage?: string;
+};
+
+export type AsyncToolTaskMutationOptions = {
+  readonly privateReference?: AsyncToolTaskPrivateReference;
+};
+
+export type AsyncToolTaskRetainPersistenceUncertainRequest = Omit<
+  AsyncToolTaskAdoptAcceptedRequest,
+  "quotaLease"
+> & {
+  /** Last Task fact already known by the caller when the Store is unreadable. */
+  readonly knownTask?: AsyncToolTask;
+  /** Required when no durable submitting Task already owns the quota slot. */
+  readonly quotaLease?: SessionTaskQuotaLease;
 };
 
 export type AsyncToolTaskTerminalListener = (task: AsyncToolTask) => void;

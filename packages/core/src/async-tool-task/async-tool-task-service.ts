@@ -6,6 +6,11 @@ import {
   type SessionTaskQuotaLease,
 } from "../tasks/session-task-quota-service.js";
 import type {
+  AsyncToolTaskPrivateReference,
+  AsyncToolTaskStore,
+} from "./async-tool-task-store.js";
+import { InMemoryAsyncToolTaskStore } from "./in-memory-async-tool-task-store.js";
+import type {
   AsyncToolTaskAcceptedUpdate,
   AsyncToolTaskAdoptAcceptedRequest,
   AsyncToolTaskAdoptAcceptedResult,
@@ -13,9 +18,11 @@ import type {
   AsyncToolTaskJsonValue,
   AsyncToolTaskInputRequiredListener,
   AsyncToolTaskKindDefinition,
+  AsyncToolTaskMutationOptions,
   AsyncToolTaskPayload,
   AsyncToolTaskReserveRequest,
   AsyncToolTaskReserveResult,
+  AsyncToolTaskRetainPersistenceUncertainRequest,
   AsyncToolTaskStatusQueryResult,
   AsyncToolTaskStatusReader,
   AsyncToolTaskTerminalListener,
@@ -29,6 +36,8 @@ export type AsyncToolTaskServiceOptions = {
   /** Transitional isolated-test shorthand; production composition injects quotaService. */
   readonly maxActiveTasksPerSession?: number;
   readonly taskKinds: readonly AsyncToolTaskKindDefinition[];
+  /** Durable Task fact owner. Defaults to process-local storage for isolated use. */
+  readonly store?: AsyncToolTaskStore;
   readonly createTaskId?: () => HuanLinkTaskId;
   readonly now?: () => Date;
   readonly onTerminalListenerError?: (
@@ -45,13 +54,24 @@ export class AsyncToolTaskService implements AsyncToolTaskStatusReader {
   private readonly onTerminalListenerError:
     | ((failure: AsyncToolTaskTerminalListenerError) => void)
     | undefined;
-  private readonly tasks = new Map<HuanLinkTaskId, AsyncToolTask>();
-  private readonly taskIdBySource = new Map<string, HuanLinkTaskId>();
+  private readonly store: AsyncToolTaskStore;
+  /** Accepted Tasks that could not be durably recorded; intentionally restart-volatile. */
+  private readonly persistenceUncertainByTaskId = new Map<
+    HuanLinkTaskId,
+    AsyncToolTask
+  >();
+  private readonly persistenceUncertainTaskIdBySource = new Map<
+    string,
+    HuanLinkTaskId
+  >();
+  private readonly persistenceUncertainReferenceByTaskId = new Map<
+    HuanLinkTaskId,
+    AsyncToolTaskPrivateReference
+  >();
   private readonly quotaLeaseByTaskId = new Map<
     HuanLinkTaskId,
     SessionTaskQuotaLease
   >();
-  private readonly acceptedTaskIds = new Set<HuanLinkTaskId>();
   private readonly terminalNotifiedTaskIds = new Set<HuanLinkTaskId>();
   private readonly inputRequiredNotifiedTaskIds = new Set<HuanLinkTaskId>();
   private readonly terminalListeners = new Set<AsyncToolTaskTerminalListener>();
@@ -76,9 +96,11 @@ export class AsyncToolTaskService implements AsyncToolTaskStatusReader {
         },
       });
     this.taskKinds = validateTaskKinds(options.taskKinds);
+    this.store = options.store ?? new InMemoryAsyncToolTaskStore();
     this.createTaskId = options.createTaskId ?? randomUUID;
     this.now = options.now ?? (() => new Date());
     this.onTerminalListenerError = options.onTerminalListenerError;
+    this.recoverPersistedTasks();
   }
 
   reserve(request: AsyncToolTaskReserveRequest): AsyncToolTaskReserveResult {
@@ -91,23 +113,18 @@ export class AsyncToolTaskService implements AsyncToolTaskStatusReader {
       throw new Error(`Async Tool Task kind ${request.kind} is not registered`);
     }
     const payload = clonePayload(kind.validatePayload(request.payload));
-    const sourceKey = sourceKeyFor(request);
-    const existingTaskId = this.taskIdBySource.get(sourceKey);
-    if (existingTaskId !== undefined) {
-      const existing = this.tasks.get(existingTaskId)!;
-      if (
-        existing.kind !== kind.kind ||
-        existing.toolName !== request.toolName ||
-        !isSamePayload(existing.payload, payload)
-      ) {
-        throw new Error(
-          "Async Tool Task source conflicts with an existing task request",
-        );
-      }
-      return {
-        status: "duplicate",
-        task: cloneTask(existing),
-      };
+    const existing = this.getBySource(
+      request.sessionId,
+      request.sourceRunId,
+      request.sourceToolCallId,
+    );
+    if (existing !== undefined) {
+      return this.duplicateSourceResult(
+        existing,
+        kind.kind,
+        request.toolName,
+        payload,
+      );
     }
     const quota = this.taskQuotaService.acquire(
       request.sessionId,
@@ -125,21 +142,26 @@ export class AsyncToolTaskService implements AsyncToolTaskStatusReader {
       const taskId = this.createTaskId();
       requireNonBlank(taskId, "task ID");
       const timestamp = this.now().toISOString();
-      const reentrantTaskId = this.taskIdBySource.get(sourceKey);
-      if (reentrantTaskId !== undefined) {
+      const reentrant = this.getBySource(
+        request.sessionId,
+        request.sourceRunId,
+        request.sourceToolCallId,
+      );
+      if (reentrant !== undefined) {
         return this.duplicateSourceResult(
-          this.tasks.get(reentrantTaskId)!,
+          reentrant,
           kind.kind,
           request.toolName,
           payload,
         );
       }
-      if (this.tasks.has(taskId)) {
+      if (this.store.get(request.sessionId, taskId) !== undefined) {
         throw new Error(`Async Tool Task ${taskId} already exists`);
       }
       const task: AsyncToolTask = {
         taskId,
         kind: kind.kind,
+        quotaPool: kind.quotaPool,
         sessionId: request.sessionId,
         sourceRunId: request.sourceRunId,
         sourceToolCallId: request.sourceToolCallId,
@@ -149,11 +171,18 @@ export class AsyncToolTaskService implements AsyncToolTaskStatusReader {
         createdAt: timestamp,
         updatedAt: timestamp,
       };
+      const inserted = this.store.insert(task);
+      if (inserted.status === "duplicate") {
+        return this.duplicateSourceResult(
+          inserted.task,
+          kind.kind,
+          request.toolName,
+          payload,
+        );
+      }
       ownedLease = quota.lease.transfer();
-      this.tasks.set(taskId, task);
-      this.taskIdBySource.set(sourceKey, taskId);
       this.quotaLeaseByTaskId.set(taskId, ownedLease);
-      return { status: "reserved", task: cloneTask(task) };
+      return { status: "reserved", task: cloneTask(inserted.task) };
     } catch (error) {
       ownedLease?.release();
       throw error;
@@ -187,14 +216,14 @@ export class AsyncToolTaskService implements AsyncToolTaskStatusReader {
       throw new Error("Async Tool Task statusMessage must be a string");
     }
     const payload = clonePayload(kind.validatePayload(request.payload));
-    const sourceKey = sourceKeyFor(request);
-    const existingTaskId = this.taskIdBySource.get(sourceKey);
-    const existingByTaskId = this.tasks.get(request.taskId);
-    if (existingTaskId !== undefined || existingByTaskId !== undefined) {
-      const existing =
-        existingTaskId === undefined
-          ? existingByTaskId
-          : this.tasks.get(existingTaskId);
+    const existingBySource = this.getBySource(
+      request.sessionId,
+      request.sourceRunId,
+      request.sourceToolCallId,
+    );
+    const existingByTaskId = this.get(request.sessionId, request.taskId);
+    if (existingBySource !== undefined || existingByTaskId !== undefined) {
+      const existing = existingBySource ?? existingByTaskId;
       if (
         existing === undefined ||
         existing.taskId !== request.taskId ||
@@ -216,6 +245,7 @@ export class AsyncToolTaskService implements AsyncToolTaskStatusReader {
     const task: AsyncToolTask = {
       taskId: request.taskId,
       kind: kind.kind,
+      quotaPool: kind.quotaPool,
       sessionId: request.sessionId,
       sourceRunId: request.sourceRunId,
       sourceToolCallId: request.sourceToolCallId,
@@ -230,12 +260,18 @@ export class AsyncToolTaskService implements AsyncToolTaskStatusReader {
     };
     let ownedLease: SessionTaskQuotaLease | undefined;
     try {
+      const inserted = this.store.insert(task, {
+        ...(request.privateReference === undefined
+          ? {}
+          : { privateReference: request.privateReference }),
+      });
+      if (inserted.status === "duplicate") {
+        request.quotaLease.release();
+        return { status: "duplicate", task: cloneTask(inserted.task) };
+      }
       ownedLease = request.quotaLease.transfer();
-      this.tasks.set(task.taskId, task);
-      this.taskIdBySource.set(sourceKey, task.taskId);
       this.quotaLeaseByTaskId.set(task.taskId, ownedLease);
-      this.acceptedTaskIds.add(task.taskId);
-      return { status: "adopted", task: cloneTask(task) };
+      return { status: "adopted", task: cloneTask(inserted.task) };
     } catch (error) {
       ownedLease?.release();
       throw error;
@@ -243,8 +279,13 @@ export class AsyncToolTaskService implements AsyncToolTaskStatusReader {
   }
 
   get(sessionId: string, taskId: HuanLinkTaskId): AsyncToolTask | undefined {
-    const task = this.tasks.get(taskId);
-    return task?.sessionId === sessionId ? cloneTask(task) : undefined;
+    const uncertain = this.persistenceUncertainByTaskId.get(taskId);
+    if (uncertain !== undefined) {
+      return uncertain.sessionId === sessionId
+        ? cloneTask(uncertain)
+        : undefined;
+    }
+    return this.store.get(sessionId, taskId);
   }
 
   getBySource(
@@ -255,14 +296,17 @@ export class AsyncToolTaskService implements AsyncToolTaskStatusReader {
     requireNonBlank(sessionId, "sessionId");
     requireNonBlank(sourceRunId, "sourceRunId");
     requireNonBlank(sourceToolCallId, "sourceToolCallId");
-    const taskId = this.taskIdBySource.get(
-      sourceKeyFor({ sessionId, sourceRunId, sourceToolCallId }),
-    );
-    if (taskId === undefined) {
-      return undefined;
+    const sourceKey = sourceKeyFor({
+      sessionId,
+      sourceRunId,
+      sourceToolCallId,
+    });
+    const uncertainTaskId =
+      this.persistenceUncertainTaskIdBySource.get(sourceKey);
+    if (uncertainTaskId !== undefined) {
+      return cloneTask(this.persistenceUncertainByTaskId.get(uncertainTaskId)!);
     }
-    const task = this.tasks.get(taskId);
-    return task === undefined ? undefined : cloneTask(task);
+    return this.store.getBySource(sessionId, sourceRunId, sourceToolCallId);
   }
 
   getStatus(
@@ -304,6 +348,13 @@ export class AsyncToolTaskService implements AsyncToolTaskStatusReader {
     };
   }
 
+  /** Process-local diagnostic used to preserve a non-retryable receipt. */
+  isPersistenceUncertain(sessionId: string, taskId: HuanLinkTaskId): boolean {
+    return (
+      this.persistenceUncertainByTaskId.get(taskId)?.sessionId === sessionId
+    );
+  }
+
   onTerminal(listener: AsyncToolTaskTerminalListener): () => void {
     this.terminalListeners.add(listener);
     return () => this.terminalListeners.delete(listener);
@@ -318,13 +369,14 @@ export class AsyncToolTaskService implements AsyncToolTaskStatusReader {
     sessionId: string,
     taskId: HuanLinkTaskId,
     update: AsyncToolTaskAcceptedUpdate,
+    options: AsyncToolTaskMutationOptions = {},
   ): AsyncToolTask {
     const task = this.requireTask(sessionId, taskId);
     if (task.state !== "submitting") {
       throw new Error(`Async Tool Task ${taskId} is not awaiting acceptance`);
     }
     assertAcceptedUpdate(update);
-    return this.replaceAcceptedTask(task, update, true);
+    return this.replaceAcceptedTask(task, update, options);
   }
 
   rejectBeforeAcceptance(
@@ -347,18 +399,19 @@ export class AsyncToolTaskService implements AsyncToolTaskStatusReader {
       statusMessage,
       updatedAt: this.now().toISOString(),
     };
-    this.tasks.set(taskId, rejected);
+    const stored = this.store.replace(task, rejected);
     this.releaseQuota(taskId);
-    return cloneTask(rejected);
+    return cloneTask(stored);
   }
 
   updateAccepted(
     sessionId: string,
     taskId: HuanLinkTaskId,
     update: AsyncToolTaskAcceptedUpdate,
+    options: AsyncToolTaskMutationOptions = {},
   ): AsyncToolTask {
     const task = this.requireTask(sessionId, taskId);
-    if (!this.acceptedTaskIds.has(taskId)) {
+    if (task.state === "submitting") {
       throw new Error(`Async Tool Task ${taskId} was not accepted`);
     }
     assertAcceptedUpdate(update);
@@ -377,13 +430,110 @@ export class AsyncToolTaskService implements AsyncToolTaskStatusReader {
       }
       throw new Error(`Async Tool Task ${taskId} terminal state conflicts`);
     }
-    return this.replaceAcceptedTask(task, update);
+    return this.replaceAcceptedTask(task, update, options);
+  }
+
+  retainPersistenceUncertain(
+    request: AsyncToolTaskRetainPersistenceUncertainRequest,
+  ): AsyncToolTask {
+    requireNonBlank(request.taskId, "taskId");
+    requireNonBlank(request.sessionId, "sessionId");
+    requireNonBlank(request.sourceRunId, "sourceRunId");
+    requireNonBlank(request.sourceToolCallId, "sourceToolCallId");
+    requireNonBlank(request.toolName, "toolName");
+    const kind = this.taskKinds.get(request.kind);
+    if (kind === undefined) {
+      throw new Error(`Async Tool Task kind ${request.kind} is not registered`);
+    }
+    if (
+      request.quotaLease !== undefined &&
+      (request.quotaLease.sessionId !== request.sessionId ||
+        request.quotaLease.quotaPool !== kind.quotaPool)
+    ) {
+      throw new Error("Async Tool Task quota lease does not match its Task");
+    }
+    const payload = clonePayload(kind.validatePayload(request.payload));
+    const sourceKey = sourceKeyFor(request);
+    const knownTask =
+      request.knownTask === undefined
+        ? undefined
+        : cloneAndValidateKnownTask(request.knownTask, request);
+    const existing =
+      this.persistenceUncertainByTaskId.get(request.taskId) ??
+      knownTask ??
+      this.getBySource(
+        request.sessionId,
+        request.sourceRunId,
+        request.sourceToolCallId,
+      );
+    if (existing !== undefined && existing.taskId !== request.taskId) {
+      throw new Error(
+        "Persistence-uncertain Async Tool Task conflicts with an existing task or source",
+      );
+    }
+    const durable =
+      knownTask ?? this.store.get(request.sessionId, request.taskId);
+    if (durable !== undefined && durable.state !== "submitting") {
+      throw new Error(
+        `Async Tool Task ${request.taskId} is already durably accepted`,
+      );
+    }
+    if (
+      existing !== undefined &&
+      (existing.kind !== request.kind ||
+        existing.toolName !== request.toolName ||
+        !isSamePayload(existing.payload, payload))
+    ) {
+      throw new Error(
+        "Persistence-uncertain Async Tool Task conflicts with an existing task or source",
+      );
+    }
+    if (
+      !this.quotaLeaseByTaskId.has(request.taskId) &&
+      request.quotaLease === undefined
+    ) {
+      throw new Error(
+        `Persistence-uncertain Async Tool Task ${request.taskId} has no quota lease`,
+      );
+    }
+    const timestamp = this.now().toISOString();
+    const uncertain: AsyncToolTask = {
+      taskId: request.taskId,
+      kind: request.kind,
+      quotaPool: kind.quotaPool,
+      sessionId: request.sessionId,
+      sourceRunId: request.sourceRunId,
+      sourceToolCallId: request.sourceToolCallId,
+      toolName: request.toolName,
+      state: "unknown",
+      payload,
+      createdAt: durable?.createdAt ?? existing?.createdAt ?? timestamp,
+      updatedAt: timestamp,
+      ...(request.statusMessage === undefined
+        ? {}
+        : { statusMessage: request.statusMessage }),
+    };
+    if (!this.quotaLeaseByTaskId.has(request.taskId)) {
+      this.quotaLeaseByTaskId.set(
+        request.taskId,
+        request.quotaLease!.transfer(),
+      );
+    }
+    this.persistenceUncertainByTaskId.set(request.taskId, uncertain);
+    this.persistenceUncertainTaskIdBySource.set(sourceKey, request.taskId);
+    if (request.privateReference !== undefined) {
+      this.persistenceUncertainReferenceByTaskId.set(
+        request.taskId,
+        request.privateReference,
+      );
+    }
+    return cloneTask(uncertain);
   }
 
   private replaceAcceptedTask(
     task: AsyncToolTask,
     update: AsyncToolTaskAcceptedUpdate,
-    markAccepted = false,
+    options: AsyncToolTaskMutationOptions,
   ): AsyncToolTask {
     const payload = this.payloadForUpdate(task, update);
     const next: AsyncToolTask = {
@@ -395,26 +545,36 @@ export class AsyncToolTaskService implements AsyncToolTaskStatusReader {
         : { statusMessage: update.statusMessage }),
       updatedAt: this.now().toISOString(),
     };
-    if (markAccepted) {
-      this.acceptedTaskIds.add(next.taskId);
-    }
-    this.tasks.set(next.taskId, next);
+    const privateReference =
+      options.privateReference ??
+      this.persistenceUncertainReferenceByTaskId.get(task.taskId);
+    const storeOptions = {
+      ...(privateReference === undefined ? {} : { privateReference }),
+    };
+    const durable = this.store.get(task.sessionId, task.taskId);
+    const stored =
+      durable === undefined
+        ? this.store.insert(next, storeOptions).task
+        : this.store.replace(durable, next, storeOptions);
+    this.persistenceUncertainByTaskId.delete(task.taskId);
+    this.persistenceUncertainTaskIdBySource.delete(sourceKeyFor(task));
+    this.persistenceUncertainReferenceByTaskId.delete(task.taskId);
     if (next.state !== "input-required") {
-      this.inputRequiredNotifiedTaskIds.delete(next.taskId);
+      this.inputRequiredNotifiedTaskIds.delete(stored.taskId);
     } else if (
       task.state !== "input-required" ||
       !this.inputRequiredNotifiedTaskIds.has(next.taskId)
     ) {
-      this.notifyInputRequired(next);
+      this.notifyInputRequired(stored);
     }
     if (
       !isAsyncToolTaskTerminalState(task.state) &&
       isAsyncToolTaskTerminalState(next.state)
     ) {
-      this.releaseQuota(next.taskId);
-      this.notifyTerminal(next);
+      this.releaseQuota(stored.taskId);
+      this.notifyTerminal(stored);
     }
-    return cloneTask(next);
+    return cloneTask(stored);
   }
 
   private notifyInputRequired(task: AsyncToolTask): void {
@@ -487,8 +647,8 @@ export class AsyncToolTaskService implements AsyncToolTaskStatusReader {
     sessionId: string,
     taskId: HuanLinkTaskId,
   ): AsyncToolTask {
-    const task = this.tasks.get(taskId);
-    if (task === undefined || task.sessionId !== sessionId) {
+    const task = this.get(sessionId, taskId);
+    if (task === undefined) {
       throw new Error(
         `Async Tool Task ${taskId} was not found in this Session`,
       );
@@ -522,6 +682,50 @@ export class AsyncToolTaskService implements AsyncToolTaskStatusReader {
     lease.release();
     this.quotaLeaseByTaskId.delete(taskId);
   }
+
+  private recoverPersistedTasks(): void {
+    const persisted = this.store.list();
+    for (const task of persisted) {
+      const definition = this.taskKinds.get(task.kind);
+      if (definition === undefined) {
+        throw new Error(
+          `Persisted Async Tool Task kind ${task.kind} is not registered`,
+        );
+      }
+      if (task.quotaPool !== definition.quotaPool) {
+        throw new Error(
+          `Persisted Async Tool Task kind ${task.kind} quota pool does not match its registered definition`,
+        );
+      }
+    }
+    const nonTerminal = persisted.filter(
+      (task) => !isAsyncToolTaskTerminalState(task.state),
+    );
+    if (nonTerminal.length === 0) {
+      return;
+    }
+    const recovered = this.store.recoverNonTerminal({
+      updatedAt: this.now().toISOString(),
+      statusMessage: "reconciliation-required",
+    });
+    const restoredLeases: SessionTaskQuotaLease[] = [];
+    try {
+      for (const task of recovered) {
+        const lease = this.taskQuotaService.restore(
+          task.sessionId,
+          task.quotaPool,
+        );
+        restoredLeases.push(lease);
+        this.quotaLeaseByTaskId.set(task.taskId, lease);
+      }
+    } catch (error) {
+      for (const lease of restoredLeases) {
+        lease.release();
+      }
+      this.quotaLeaseByTaskId.clear();
+      throw error;
+    }
+  }
 }
 
 function sourceKeyFor(
@@ -535,6 +739,27 @@ function sourceKeyFor(
     request.sourceRunId,
     request.sourceToolCallId,
   ]);
+}
+
+function cloneAndValidateKnownTask(
+  task: AsyncToolTask,
+  request: AsyncToolTaskRetainPersistenceUncertainRequest,
+): AsyncToolTask {
+  const cloned = cloneTask(task);
+  if (
+    cloned.taskId !== request.taskId ||
+    cloned.sessionId !== request.sessionId ||
+    cloned.sourceRunId !== request.sourceRunId ||
+    cloned.sourceToolCallId !== request.sourceToolCallId ||
+    cloned.toolName !== request.toolName ||
+    cloned.kind !== request.kind ||
+    cloned.state !== "submitting"
+  ) {
+    throw new Error(
+      "Known persistence-uncertain Async Tool Task does not match its request",
+    );
+  }
+  return cloned;
 }
 
 function validateTaskKinds(

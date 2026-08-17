@@ -4,9 +4,15 @@ import {
   AGENT_CALL_TASK_KIND_DEFINITION,
   AgentCallService,
   AsyncToolTaskService,
+  InMemoryAsyncToolTaskStore,
   SessionTaskQuotaService,
+  type AsyncToolTask,
+  type AsyncToolTaskStoreInsertOptions,
+  type AsyncToolTaskStoreInsertResult,
+  type AsyncToolTaskStoreReplaceOptions,
   type AgentCallInputAnswers,
   type AgentCallTransport,
+  type RuntimeLogger,
 } from "../src/index.js";
 import {
   acceptedTask,
@@ -14,6 +20,72 @@ import {
   rejectUnexpectedContinuation,
   task,
 } from "./agent-call-test-helpers.js";
+
+class FailingAcceptanceStore extends InMemoryAsyncToolTaskStore {
+  override replace(
+    _expected: AsyncToolTask,
+    _next: AsyncToolTask,
+    _options?: AsyncToolTaskStoreReplaceOptions,
+  ): AsyncToolTask {
+    throw new Error("injected Task acceptance persistence failure");
+  }
+}
+
+class OneShotFailingAcceptanceStore extends InMemoryAsyncToolTaskStore {
+  private failNextReplace = true;
+
+  override replace(
+    expected: AsyncToolTask,
+    next: AsyncToolTask,
+    options?: AsyncToolTaskStoreReplaceOptions,
+  ): AsyncToolTask {
+    if (this.failNextReplace) {
+      this.failNextReplace = false;
+      throw new Error("injected one-shot Task acceptance persistence failure");
+    }
+    return super.replace(expected, next, options);
+  }
+}
+
+class UnreadableAfterAcceptanceFailureStore extends InMemoryAsyncToolTaskStore {
+  private unreadable = false;
+
+  override get(sessionId: string, taskId: string): AsyncToolTask | undefined {
+    if (this.unreadable) {
+      throw new Error("injected unreadable Task Store");
+    }
+    return super.get(sessionId, taskId);
+  }
+
+  override getBySource(
+    sessionId: string,
+    sourceRunId: string,
+    sourceToolCallId: string,
+  ): AsyncToolTask | undefined {
+    if (this.unreadable) {
+      throw new Error("injected unreadable Task Store");
+    }
+    return super.getBySource(sessionId, sourceRunId, sourceToolCallId);
+  }
+
+  override replace(
+    _expected: AsyncToolTask,
+    _next: AsyncToolTask,
+    _options?: AsyncToolTaskStoreReplaceOptions,
+  ): AsyncToolTask {
+    this.unreadable = true;
+    throw new Error("injected Task acceptance persistence failure");
+  }
+}
+
+class FailingReservationStore extends InMemoryAsyncToolTaskStore {
+  override insert(
+    _task: AsyncToolTask,
+    _options?: AsyncToolTaskStoreInsertOptions,
+  ): AsyncToolTaskStoreInsertResult {
+    throw new Error("injected Task reservation persistence failure");
+  }
+}
 
 test("rejects split quota owners before any AgentCall can run", () => {
   const taskService = new AsyncToolTaskService({
@@ -99,6 +171,301 @@ test("reserves an async AgentCall before transport and returns only its HuanLink
     state: "submitted",
     payload: { artifacts: [] },
   });
+
+  await service.close();
+});
+
+test("persists a stable private A2A reference after remote async acceptance", async () => {
+  const store = new InMemoryAsyncToolTaskStore();
+  const taskService = new AsyncToolTaskService({
+    maxActiveTasksPerSession: 2,
+    taskKinds: [AGENT_CALL_TASK_KIND_DEFINITION],
+    store,
+    createTaskId: () => "huan-task-private-ref",
+  });
+  const service = new AgentCallService({
+    agentId: "codex-primary",
+    transport: {
+      discoverCapability: async (skillId) => ({ id: skillId, name: skillId }),
+      submitTask: async () => acceptedTask("submitted"),
+      async *watchTask(_taskId, { signal }) {
+        await new Promise<void>((resolve) => {
+          signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      },
+      continueTask: rejectUnexpectedContinuation,
+      cancelTask: async (taskId) => task("canceled", { taskId }),
+    },
+    taskService,
+  });
+
+  await expect(
+    service.invoke({
+      runId: "run-private-ref",
+      sessionId: "session-private-ref",
+      skillId: "codex-code-task",
+      input: "persist the private A2A reference",
+      contextId: "channel-session-private-ref",
+      executionMode: "async",
+      toolName: "submit_codex_agent_call",
+      sourceToolCallId: "tool-call-private-ref",
+    }),
+  ).resolves.toEqual({
+    status: "accepted",
+    taskId: "huan-task-private-ref",
+    state: "submitted",
+  });
+  expect(store.getPrivateReference("huan-task-private-ref")).toEqual({
+    namespace: "agent-call/a2a",
+    agentId: "codex-primary",
+    externalTaskId: "a2a-task-01",
+    contextId: "a2a-context-01",
+    metadata: {
+      messageId: "huan-task-private-ref",
+      skillId: "codex-code-task",
+    },
+  });
+
+  await service.close();
+});
+
+test("returns a persistence warning without resubmitting when remote acceptance cannot be stored", async () => {
+  const quotaService = new SessionTaskQuotaService({
+    limits: { a2a: 1, "async-tool": 3 },
+  });
+  const taskService = new AsyncToolTaskService({
+    quotaService,
+    taskKinds: [AGENT_CALL_TASK_KIND_DEFINITION],
+    store: new FailingAcceptanceStore(),
+    createTaskId: () => "huan-task-persistence-warning",
+  });
+  const submitTask = vi.fn(async () => acceptedTask("submitted"));
+  const backgroundError = vi.fn();
+  const errorLog = vi.fn();
+  const logger: RuntimeLogger = {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: errorLog,
+    child: () => logger,
+  };
+  const service = new AgentCallService({
+    agentId: "codex-primary",
+    transport: {
+      discoverCapability: async (skillId) => ({ id: skillId, name: skillId }),
+      submitTask,
+      async *watchTask(_taskId, { signal }) {
+        await new Promise<void>((resolve) => {
+          signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      },
+      continueTask: rejectUnexpectedContinuation,
+      cancelTask: async (taskId) => task("canceled", { taskId }),
+    },
+    taskService,
+    logger,
+  });
+  service.onBackgroundError(backgroundError);
+
+  const request = {
+    runId: "run-persistence-warning",
+    sessionId: "session-persistence-warning",
+    skillId: "codex-code-task",
+    input: "do not submit this remote task twice",
+    executionMode: "async" as const,
+    toolName: "submit_codex_agent_call",
+    sourceToolCallId: "tool-call-persistence-warning",
+  };
+  const warningReceipt = {
+    status: "accepted",
+    taskId: "huan-task-persistence-warning",
+    state: "unknown",
+    retrySafe: false,
+    persistenceWarning: "task-state-not-persisted",
+  } as const;
+  await expect(service.invoke(request)).resolves.toEqual(warningReceipt);
+  await expect(service.invoke(request)).resolves.toEqual(warningReceipt);
+  expect(submitTask).toHaveBeenCalledTimes(1);
+  expect(
+    taskService.getStatus(
+      "session-persistence-warning",
+      "huan-task-persistence-warning",
+    ),
+  ).toMatchObject({
+    status: "found",
+    state: "unknown",
+  });
+  expect(
+    quotaService.acquire("session-persistence-warning", "a2a"),
+  ).toMatchObject({ status: "limit-reached" });
+  expect(backgroundError).toHaveBeenCalledWith(
+    expect.any(Error),
+    expect.objectContaining({ taskId: "a2a-task-01" }),
+  );
+  expect(errorLog).toHaveBeenCalledWith(
+    "agent_call.background_error",
+    expect.objectContaining({
+      errorType: "Error",
+      errorMessageLength: "injected Task acceptance persistence failure".length,
+    }),
+  );
+  expect(JSON.stringify(errorLog.mock.calls)).not.toContain(
+    "injected Task acceptance persistence failure",
+  );
+  expect(JSON.stringify(errorLog.mock.calls)).not.toContain("a2a-task-01");
+
+  await service.close();
+});
+
+test("persists a later terminal snapshot after a one-shot acceptance failure", async () => {
+  const quotaService = new SessionTaskQuotaService({
+    limits: { a2a: 1, "async-tool": 3 },
+  });
+  const store = new OneShotFailingAcceptanceStore();
+  const taskService = new AsyncToolTaskService({
+    quotaService,
+    taskKinds: [AGENT_CALL_TASK_KIND_DEFINITION],
+    store,
+    createTaskId: () => "huan-task-one-shot",
+  });
+  const terminal = vi.fn();
+  taskService.onTerminal(terminal);
+  const submitTask = vi.fn(async () => acceptedTask("submitted"));
+  const service = new AgentCallService({
+    transport: {
+      discoverCapability: async (skillId) => ({ id: skillId, name: skillId }),
+      submitTask,
+      async *watchTask() {
+        yield task("completed", {
+          artifacts: [{ id: "artifact-after-recovery" }],
+        });
+      },
+      continueTask: rejectUnexpectedContinuation,
+      cancelTask: async (taskId) => task("canceled", { taskId }),
+    },
+    taskService,
+  });
+
+  await expect(
+    service.invoke({
+      runId: "run-one-shot",
+      sessionId: "session-one-shot",
+      skillId: "codex-code-task",
+      input: "finish after local persistence recovers",
+      executionMode: "async",
+      toolName: "submit_codex_agent_call",
+      sourceToolCallId: "tool-call-one-shot",
+    }),
+  ).resolves.toMatchObject({
+    status: "accepted",
+    taskId: "huan-task-one-shot",
+    state: "unknown",
+    retrySafe: false,
+    persistenceWarning: "task-state-not-persisted",
+  });
+  await service.waitForIdle();
+
+  expect(store.get("session-one-shot", "huan-task-one-shot")).toMatchObject({
+    state: "completed",
+    payload: { artifacts: [{ id: "artifact-after-recovery" }] },
+  });
+  expect(terminal).toHaveBeenCalledTimes(1);
+  const restoredSlot = quotaService.acquire("session-one-shot", "a2a");
+  expect(restoredSlot).toMatchObject({ status: "acquired" });
+  if (restoredSlot.status === "acquired") {
+    restoredSlot.lease.release();
+  }
+  expect(submitTask).toHaveBeenCalledTimes(1);
+
+  await service.close();
+});
+
+test("returns the fixed warning when acceptance failure also makes the Store unreadable", async () => {
+  const quotaService = new SessionTaskQuotaService({
+    limits: { a2a: 1, "async-tool": 3 },
+  });
+  const submitTask = vi.fn(async () => acceptedTask("submitted"));
+  const taskService = new AsyncToolTaskService({
+    quotaService,
+    taskKinds: [AGENT_CALL_TASK_KIND_DEFINITION],
+    store: new UnreadableAfterAcceptanceFailureStore(),
+    createTaskId: () => "huan-task-unreadable-store",
+  });
+  const service = new AgentCallService({
+    transport: {
+      discoverCapability: async (skillId) => ({ id: skillId, name: skillId }),
+      submitTask,
+      async *watchTask(_taskId, { signal }) {
+        await new Promise<void>((resolve) => {
+          signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      },
+      continueTask: rejectUnexpectedContinuation,
+      cancelTask: async (taskId) => task("canceled", { taskId }),
+    },
+    taskService,
+  });
+  const request = {
+    runId: "run-unreadable-store",
+    sessionId: "session-unreadable-store",
+    skillId: "codex-code-task",
+    input: "return accepted even when local reads fail",
+    executionMode: "async" as const,
+    toolName: "submit_codex_agent_call",
+    sourceToolCallId: "tool-call-unreadable-store",
+  };
+  const warningReceipt = {
+    status: "accepted",
+    taskId: "huan-task-unreadable-store",
+    state: "unknown",
+    retrySafe: false,
+    persistenceWarning: "task-state-not-persisted",
+  } as const;
+
+  await expect(service.invoke(request)).resolves.toEqual(warningReceipt);
+  await expect(service.invoke(request)).resolves.toEqual(warningReceipt);
+  expect(submitTask).toHaveBeenCalledTimes(1);
+  expect(quotaService.acquire("session-unreadable-store", "a2a")).toMatchObject(
+    { status: "limit-reached" },
+  );
+
+  await service.close();
+});
+
+test("does not call an A2A Agent when Task reservation persistence fails", async () => {
+  const taskService = new AsyncToolTaskService({
+    maxActiveTasksPerSession: 2,
+    taskKinds: [AGENT_CALL_TASK_KIND_DEFINITION],
+    store: new FailingReservationStore(),
+    createTaskId: () => "huan-task-reservation-failure",
+  });
+  const discoverCapability = vi.fn();
+  const submitTask = vi.fn();
+  const service = new AgentCallService({
+    agentId: "codex-primary",
+    transport: {
+      discoverCapability,
+      submitTask,
+      async *watchTask() {},
+      continueTask: rejectUnexpectedContinuation,
+      cancelTask: async (taskId) => task("canceled", { taskId }),
+    },
+    taskService,
+  });
+
+  expect(() =>
+    service.invoke({
+      runId: "run-reservation-failure",
+      sessionId: "session-reservation-failure",
+      skillId: "codex-code-task",
+      input: "must not reach A2A",
+      executionMode: "async",
+      toolName: "submit_codex_agent_call",
+      sourceToolCallId: "tool-call-reservation-failure",
+    }),
+  ).toThrow("injected Task reservation persistence failure");
+  expect(discoverCapability).not.toHaveBeenCalled();
+  expect(submitTask).not.toHaveBeenCalled();
 
   await service.close();
 });
@@ -658,9 +1025,11 @@ test("keeps an async Task accepted as unknown when dispatch cannot be confirmed"
   const quotaService = new SessionTaskQuotaService({
     limits: { a2a: 1, "async-tool": 3 },
   });
+  const store = new InMemoryAsyncToolTaskStore();
   const taskService = new AsyncToolTaskService({
     quotaService,
     taskKinds: [AGENT_CALL_TASK_KIND_DEFINITION],
+    store,
     createTaskId: () => "huan-task-dispatch-uncertain",
   });
   const discoverCapability = vi.fn(async (skillId: string) => ({
@@ -678,6 +1047,7 @@ test("keeps an async Task accepted as unknown when dispatch cannot be confirmed"
     cancelTask: async (taskId) => task("canceled", { taskId }),
   };
   const service = new AgentCallService({
+    agentId: "codex-primary",
     transport,
     taskService,
     quotaService,
@@ -704,6 +1074,14 @@ test("keeps an async Task accepted as unknown when dispatch cannot be confirmed"
       "huan-task-dispatch-uncertain",
     ),
   ).toMatchObject({ status: "found", state: "unknown" });
+  expect(store.getPrivateReference("huan-task-dispatch-uncertain")).toEqual({
+    namespace: "agent-call/a2a",
+    agentId: "codex-primary",
+    metadata: {
+      messageId: "huan-task-dispatch-uncertain",
+      skillId: "codex-code-task",
+    },
+  });
 
   await expect(
     service.invoke({

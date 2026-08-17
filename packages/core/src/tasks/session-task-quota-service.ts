@@ -80,6 +80,35 @@ export class SessionTaskQuotaService {
     };
   }
 
+  /**
+   * Restores one already-active Task slot while rebuilding process-local state.
+   *
+   * This deliberately does not apply the configured admission limit: persisted
+   * Tasks may have been accepted before that limit was lowered. New work still
+   * goes through `acquire` and is rejected while the restored count is at or
+   * above the current limit.
+   */
+  restore(
+    sessionId: SessionId,
+    quotaPool: TaskQuotaPool,
+  ): SessionTaskQuotaLease {
+    requireNonBlank(sessionId, "sessionId");
+    if (!(TASK_QUOTA_POOLS as readonly unknown[]).includes(quotaPool)) {
+      throw new Error("Session Task quota pool is unsupported");
+    }
+    const key = quotaKey(sessionId, quotaPool);
+    this.activeBySessionAndPool.set(
+      key,
+      (this.activeBySessionAndPool.get(key) ?? 0) + 1,
+    );
+    return this.createLease({
+      sessionId,
+      quotaPool,
+      ownerVersion: 0,
+      released: false,
+    });
+  }
+
   private createLease(slot: QuotaSlot): SessionTaskQuotaLease {
     const ownerVersion = slot.ownerVersion;
     return {

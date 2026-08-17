@@ -232,7 +232,6 @@ describe("AgentCallService", () => {
             sessionId: "session-log-lifecycle",
             runId: "run-log-lifecycle",
             agentCallId: "agent-call-log-lifecycle",
-            contextId: "context-log-lifecycle",
             executionMode: "async",
             sourceToolCallId,
             inputLength: input.length,
@@ -242,8 +241,6 @@ describe("AgentCallService", () => {
           level: "info",
           message: "agent_call.submit.accepted",
           fields: expect.objectContaining({
-            a2aTaskId: "a2a-task-01",
-            contextId: "context-log-lifecycle",
             state: "submitted",
           }),
         }),
@@ -291,6 +288,8 @@ describe("AgentCallService", () => {
     expect(allLogs).not.toContain(secretHeader);
     expect(allLogs).not.toContain(secretAnswer);
     expect(allLogs).not.toContain("Secret option description");
+    expect(allLogs).not.toContain('"a2aTaskId"');
+    expect(allLogs).not.toContain("context-log-lifecycle");
   });
 
   test("logs cancel start and completion", async () => {
@@ -346,8 +345,6 @@ describe("AgentCallService", () => {
             sessionId: "session-log-cancel",
             runId: "run-log-cancel",
             agentCallId: "agent-call-log-cancel",
-            a2aTaskId: "a2a-task-01",
-            contextId: "context-log-cancel",
             state: "submitted",
           }),
         }),
@@ -364,6 +361,8 @@ describe("AgentCallService", () => {
     const allLogs = JSON.stringify(logger.entries);
     expect(allLogs).not.toContain(canceledArtifact);
     expect(allLogs).not.toContain(canceledStatus);
+    expect(allLogs).not.toContain('"a2aTaskId"');
+    expect(allLogs).not.toContain("context-log-cancel");
   });
 
   test("logs submit, continuation and cancellation failures safely", async () => {
@@ -460,7 +459,6 @@ describe("AgentCallService", () => {
           level: "error",
           message: "agent_call.continue.failed",
           fields: expect.objectContaining({
-            a2aTaskId: "a2a-task-01",
             questionIds: ["passphrase"],
             count: 1,
             errorType: "Error",
@@ -471,7 +469,6 @@ describe("AgentCallService", () => {
           message: "agent_call.cancel.failed",
           fields: expect.objectContaining({
             agentCallId: "agent-call-log-failure-2",
-            a2aTaskId: "a2a-task-01",
             state: "input-required",
             errorType: "Error",
           }),
@@ -481,6 +478,8 @@ describe("AgentCallService", () => {
     const allLogs = JSON.stringify(logger.entries);
     expect(allLogs).not.toContain(secretQuestion);
     expect(allLogs).not.toContain(secretAnswer);
+    expect(allLogs).not.toContain('"a2aTaskId"');
+    expect(allLogs).not.toContain("context-log-failures");
   });
 
   test("lists defensive copies of records for only the requested run", async () => {
@@ -964,7 +963,6 @@ describe("AgentCallService", () => {
         message: "agent_call.watcher.failed",
         fields: expect.objectContaining({
           agentCallId: "agent-call-02",
-          a2aTaskId: "a2a-task-01",
           state: "submitted",
           errorType: "Error",
           errorMessageLength: "subscription disconnected".length,
@@ -1613,7 +1611,6 @@ describe("AgentCallService", () => {
         message: "agent_call.background_error",
         fields: expect.objectContaining({
           agentCallId: "agent-call-listener-error",
-          a2aTaskId: "a2a-task-01",
           state: "completed",
           errorType: "AggregateError",
           errorMessageLength: "Async Tool Task terminal listener failed".length,

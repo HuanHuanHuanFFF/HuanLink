@@ -124,6 +124,12 @@ export function createCodexAgentCallTool(
                 status: result.status,
                 taskId: result.taskId,
                 state: result.state,
+                ...(result.retrySafe === undefined
+                  ? {}
+                  : { retrySafe: result.retrySafe }),
+                ...(result.persistenceWarning === undefined
+                  ? {}
+                  : { persistenceWarning: result.persistenceWarning }),
               }
             : result.status === "error"
               ? {
@@ -170,6 +176,12 @@ function publicAgentCallResult(
       status: "accepted",
       taskId: result.taskId,
       state: result.state,
+      ...(result.retrySafe === undefined
+        ? {}
+        : { retrySafe: result.retrySafe }),
+      ...(result.persistenceWarning === undefined
+        ? {}
+        : { persistenceWarning: result.persistenceWarning }),
     };
   }
   if (result.status === "error") {

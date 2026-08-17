@@ -8,6 +8,8 @@ import type {
   RuntimeLogger,
 } from "../logging/types.js";
 import type { AgentCallId, RunId } from "../shared/ids.js";
+import type { AsyncToolTaskPrivateReference } from "../async-tool-task/async-tool-task-store.js";
+import type { AsyncToolTask } from "../async-tool-task/types.js";
 import type {
   SessionTaskQuotaLease,
   SessionTaskQuotaService,
@@ -36,6 +38,8 @@ import {
 export type AgentCallServiceOptions = {
   transport: AgentCallTransport;
   taskService: AsyncToolTaskService;
+  /** Stable configured A2A Agent identity used only in private Task references. */
+  agentId?: string;
   quotaService?: SessionTaskQuotaService;
   createId?: () => AgentCallId;
   createMessageId?: () => string;
@@ -105,6 +109,14 @@ class AgentCallAcceptedBookkeepingFailure extends Error {
   }
 }
 
+class AgentCallTaskStatePersistenceFailure extends Error {
+  constructor(readonly originalError: unknown) {
+    super("Accepted AgentCall Task state could not be persisted", {
+      cause: originalError,
+    });
+  }
+}
+
 export class AgentCallService
   implements
     AgentCallSubmitter,
@@ -114,6 +126,7 @@ export class AgentCallService
 {
   private readonly transport: AgentCallTransport;
   private readonly taskService: AsyncToolTaskService;
+  private readonly agentId: string;
   private readonly quotaService: SessionTaskQuotaService;
   private readonly createId: () => AgentCallId;
   private readonly createMessageId: () => string;
@@ -155,6 +168,11 @@ export class AgentCallService
   constructor(options: AgentCallServiceOptions) {
     this.transport = options.transport;
     this.taskService = options.taskService;
+    const agentId = (options.agentId ?? "codex").trim();
+    if (agentId.length === 0) {
+      throw new Error("agentId must not be blank");
+    }
+    this.agentId = agentId;
     if (
       options.quotaService !== undefined &&
       options.quotaService !== options.taskService.taskQuotaService
@@ -253,6 +271,10 @@ export class AgentCallService
             payload: { artifacts: [] },
             state: "unknown",
             quotaLease: quota.lease,
+            privateReference: this.privateReferenceForDispatchUncertain(
+              request,
+              agentCallId,
+            ),
           });
           agentCallId = adoption.task.taskId;
         } catch (adoptionError) {
@@ -274,6 +296,9 @@ export class AgentCallService
             payload: { artifacts: [] },
             state: "unknown",
             quotaLease: quota.lease,
+            privateReference: this.privateReferenceForAcceptedRecord(
+              error.accepted.record,
+            ),
           });
           agentCallId = adoption.task.taskId;
           await this.recoverAcceptedSubmission(agentCallId, error.accepted);
@@ -384,6 +409,20 @@ export class AgentCallService
           error: "task-preaccept-rejected",
         });
       }
+      if (
+        this.taskService.isPersistenceUncertain(
+          request.sessionId,
+          reservation.task.taskId,
+        )
+      ) {
+        return Promise.resolve({
+          status: "accepted",
+          taskId: reservation.task.taskId,
+          state: "unknown",
+          retrySafe: false,
+          persistenceWarning: "task-state-not-persisted",
+        });
+      }
       return Promise.resolve({
         status: "accepted",
         taskId: reservation.task.taskId,
@@ -391,35 +430,37 @@ export class AgentCallService
       });
     }
 
-    const operation = this.performAsyncSubmit(request, reservation.task.taskId);
+    const operation = this.performAsyncSubmit(request, reservation.task);
     return this.trackSubmission(operation);
   }
 
   private async performAsyncSubmit(
     request: AgentCallAsyncRequest,
-    agentCallId: AgentCallId,
+    reservedTask: AsyncToolTask,
   ): Promise<AgentCallAsyncInvocationResult> {
+    const agentCallId = reservedTask.taskId;
     try {
       const submission = await this.performSubmit(request, agentCallId, () => {
         this.testHooks?.beforeAsyncTaskAcceptance?.();
         const record = this.requireRecord(agentCallId);
         try {
-          this.taskService.accept(request.sessionId, agentCallId, {
-            state: record.state,
-            payload: agentCallTaskPayload(record),
-            ...(record.statusMessage === undefined
-              ? {}
-              : { statusMessage: record.statusMessage }),
-          });
-        } finally {
-          const task = this.taskService.get(request.sessionId, agentCallId);
-          if (
-            task !== undefined &&
-            task.state !== "submitting" &&
-            task.state !== "rejected"
-          ) {
-            this.taskBackedAgentCallIds.add(agentCallId);
-          }
+          this.taskService.accept(
+            request.sessionId,
+            agentCallId,
+            {
+              state: record.state,
+              payload: agentCallTaskPayload(record),
+              ...(record.statusMessage === undefined
+                ? {}
+                : { statusMessage: record.statusMessage }),
+            },
+            {
+              privateReference: this.privateReferenceForAcceptedRecord(record),
+            },
+          );
+          this.taskBackedAgentCallIds.add(agentCallId);
+        } catch (error) {
+          throw new AgentCallTaskStatePersistenceFailure(error);
         }
       });
       return {
@@ -428,7 +469,41 @@ export class AgentCallService
         state: submission.state,
       };
     } catch (error) {
-      let task = this.taskService.get(request.sessionId, agentCallId);
+      let task: AsyncToolTask | undefined;
+      if (
+        error instanceof AgentCallAcceptedBookkeepingFailure &&
+        error.originalError instanceof AgentCallTaskStatePersistenceFailure
+      ) {
+        const record = error.accepted.record;
+        task = this.taskService.retainPersistenceUncertain({
+          taskId: agentCallId,
+          sessionId: request.sessionId,
+          sourceRunId: request.runId,
+          sourceToolCallId: request.sourceToolCallId,
+          toolName: request.toolName,
+          kind: AGENT_CALL_TASK_KIND,
+          payload: agentCallTaskPayload(record),
+          state: "unknown",
+          knownTask: reservedTask,
+          privateReference: this.privateReferenceForAcceptedRecord(record),
+        });
+        this.taskBackedAgentCallIds.add(agentCallId);
+        this.reportPersistenceFailure(
+          error.originalError.originalError,
+          agentCallId,
+        );
+        if (!this.activeWatchers.has(agentCallId)) {
+          this.startWatcher(agentCallId, error.accepted.snapshot);
+        }
+        return {
+          status: "accepted",
+          taskId: agentCallId,
+          state: "unknown",
+          retrySafe: false,
+          persistenceWarning: "task-state-not-persisted",
+        };
+      }
+      task = this.taskService.get(request.sessionId, agentCallId);
       if (error instanceof AgentCallPreacceptFailure) {
         if (task?.state !== "submitting") {
           throw error.originalError;
@@ -460,19 +535,42 @@ export class AgentCallService
       }
       if (error instanceof AgentCallAcceptedBookkeepingFailure) {
         if (task?.state === "submitting") {
-          task = this.taskService.accept(request.sessionId, agentCallId, {
-            state: "unknown",
-            payload: { artifacts: [] },
-          });
+          task = this.taskService.accept(
+            request.sessionId,
+            agentCallId,
+            {
+              state: "unknown",
+              payload: { artifacts: [] },
+            },
+            {
+              privateReference: this.privateReferenceForAcceptedRecord(
+                error.accepted.record,
+              ),
+            },
+          );
         }
         this.taskBackedAgentCallIds.add(agentCallId);
         await this.recoverAcceptedSubmission(agentCallId, error.accepted);
       }
       if (task?.state === "submitting") {
-        task = this.taskService.accept(request.sessionId, agentCallId, {
-          state: "unknown",
-          payload: { artifacts: [] },
-        });
+        task = this.taskService.accept(
+          request.sessionId,
+          agentCallId,
+          {
+            state: "unknown",
+            payload: { artifacts: [] },
+          },
+          {
+            ...(error instanceof AgentCallDispatchUncertainFailure
+              ? {
+                  privateReference: this.privateReferenceForDispatchUncertain(
+                    request,
+                    agentCallId,
+                  ),
+                }
+              : {}),
+          },
+        );
       }
       if (
         task === undefined ||
@@ -532,9 +630,6 @@ export class AgentCallService
       skillId: request.skillId,
       executionMode: request.executionMode,
       inputLength: request.input.length,
-      ...(request.contextId === undefined
-        ? {}
-        : { contextId: request.contextId }),
       ...(request.sourceToolCallId === undefined
         ? {}
         : { sourceToolCallId: request.sourceToolCallId }),
@@ -1340,6 +1435,40 @@ export class AgentCallService
     }
   }
 
+  private privateReferenceForAcceptedRecord(
+    record: AgentCallRecord,
+  ): AsyncToolTaskPrivateReference {
+    return {
+      namespace: "agent-call/a2a",
+      agentId: this.agentId,
+      externalTaskId: record.taskId,
+      ...(record.contextId === undefined
+        ? {}
+        : { contextId: record.contextId }),
+      metadata: {
+        messageId: record.agentCallId,
+        skillId: record.skillId,
+      },
+    };
+  }
+
+  private privateReferenceForDispatchUncertain(
+    request: AgentCallRequest,
+    agentCallId: AgentCallId,
+  ): AsyncToolTaskPrivateReference {
+    return {
+      namespace: "agent-call/a2a",
+      agentId: this.agentId,
+      ...(request.contextId === undefined
+        ? {}
+        : { contextId: request.contextId }),
+      metadata: {
+        messageId: agentCallId,
+        skillId: request.skillId,
+      },
+    };
+  }
+
   private requireRecordClone(agentCallId: AgentCallId): AgentCallRecord {
     return cloneRecord(this.requireRecord(agentCallId))!;
   }
@@ -1388,6 +1517,36 @@ export class AgentCallService
       }
     }
   }
+
+  private reportPersistenceFailure(
+    error: unknown,
+    agentCallId: AgentCallId,
+  ): void {
+    const normalized =
+      error instanceof Error ? error : new Error(errorMessage(error));
+    const record = this.getByAgentCallId(agentCallId);
+    const fields = {
+      agentCallId,
+      ...(record === undefined
+        ? {}
+        : {
+            state: record.state,
+            executionMode: record.executionMode,
+          }),
+      ...errorLogFields(normalized),
+    };
+    this.writeLog("error", "agent_call.background_error", fields);
+    this.writeLog("debug", "agent_call.background_error", fields);
+    for (const listener of this.backgroundErrorListeners) {
+      try {
+        void Promise.resolve(listener(normalized, record)).catch(
+          () => undefined,
+        );
+      } catch {
+        // Error observers must not create another unhandled background failure.
+      }
+    }
+  }
 }
 
 function cloneArtifacts(
@@ -1401,8 +1560,6 @@ function agentCallLogFields(record: AgentCallRecord): RuntimeLogFields {
     sessionId: record.sessionId,
     runId: record.runId,
     agentCallId: record.agentCallId,
-    a2aTaskId: record.taskId,
-    ...(record.contextId === undefined ? {} : { contextId: record.contextId }),
     ...(record.sourceToolCallId === undefined
       ? {}
       : { sourceToolCallId: record.sourceToolCallId }),

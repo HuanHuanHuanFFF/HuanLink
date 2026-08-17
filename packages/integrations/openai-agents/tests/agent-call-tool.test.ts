@@ -244,6 +244,56 @@ describe("createCodexAgentCallTool", () => {
     });
   });
 
+  test("preserves the accepted Task persistence warning in the public async receipt", async () => {
+    const invoke = vi.fn<AgentCallInvoker["invoke"]>(
+      async () =>
+        ({
+          status: "accepted",
+          taskId: "huanlink-task-persistence-warning",
+          state: "unknown",
+          retrySafe: false,
+          persistenceWarning: "task-state-not-persisted",
+          agentCallId: "must-not-leak",
+          a2aTaskId: "must-not-leak",
+        }) as unknown as AgentCallInvocationResult,
+    );
+    const logger = new RecordingRuntimeLogger();
+    const tool = createCodexAgentCallTool({ invoker: { invoke }, logger });
+    const context = new RunContext<OpenAiAgentsRunContext>({
+      runId: "run-tool-persistence-warning",
+      sessionId: "session-tool-persistence-warning",
+      trigger: "user",
+    });
+    const argumentsJson = JSON.stringify({
+      task: delegatedTask,
+      executionMode: "async",
+    });
+
+    const output = await tool.invoke(
+      context,
+      argumentsJson,
+      toolCallDetails("tool-call-persistence-warning", argumentsJson),
+    );
+
+    expect(JSON.parse(String(output))).toEqual({
+      status: "accepted",
+      taskId: "huanlink-task-persistence-warning",
+      state: "unknown",
+      retrySafe: false,
+      persistenceWarning: "task-state-not-persisted",
+    });
+    expect(logger.entries.at(-1)?.fields).toEqual({
+      runId: "run-tool-persistence-warning",
+      sessionId: "session-tool-persistence-warning",
+      toolName: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
+      status: "accepted",
+      taskId: "huanlink-task-persistence-warning",
+      state: "unknown",
+      retrySafe: false,
+      persistenceWarning: "task-state-not-persisted",
+    });
+  });
+
   test("returns a queryable HuanLink task when blocking dispatch becomes uncertain", async () => {
     const invoke = vi.fn<AgentCallInvoker["invoke"]>(async () => ({
       status: "blocking-uncertain",

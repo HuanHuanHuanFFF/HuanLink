@@ -60,6 +60,8 @@ export type Phase3ReentryCleanup = () => Promise<void> | void;
 export type CreatePhase3HuanLinkRuntimeOptions = {
   codexA2aOrigin: string;
   codexSkillId?: string;
+  /** Stable configured identity persisted only in AgentCall private references. */
+  agentId?: string;
   runner?: OpenAiAgentsRunner;
   modelBinding?: MainAgentModelBinding;
   transport?: AgentCallTransport;
@@ -108,6 +110,7 @@ export function createPhase3HuanLinkRuntime(
   const agentCalls = new AgentCallService({
     transport,
     taskService: options.taskService,
+    ...(options.agentId === undefined ? {} : { agentId: options.agentId }),
     logger: logger.child({ source: "agent_call.service" }),
   });
   const mainAgent = createPhase3MainAgentRuntime({

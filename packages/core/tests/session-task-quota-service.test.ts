@@ -39,6 +39,29 @@ describe("SessionTaskQuotaService", () => {
     expect(service.acquire("session-b", "async-tool").status).toBe("acquired");
   });
 
+  test("restores existing slots above the configured limit but still rejects new work", () => {
+    const service = new SessionTaskQuotaService({
+      limits: { a2a: 2, "async-tool": 3 },
+    });
+
+    const restored = [
+      service.restore("session-a", "a2a"),
+      service.restore("session-a", "a2a"),
+      service.restore("session-a", "a2a"),
+    ];
+
+    expect(service.acquire("session-a", "a2a")).toEqual({
+      status: "limit-reached",
+      quotaPool: "a2a",
+      maxActiveTasksPerSession: 2,
+    });
+
+    for (const lease of restored) {
+      lease.release();
+    }
+    expect(service.acquire("session-a", "a2a").status).toBe("acquired");
+  });
+
   test("transfers ownership without allowing the previous owner to release the slot", () => {
     const service = new SessionTaskQuotaService({
       limits: { a2a: 1, "async-tool": 1 },

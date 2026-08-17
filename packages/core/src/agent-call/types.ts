@@ -184,6 +184,10 @@ export type AgentCallReceipt = {
   status: "accepted";
   taskId: HuanLinkTaskId;
   state: AgentCallTaskState;
+  /** Present only when the remote task was accepted but its state is process-local. */
+  retrySafe?: false;
+  /** A model-visible warning that the accepted Task state was not persisted. */
+  persistenceWarning?: "task-state-not-persisted";
 };
 
 export type AgentCallTaskLimitResult = {
