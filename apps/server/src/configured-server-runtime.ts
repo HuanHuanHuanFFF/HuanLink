@@ -1,11 +1,14 @@
 import {
   AGENT_CALL_TASK_KIND_DEFINITION,
   AsyncToolTaskService,
+  InMemoryAsyncToolTaskStore,
   InMemoryConversationSessionStore,
   NoopRuntimeLogger,
   SessionTaskQuotaService,
   type AgentCallTransport,
+  type AsyncToolTaskStore,
   type ChannelAdapter,
+  type ConversationSessionStore,
   type RuntimeLogger,
 } from "@huanlink/core";
 import {
@@ -21,7 +24,9 @@ import {
 import { createBestEffortRuntimeLogger } from "./best-effort-runtime-logger.js";
 import {
   assembleHuanLinkServerRuntime,
+  HuanLinkServerRuntimeLifecycleError,
   type HuanLinkServerRuntime,
+  type HuanLinkServerStoreCloseOwner,
 } from "./huanlink-server-runtime.js";
 import {
   resolveServerMainAgentRuntimeConfig,
@@ -45,6 +50,12 @@ export type ConfiguredServerRuntime = HuanLinkServerRuntime & {
   readonly taskService: AsyncToolTaskService;
 };
 
+export type ConfiguredServerPersistence = {
+  readonly sessionStore: ConversationSessionStore;
+  readonly taskStore: AsyncToolTaskStore;
+  readonly storeOwner: HuanLinkServerStoreCloseOwner;
+};
+
 export type CreateConfiguredServerRuntimeOptions = {
   readonly staticConfig: HuanLinkServerStaticConfig;
   readonly channelConfig: ServerChannelRuntimeConfig;
@@ -58,13 +69,10 @@ export type CreateConfiguredServerRuntimeOptions = {
   }) => AgentCallTransport;
   readonly createChannelAdapter?: ServerChannelAdapterFactory;
   readonly watchFactory?: ChannelAccessPolicyWatchFactory;
-  readonly createStore?: () => Awaitable<InMemoryConversationSessionStore>;
+  readonly createPersistence?: () => Awaitable<ConfiguredServerPersistence>;
 };
 
-/**
- * Builds the full in-process Server graph without taking ownership of process
- * startup. `main.ts` and the SQLite Store stay outside this B04-C seam.
- */
+/** Builds the full in-process Server graph without owning process startup. */
 export async function createConfiguredServerRuntime(
   options: CreateConfiguredServerRuntimeOptions,
 ): Promise<ConfiguredServerRuntime> {
@@ -82,10 +90,6 @@ export async function createConfiguredServerRuntime(
           .maxActiveTasksPerSession,
     },
   });
-  const taskService = new AsyncToolTaskService({
-    quotaService,
-    taskKinds: [AGENT_CALL_TASK_KIND_DEFINITION],
-  });
   const transport = (options.createAgentCallTransport ?? createTransport)({
     origin: defaultAgent.origin,
     logger: logger.child({ source: "a2a.transport" }),
@@ -99,114 +103,141 @@ export async function createConfiguredServerRuntime(
     return channelRuntime;
   };
   const createAdapter = options.createChannelAdapter ?? createConfiguredAdapter;
+  const persistence = await (
+    options.createPersistence ?? createInMemoryPersistence
+  )();
+  let persistenceTransferred = false;
 
-  const runtime = await assembleHuanLinkServerRuntime({
-    taskService,
-    createStore: () => {
-      const sessionStore =
-        options.createStore?.() ?? new InMemoryConversationSessionStore();
-      return Promise.resolve(sessionStore).then((store) => ({
-        sessionStore: store,
-        storeOwner: { close: () => undefined },
-      }));
-    },
-    createPhase3: ({ sessionStore, historyRecorder, getLatestContext }) => {
-      if (!(sessionStore instanceof InMemoryConversationSessionStore)) {
-        throw new Error(
-          "B04-C configured Server Runtime currently requires an InMemory Conversation Store",
-        );
-      }
-      const modelBinding = createDeepSeekMainAgentModelBinding({
-        config: resolveServerMainAgentRuntimeConfig(
-          options.staticConfig,
-          options.env,
-        ),
-      });
-      const onebot = createOneBot11OperationTools({
-        sessions: sessionStore,
-        historyRecorder,
-        resolveOperations: (channelId) => operations.get(channelId),
-        isRouteAllowed: (route) =>
-          resolveChannels().channels.isRouteAllowed(route),
-        ...(options.channelConfig.channels.some(
-          (channel) => channel.enableUnsafePrivilegedOperations,
-        )
-          ? {
-              isUnsafePrivilegedOperationsEnabled: (channelId: string) =>
-                options.channelConfig.channels.some(
-                  (channel) =>
-                    channel.channelId === channelId &&
-                    channel.enableUnsafePrivilegedOperations,
-                ),
-            }
-          : {}),
-        sessionIdForRoute: (route) =>
-          resolveChannels().channels.sessionIdForRoute(route),
-        runOutbound: (route, operation) =>
-          resolveChannels().channels.runOutbound(route, operation),
-        runOperation: (channelId, operation) =>
-          resolveChannels().channels.runOperation(channelId, operation),
-        logger: logger.child({ source: "main_agent.tool.onebot" }),
-      });
-      return createPhase3HuanLinkRuntime({
-        codexA2aOrigin: defaultAgent.origin,
-        codexSkillId: defaultAgent.skillId,
-        agentId: defaultAgent.agentId,
-        transport,
-        taskService,
-        sessionStore,
-        historyRecorder,
-        getLatestContext,
-        modelBinding,
-        additionalTools: [
-          onebot.standard,
-          ...(onebot.privileged === undefined ? [] : [onebot.privileged]),
-        ],
-        channelReply: {
+  try {
+    const taskService = new AsyncToolTaskService({
+      quotaService,
+      store: persistence.taskStore,
+      taskKinds: [AGENT_CALL_TASK_KIND_DEFINITION],
+    });
+    const runtime = await assembleHuanLinkServerRuntime({
+      taskService,
+      createStore: () => {
+        persistenceTransferred = true;
+        return {
+          sessionStore: persistence.sessionStore,
+          storeOwner: persistence.storeOwner,
+        };
+      },
+      createPhase3: ({ sessionStore, historyRecorder, getLatestContext }) => {
+        const modelBinding = createDeepSeekMainAgentModelBinding({
+          config: resolveServerMainAgentRuntimeConfig(
+            options.staticConfig,
+            options.env,
+          ),
+        });
+        const onebot = createOneBot11OperationTools({
           sessions: sessionStore,
           historyRecorder,
-          resolveAdapter: (channelId) =>
-            resolveChannels().channels.resolveAdapter(channelId),
-          logger: logger.child({ source: "main_agent.tool.reply" }),
-        },
-        logger: logger.child({ source: "phase3" }),
-      });
-    },
-    createChannels: ({ onChannelMessage }) => {
-      channelRuntime = createServerRuntime({
-        config: options.channelConfig,
-        configRoot: options.configRoot,
-        loadConfig: options.loadChannelConfig,
-        onChannelMessage,
-        ...(options.watchFactory === undefined
-          ? {}
-          : { watchFactory: options.watchFactory }),
-        createChannelAdapter: (config, adapterLogger) => {
-          const adapter = createAdapter(config, adapterLogger);
-          if (adapter instanceof OneBot11ChannelAdapter) {
-            operations.set(config.channelId, adapter.operations);
-          }
-          return adapter;
-        },
-        logger: logger.child({ source: "channel" }),
-      });
-      return channelRuntime;
-    },
-    preflights: [
-      async () => {
-        await transport.discoverCapability(defaultAgent.skillId);
+          resolveOperations: (channelId) => operations.get(channelId),
+          isRouteAllowed: (route) =>
+            resolveChannels().channels.isRouteAllowed(route),
+          ...(options.channelConfig.channels.some(
+            (channel) => channel.enableUnsafePrivilegedOperations,
+          )
+            ? {
+                isUnsafePrivilegedOperationsEnabled: (channelId: string) =>
+                  options.channelConfig.channels.some(
+                    (channel) =>
+                      channel.channelId === channelId &&
+                      channel.enableUnsafePrivilegedOperations,
+                  ),
+              }
+            : {}),
+          sessionIdForRoute: (route) =>
+            resolveChannels().channels.sessionIdForRoute(route),
+          runOutbound: (route, operation) =>
+            resolveChannels().channels.runOutbound(route, operation),
+          runOperation: (channelId, operation) =>
+            resolveChannels().channels.runOperation(channelId, operation),
+          logger: logger.child({ source: "main_agent.tool.onebot" }),
+        });
+        return createPhase3HuanLinkRuntime({
+          codexA2aOrigin: defaultAgent.origin,
+          codexSkillId: defaultAgent.skillId,
+          agentId: defaultAgent.agentId,
+          transport,
+          taskService,
+          sessionStore,
+          historyRecorder,
+          getLatestContext,
+          modelBinding,
+          additionalTools: [
+            onebot.standard,
+            ...(onebot.privileged === undefined ? [] : [onebot.privileged]),
+          ],
+          channelReply: {
+            sessions: sessionStore,
+            historyRecorder,
+            resolveAdapter: (channelId) =>
+              resolveChannels().channels.resolveAdapter(channelId),
+            logger: logger.child({ source: "main_agent.tool.reply" }),
+          },
+          logger: logger.child({ source: "phase3" }),
+        });
       },
-    ],
-  });
+      createChannels: ({ onChannelMessage }) => {
+        channelRuntime = createServerRuntime({
+          config: options.channelConfig,
+          configRoot: options.configRoot,
+          loadConfig: options.loadChannelConfig,
+          onChannelMessage,
+          ...(options.watchFactory === undefined
+            ? {}
+            : { watchFactory: options.watchFactory }),
+          createChannelAdapter: (config, adapterLogger) => {
+            const adapter = createAdapter(config, adapterLogger);
+            if (adapter instanceof OneBot11ChannelAdapter) {
+              operations.set(config.channelId, adapter.operations);
+            }
+            return adapter;
+          },
+          logger: logger.child({ source: "channel" }),
+        });
+        return channelRuntime;
+      },
+      preflights: [
+        async () => {
+          await transport.discoverCapability(defaultAgent.skillId);
+        },
+      ],
+    });
 
+    return {
+      get state() {
+        return runtime.state;
+      },
+      start: () => runtime.start(),
+      close: () => runtime.close(),
+      quotaService,
+      taskService,
+    };
+  } catch (error) {
+    const primaryError = normalizeError(error);
+    if (!persistenceTransferred) {
+      try {
+        await persistence.storeOwner.close();
+      } catch (cleanupError) {
+        throw new HuanLinkServerRuntimeLifecycleError(
+          "construct",
+          primaryError,
+          [normalizeError(cleanupError)],
+        );
+      }
+    }
+    throw primaryError;
+  }
+}
+
+function createInMemoryPersistence(): ConfiguredServerPersistence {
   return {
-    get state() {
-      return runtime.state;
-    },
-    start: () => runtime.start(),
-    close: () => runtime.close(),
-    quotaService,
-    taskService,
+    sessionStore: new InMemoryConversationSessionStore(),
+    taskStore: new InMemoryAsyncToolTaskStore(),
+    storeOwner: { close: () => undefined },
   };
 }
 
@@ -274,4 +305,8 @@ function assertCompatibleConfiguration(
       "Configured Server Runtime requires matching static and Channel configuration snapshots",
     );
   }
+}
+
+function normalizeError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
 }

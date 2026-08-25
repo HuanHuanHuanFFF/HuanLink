@@ -2,8 +2,10 @@ import { describe, expect, test, vi } from "vitest";
 
 import {
   InMemoryConversationSessionStore,
+  SqliteConversationSessionStore,
   type ChannelAdapter,
   type ChannelConversationRoute,
+  type ConversationSessionStore,
   type InboundChannelMessage,
   type SessionToolHistoryRecorder,
 } from "@huanlink/core";
@@ -111,6 +113,7 @@ function operationsFixture() {
 
 function createFixture(
   input: {
+    sessions?: ConversationSessionStore;
     historyRecorder?: SessionToolHistoryRecorder;
     unsafePrivilegedChannelIds?: readonly string[];
     operationChannelIds?: readonly string[];
@@ -120,7 +123,7 @@ function createFixture(
     >;
   } = {},
 ) {
-  const sessions = new InMemoryConversationSessionStore();
+  const sessions = input.sessions ?? new InMemoryConversationSessionStore();
   sessions.appendChannelMessage(SOURCE_SESSION_ID, inboundMessage("101"));
   const operationFixture = operationsFixture();
   const operationChannelIds = input.operationChannelIds ?? ["qq-main"];
@@ -221,6 +224,43 @@ function createTestChannelRuntime(input: {
 }
 
 describe("OneBot 11 operation Tools", () => {
+  test("accepts a SQLite Conversation Store through the public Store contract", async () => {
+    const sessions = new SqliteConversationSessionStore(":memory:");
+    try {
+      const { tools } = createFixture({ sessions });
+      const input = {
+        channelId: "qq-main",
+        request: {
+          operation: "sendGroupMessage" as const,
+          params: {
+            groupId: "20002",
+            parts: [{ type: "text" as const, text: "persisted message" }],
+          },
+        },
+      };
+      const argumentsJson = JSON.stringify(input);
+
+      const output = await tools.standard.invoke(context(), argumentsJson, {
+        toolCall: toolCall(
+          ONEBOT11_STANDARD_TOOL_NAME,
+          "call-sqlite-onebot",
+          argumentsJson,
+        ),
+      });
+
+      expect(JSON.parse(String(output))).toEqual({ message_id: 7001 });
+      expect(sessions.getSession(SOURCE_SESSION_ID)?.timeline).toContainEqual({
+        type: "agent_tool_result",
+        runId: "run-onebot-tools",
+        toolCallId: "call-sqlite-onebot",
+        toolName: ONEBOT11_STANDARD_TOOL_NAME,
+        output: { message_id: 7001 },
+      });
+    } finally {
+      sessions.close();
+    }
+  });
+
   test("exposes the standard Tool only to external Channel sessions and keeps privileged operations disabled by default", async () => {
     const { tools } = createFixture();
     const agent = new Agent<OpenAiAgentsRunContext>({
@@ -429,7 +469,7 @@ describe("OneBot 11 operation Tools", () => {
   });
 
   test("keeps raw OneBot response data when recording its Tool Result fails", async () => {
-    let sessionStore: InMemoryConversationSessionStore | undefined;
+    let sessionStore: ConversationSessionStore | undefined;
     const historyRecorder: SessionToolHistoryRecorder = {
       recordToolCall: (sessionId, call) =>
         sessionStore!.appendAgentToolCall(sessionId, call),

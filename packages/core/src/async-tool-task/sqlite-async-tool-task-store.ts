@@ -1,11 +1,12 @@
-import { DatabaseSync } from "node:sqlite";
-
 import type { HuanLinkTaskId, RunId, SessionId } from "../shared/ids.js";
 import {
   TASK_QUOTA_POOLS,
   type TaskQuotaPool,
 } from "../tasks/session-task-quota-service.js";
-import { applySqliteConversationMigrations } from "../conversations/sqlite-migrations.js";
+import {
+  openSqliteDatabaseConnection,
+  type SqliteDatabaseConnection,
+} from "../conversations/sqlite-database-connection.js";
 
 import {
   isAsyncToolTaskState,
@@ -46,25 +47,29 @@ type SqlitePrivateReferenceRow = {
 };
 
 /**
- * SQLite Task Store. This path-owning seam is temporary for B05-A tests;
- * B05-B composes it with the Conversation Store through one shared owner.
+ * SQLite Task Store. Direct path construction owns a test-local connection;
+ * B05-B production composition uses one shared owner for both Store facades.
  */
 export class SqliteAsyncToolTaskStore implements AsyncToolTaskStore {
-  private readonly database: DatabaseSync;
-  private closed = false;
+  private readonly database: SqliteDatabaseConnection["database"];
+  private readonly connection: SqliteDatabaseConnection;
+  private readonly ownsConnection: boolean;
 
-  constructor(databasePath: string) {
-    this.database = new DatabaseSync(databasePath);
-    try {
-      this.database.exec("PRAGMA foreign_keys = ON");
-      this.database.exec("PRAGMA journal_mode = WAL");
-      this.database.exec("PRAGMA synchronous = NORMAL");
-      this.database.exec("PRAGMA busy_timeout = 5000");
-      applySqliteConversationMigrations(this.database);
-    } catch (error) {
-      this.database.close();
-      throw error;
+  constructor(databasePathOrConnection: string | SqliteDatabaseConnection) {
+    if (typeof databasePathOrConnection === "string") {
+      this.ownsConnection = true;
+      this.connection = openSqliteDatabaseConnection(databasePathOrConnection);
+    } else {
+      this.ownsConnection = false;
+      this.connection = databasePathOrConnection;
     }
+    this.database = this.connection.database;
+  }
+
+  static fromSharedConnection(
+    connection: SqliteDatabaseConnection,
+  ): SqliteAsyncToolTaskStore {
+    return new SqliteAsyncToolTaskStore(connection);
   }
 
   get(sessionId: SessionId, taskId: HuanLinkTaskId): AsyncToolTask | undefined {
@@ -257,9 +262,8 @@ export class SqliteAsyncToolTaskStore implements AsyncToolTaskStore {
 
   /** Closes the test-local database connection. Safe to call repeatedly. */
   close(): void {
-    if (!this.closed) {
-      this.database.close();
-      this.closed = true;
+    if (this.ownsConnection) {
+      this.connection.close();
     }
   }
 
@@ -362,7 +366,7 @@ export class SqliteAsyncToolTaskStore implements AsyncToolTaskStore {
   }
 
   private assertOpen(): void {
-    if (this.closed) throw new Error("SQLite Async Tool Task Store is closed");
+    this.connection.assertOpen("SQLite Async Tool Task Store is closed");
   }
 }
 

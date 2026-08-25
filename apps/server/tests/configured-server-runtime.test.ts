@@ -1,3 +1,7 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import type {
   AgentCallCapability,
   AgentCallTaskSnapshot,
@@ -14,6 +18,11 @@ import type {
   RuntimeLogger,
   SendChannelMessageCommand,
 } from "@huanlink/core";
+import {
+  InMemoryAsyncToolTaskStore,
+  InMemoryConversationSessionStore,
+  type ConversationSessionStore,
+} from "@huanlink/core";
 import { describe, expect, test, vi } from "vitest";
 
 import {
@@ -25,6 +34,7 @@ import type {
   HuanLinkServerStaticConfig,
   ServerChannelRuntimeConfig,
 } from "../src/local-user-config.js";
+import { createServerSqlitePersistence } from "../src/server-sqlite-persistence.js";
 
 class RecordingLogger implements RuntimeLogger {
   readonly entries: Array<{
@@ -93,6 +103,16 @@ class FakeChannelAdapter implements ChannelAdapter {
   }
 
   async retract(_command: RetractChannelMessageCommand): Promise<void> {}
+}
+
+class FailingRecoveryTaskStore extends InMemoryAsyncToolTaskStore {
+  constructor(private readonly recoveryError: Error) {
+    super();
+  }
+
+  override list(): readonly never[] {
+    throw this.recoveryError;
+  }
 }
 
 function transport(events: string[]): AgentCallTransport {
@@ -227,6 +247,255 @@ async function createRuntime(input: {
 }
 
 describe("configured Server Runtime", () => {
+  test("uses the supplied Conversation and Task Stores without requiring an InMemory class", async () => {
+    const backingSessions = new InMemoryConversationSessionStore();
+    const sessionStore = {
+      appendChannelMessage:
+        backingSessions.appendChannelMessage.bind(backingSessions),
+      recordOutboundDelivery:
+        backingSessions.recordOutboundDelivery.bind(backingSessions),
+      appendAgentToolCall:
+        backingSessions.appendAgentToolCall.bind(backingSessions),
+      appendAgentToolResult:
+        backingSessions.appendAgentToolResult.bind(backingSessions),
+      getAgentToolCall: backingSessions.getAgentToolCall.bind(backingSessions),
+      getSession: backingSessions.getSession.bind(backingSessions),
+      getSessionContextWindow:
+        backingSessions.getSessionContextWindow.bind(backingSessions),
+      getSessionMetadata:
+        backingSessions.getSessionMetadata.bind(backingSessions),
+    } satisfies ConversationSessionStore;
+    const taskStore = new InMemoryAsyncToolTaskStore();
+    const storeOwner = { close: vi.fn() };
+    const config = channelConfig();
+    const runtime = await createConfiguredServerRuntime({
+      staticConfig,
+      channelConfig: config,
+      configRoot: "C:\\repo\\.huanlink\\config",
+      loadChannelConfig: async () => config,
+      env: { DEEPSEEK_API_KEY: "runtime-model-key" },
+      createAgentCallTransport: () => transport([]),
+      createChannelAdapter: (channel) =>
+        new FakeChannelAdapter(channel.channelId, []),
+      watchFactory: noopWatchFactory,
+      createPersistence: () => ({ sessionStore, taskStore, storeOwner }),
+    });
+
+    const reservation = runtime.taskService.reserve({
+      sessionId: "session-1",
+      sourceRunId: "run-1",
+      sourceToolCallId: "call-1",
+      kind: "agent-call",
+      toolName: "submit_codex_agent_call",
+      payload: { artifacts: [] },
+    });
+
+    expect(reservation.status).toBe("reserved");
+    expect(taskStore.getBySource("session-1", "run-1", "call-1")).toMatchObject(
+      { taskId: expect.any(String) },
+    );
+    await runtime.close();
+    expect(storeOwner.close).toHaveBeenCalledOnce();
+  });
+
+  test("closes persistence when Task recovery prevents Runtime construction", async () => {
+    const recoveryError = new Error("persisted Task facts are unreadable");
+    const storeOwner = { close: vi.fn() };
+    const config = channelConfig();
+
+    await expect(
+      createConfiguredServerRuntime({
+        staticConfig,
+        channelConfig: config,
+        configRoot: "C:\\repo\\.huanlink\\config",
+        loadChannelConfig: async () => config,
+        env: { DEEPSEEK_API_KEY: "runtime-model-key" },
+        createAgentCallTransport: () => transport([]),
+        createChannelAdapter: (channel) =>
+          new FakeChannelAdapter(channel.channelId, []),
+        watchFactory: noopWatchFactory,
+        createPersistence: () => ({
+          sessionStore: new InMemoryConversationSessionStore(),
+          taskStore: new FailingRecoveryTaskStore(recoveryError),
+          storeOwner,
+        }),
+      }),
+    ).rejects.toBe(recoveryError);
+    expect(storeOwner.close).toHaveBeenCalledOnce();
+  });
+
+  test("closes persistence when A2A preflight prevents Channel startup", async () => {
+    const preflightError = new Error("A2A Agent is unavailable");
+    const events: string[] = [];
+    const storeOwner = {
+      close: vi.fn(() => {
+        events.push("store:close");
+      }),
+    };
+    const config = channelConfig();
+    const runtime = await createConfiguredServerRuntime({
+      staticConfig,
+      channelConfig: config,
+      configRoot: "C:\\repo\\.huanlink\\config",
+      loadChannelConfig: async () => config,
+      env: { DEEPSEEK_API_KEY: "runtime-model-key" },
+      createAgentCallTransport: () => ({
+        ...transport(events),
+        discoverCapability: vi.fn(async () => {
+          events.push("a2a:preflight");
+          throw preflightError;
+        }),
+      }),
+      createChannelAdapter: (channel) =>
+        new FakeChannelAdapter(channel.channelId, events),
+      watchFactory: noopWatchFactory,
+      createPersistence: () => ({
+        sessionStore: new InMemoryConversationSessionStore(),
+        taskStore: new InMemoryAsyncToolTaskStore(),
+        storeOwner,
+      }),
+    });
+
+    await expect(runtime.start()).rejects.toBe(preflightError);
+    expect(events).toEqual(["a2a:preflight", "store:close"]);
+    expect(storeOwner.close).toHaveBeenCalledOnce();
+  });
+
+  test("reopens persisted Tasks without resuming remote or MainAgent work", async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), "huanlink-configured-db-"));
+    let runtime: ConfiguredServerRuntime | undefined;
+    try {
+      const initial = await createServerSqlitePersistence({ projectRoot });
+      initial.sessionStore.appendChannelMessage("session-1", {
+        messageId: "message-1",
+        route: {
+          channelId: "qq-main",
+          conversationKind: "group",
+          conversationId: "10001",
+        },
+        sender: { id: "20002", username: "Alice", isSelf: false },
+        receivedAt: "2026-08-21T02:00:00.000Z",
+        content: "persisted source",
+        contentFormat: "onebot11.cq",
+      });
+      initial.sessionStore.appendAgentToolCall("session-1", {
+        runId: "run-1",
+        toolCallId: "call-1",
+        toolName: "submit_codex_agent_call",
+        arguments: { task: "do not resume after restart" },
+      });
+      initial.taskStore.insert({
+        taskId: "task-1",
+        sessionId: "session-1",
+        sourceRunId: "run-1",
+        sourceToolCallId: "call-1",
+        kind: "agent-call",
+        quotaPool: "a2a",
+        toolName: "submit_codex_agent_call",
+        state: "working",
+        payload: { artifacts: [] },
+        createdAt: "2026-08-21T02:00:01.000Z",
+        updatedAt: "2026-08-21T02:00:02.000Z",
+      });
+      await initial.storeOwner.close();
+
+      const events: string[] = [];
+      const remote = transport(events);
+      const submitTask = vi.spyOn(remote, "submitTask");
+      const continueTask = vi.spyOn(remote, "continueTask");
+      const watchTask = vi.spyOn(remote, "watchTask");
+      const cancelTask = vi.spyOn(remote, "cancelTask");
+      const adapter = new FakeChannelAdapter("qq-main", events);
+      const send = vi.spyOn(adapter, "send");
+      const config = channelConfig();
+      runtime = await createConfiguredServerRuntime({
+        staticConfig,
+        channelConfig: config,
+        configRoot: join(projectRoot, ".huanlink", "config"),
+        loadChannelConfig: async () => config,
+        env: { DEEPSEEK_API_KEY: "runtime-model-key" },
+        createAgentCallTransport: () => remote,
+        createChannelAdapter: () => adapter,
+        watchFactory: noopWatchFactory,
+        createPersistence: () => createServerSqlitePersistence({ projectRoot }),
+      });
+
+      expect(
+        runtime.taskService.getStatus("session-1", "task-1"),
+      ).toMatchObject({
+        status: "found",
+        taskId: "task-1",
+        state: "unknown",
+        statusMessage: "reconciliation-required",
+      });
+      await runtime.start();
+
+      expect(remote.discoverCapability).toHaveBeenCalledOnce();
+      expect(submitTask).not.toHaveBeenCalled();
+      expect(continueTask).not.toHaveBeenCalled();
+      expect(watchTask).not.toHaveBeenCalled();
+      expect(cancelTask).not.toHaveBeenCalled();
+      expect(send).not.toHaveBeenCalled();
+
+      await runtime.close();
+      runtime = undefined;
+      const reopened = await createServerSqlitePersistence({ projectRoot });
+      expect(reopened.taskStore.get("session-1", "task-1")).toMatchObject({
+        taskId: "task-1",
+        state: "unknown",
+      });
+      await reopened.storeOwner.close();
+    } finally {
+      await runtime?.close();
+      rmSync(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("releases the real SQLite owner when preflight fails", async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), "huanlink-preflight-db-"));
+    let runtime: ConfiguredServerRuntime | undefined;
+    try {
+      const preflightError = new Error("configured A2A preflight failed");
+      const config = channelConfig();
+      runtime = await createConfiguredServerRuntime({
+        staticConfig,
+        channelConfig: config,
+        configRoot: join(projectRoot, ".huanlink", "config"),
+        loadChannelConfig: async () => config,
+        env: { DEEPSEEK_API_KEY: "runtime-model-key" },
+        createAgentCallTransport: () => ({
+          ...transport([]),
+          discoverCapability: async () => {
+            throw preflightError;
+          },
+        }),
+        createChannelAdapter: (channel) =>
+          new FakeChannelAdapter(channel.channelId, []),
+        watchFactory: noopWatchFactory,
+        createPersistence: () => createServerSqlitePersistence({ projectRoot }),
+      });
+
+      await expect(runtime.start()).rejects.toBe(preflightError);
+      const reopened = await createServerSqlitePersistence({ projectRoot });
+      reopened.sessionStore.appendChannelMessage("session-after-failure", {
+        messageId: "message-after-failure",
+        route: {
+          channelId: "qq-main",
+          conversationKind: "group",
+          conversationId: "10001",
+        },
+        sender: { id: "20002", username: "Alice", isSelf: false },
+        receivedAt: "2026-08-21T02:01:00.000Z",
+        content: "database reopened",
+        contentFormat: "onebot11.cq",
+      });
+      await reopened.storeOwner.close();
+    } finally {
+      await runtime?.close();
+      rmSync(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   test("creates one config-derived quota owner and one Task Service", async () => {
     const runtime = await createRuntime({ events: [] });
 

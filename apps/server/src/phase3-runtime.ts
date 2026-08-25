@@ -147,6 +147,10 @@ export function createPhase3HuanLinkRuntime(
     agentCalls.onBackgroundError(onBackgroundError);
   let closed = false;
   let closeOperation: Promise<void> | undefined;
+  const activeFreshTurns = new Map<
+    AbortController,
+    Promise<AgentRuntimeResult>
+  >();
 
   const executeMainAgentTurn = async (
     input: AgentRuntimeInput & { readonly trigger: AgentRuntimeTrigger },
@@ -166,6 +170,7 @@ export function createPhase3HuanLinkRuntime(
         ...input,
         input: input.input ?? "",
       });
+      input.signal?.throwIfAborted();
       logger.info("main_agent.run.completed", fields);
       logger.debug("main_agent.run.output", {
         ...fields,
@@ -197,115 +202,107 @@ export function createPhase3HuanLinkRuntime(
     let runId: RunId | undefined;
     let skipped = false;
     try {
-      await waitWithSignal(
-        turns.runOperation({
-          sessionId: task.sessionId,
-          signal,
-          operation: async () => {
-            const status = options.taskService.getStatus(
-              task.sessionId,
-              task.taskId,
+      await turns.runOperation({
+        sessionId: task.sessionId,
+        signal,
+        operation: async () => {
+          const status = options.taskService.getStatus(
+            task.sessionId,
+            task.taskId,
+          );
+          if (status.status !== "found") {
+            throw new Error(
+              `Async Tool Task ${task.taskId} was not found in this Session`,
             );
-            if (status.status !== "found") {
-              throw new Error(
-                `Async Tool Task ${task.taskId} was not found in this Session`,
-              );
-            }
-            const triggerMatchesCurrentState =
-              trigger === "agent_call_input_required"
-                ? status.state === "input-required"
-                : isAsyncToolTaskTerminalState(status.state);
-            if (!triggerMatchesCurrentState) {
-              skipped = true;
-              logger.info("main_agent.reentry.skipped", {
-                ...baseFields,
-                currentState: status.state,
-                skipReason: "stale_trigger",
-              });
-              return;
-            }
-            const cleanup = await waitWithSignal(
-              Promise.resolve().then(() =>
-                beforeReentry({
-                  sessionId: task.sessionId,
-                  trigger,
-                  reason,
-                  task: status,
-                  signal,
-                }),
-              ),
+          }
+          const triggerMatchesCurrentState =
+            trigger === "agent_call_input_required"
+              ? status.state === "input-required"
+              : isAsyncToolTaskTerminalState(status.state);
+          if (!triggerMatchesCurrentState) {
+            skipped = true;
+            logger.info("main_agent.reentry.skipped", {
+              ...baseFields,
+              currentState: status.state,
+              skipReason: "stale_trigger",
+            });
+            return;
+          }
+          const cleanup = await Promise.resolve().then(() =>
+            beforeReentry({
+              sessionId: task.sessionId,
+              trigger,
+              reason,
+              task: status,
               signal,
+            }),
+          );
+          try {
+            signal.throwIfAborted();
+            const sourceToolCall = options.sessionStore.getAgentToolCall(
+              task.sessionId,
+              task.sourceRunId,
+              task.sourceToolCallId,
             );
-            try {
-              const sourceToolCall = options.sessionStore.getAgentToolCall(
-                task.sessionId,
-                task.sourceRunId,
-                task.sourceToolCallId,
+            if (sourceToolCall === undefined) {
+              throw new Error(
+                `Async Tool Task ${task.taskId} source Tool Call was not found`,
               );
-              if (sourceToolCall === undefined) {
-                throw new Error(
-                  `Async Tool Task ${task.taskId} source Tool Call was not found`,
-                );
-              }
-              const window = options.sessionStore.getSessionContextWindow(
-                task.sessionId,
+            }
+            const window = options.sessionStore.getSessionContextWindow(
+              task.sessionId,
+            );
+            if (window === undefined) {
+              throw new Error(
+                `Conversation Session ${task.sessionId} does not exist`,
               );
-              if (window === undefined) {
-                throw new Error(
-                  `Conversation Session ${task.sessionId} does not exist`,
-                );
-              }
-              const latestContext = buildTaskReentrySessionContext(
-                window,
-                sourceToolCall,
-              );
-              const currentRunId = createRunId();
-              runId = currentRunId;
-              const input =
-                trigger === "agent_call_input_required"
-                  ? buildAsyncToolTaskInputRequiredReentryInput(
-                      status,
-                      latestContext,
-                    )
-                  : buildAsyncToolTaskReentryInput(status, latestContext);
-              const reentryFields = { ...baseFields, runId: currentRunId };
-              logger.info("main_agent.reentry.context_ready", reentryFields);
-              logger.debug("main_agent.reentry.payload", {
-                ...reentryFields,
-                latestContextChars: latestContext.length,
-                inputChars: input.length,
-              });
-              const result = await executeMainAgentTurn({
+            }
+            const latestContext = buildTaskReentrySessionContext(
+              window,
+              sourceToolCall,
+            );
+            const currentRunId = createRunId();
+            runId = currentRunId;
+            const input =
+              trigger === "agent_call_input_required"
+                ? buildAsyncToolTaskInputRequiredReentryInput(
+                    status,
+                    latestContext,
+                  )
+                : buildAsyncToolTaskReentryInput(status, latestContext);
+            const reentryFields = { ...baseFields, runId: currentRunId };
+            logger.info("main_agent.reentry.context_ready", reentryFields);
+            logger.debug("main_agent.reentry.payload", {
+              ...reentryFields,
+              latestContextChars: latestContext.length,
+              inputChars: input.length,
+            });
+            const result = await executeMainAgentTurn({
+              runId: currentRunId,
+              sessionId: task.sessionId,
+              trigger,
+              input,
+              signal,
+            });
+            await Promise.resolve().then(() =>
+              onReentry({
                 runId: currentRunId,
                 sessionId: task.sessionId,
                 trigger,
+                reason,
+                latestContext,
                 input,
-                signal,
-              });
-              await waitWithSignal(
-                Promise.resolve().then(() =>
-                  onReentry({
-                    runId: currentRunId,
-                    sessionId: task.sessionId,
-                    trigger,
-                    reason,
-                    latestContext,
-                    input,
-                    output: result.output,
-                    task: status,
-                  }),
-                ),
-                signal,
-              );
-            } finally {
-              if (cleanup !== undefined) {
-                await cleanup();
-              }
+                output: result.output,
+                task: status,
+              }),
+            );
+          } finally {
+            if (cleanup !== undefined) {
+              await cleanup();
             }
-          },
-        }),
-        signal,
-      );
+          }
+        },
+      });
       if (!skipped) {
         logger.info("main_agent.reentry.completed", {
           ...baseFields,
@@ -348,6 +345,47 @@ export function createPhase3HuanLinkRuntime(
     activeReentries.set(controller, operation);
   };
 
+  const runFreshMainAgent = (
+    input: Phase3MainAgentInput,
+  ): Promise<AgentRuntimeResult> => {
+    if (closed) {
+      return Promise.reject(new Error("Phase 3 runtime is closed"));
+    }
+    const controller = new AbortController();
+    const unlinkCallerSignal = linkAbortSignal(input.signal, controller);
+    const operation = turns
+      .runOperation({
+        sessionId: input.sessionId,
+        signal: controller.signal,
+        operation: async () => {
+          const projectedInput =
+            options.getLatestContext === undefined
+              ? input.input
+              : await Promise.resolve().then(() =>
+                  getLatestContext(input.sessionId),
+                );
+          controller.signal.throwIfAborted();
+          if (projectedInput === undefined) {
+            throw new Error(
+              "Phase 3 requires a Session context reader for fresh turns",
+            );
+          }
+          return await executeMainAgentTurn({
+            ...input,
+            trigger: "user",
+            input: projectedInput,
+            signal: controller.signal,
+          });
+        },
+      })
+      .finally(() => {
+        unlinkCallerSignal();
+        activeFreshTurns.delete(controller);
+      });
+    activeFreshTurns.set(controller, operation);
+    return operation;
+  };
+
   const unsubscribeTaskInputRequired = options.taskService.onInputRequired(
     (task) => superviseTaskReentry(task, "agent_call_input_required"),
   );
@@ -360,13 +398,17 @@ export function createPhase3HuanLinkRuntime(
     unsubscribeTaskInputRequired();
     unsubscribeTaskTerminal();
     const closeReason = new Error("Phase 3 runtime closed");
+    for (const controller of activeFreshTurns.keys()) {
+      controller.abort(closeReason);
+    }
     for (const controller of activeReentries.keys()) {
       controller.abort(closeReason);
     }
+    const freshTurnDrain = Promise.allSettled([...activeFreshTurns.values()]);
     const reentryDrain = Promise.allSettled([...activeReentries.values()]);
     try {
       await agentCalls.close();
-      await reentryDrain;
+      await Promise.all([freshTurnDrain, reentryDrain]);
     } finally {
       unsubscribeBackgroundError();
     }
@@ -374,37 +416,28 @@ export function createPhase3HuanLinkRuntime(
 
   return {
     agentCalls,
-    runMainAgent: (input) =>
-      turns.runOperation({
-        sessionId: input.sessionId,
-        ...(input.signal === undefined ? {} : { signal: input.signal }),
-        operation: async () => {
-          const projectedInput =
-            options.getLatestContext === undefined
-              ? input.input
-              : await waitWithSignal(
-                  Promise.resolve().then(() =>
-                    getLatestContext(input.sessionId),
-                  ),
-                  input.signal ?? new AbortController().signal,
-                );
-          if (projectedInput === undefined) {
-            throw new Error(
-              "Phase 3 requires a Session context reader for fresh turns",
-            );
-          }
-          return await executeMainAgentTurn({
-            ...input,
-            trigger: "user",
-            input: projectedInput,
-          });
-        },
-      }),
+    runMainAgent: runFreshMainAgent,
     close() {
       closeOperation ??= performClose();
       return closeOperation;
     },
   };
+}
+
+function linkAbortSignal(
+  source: AbortSignal | undefined,
+  target: AbortController,
+): () => void {
+  if (source === undefined) {
+    return () => undefined;
+  }
+  const abort = () => target.abort(source.reason);
+  if (source.aborted) {
+    abort();
+    return () => undefined;
+  }
+  source.addEventListener("abort", abort, { once: true });
+  return () => source.removeEventListener("abort", abort);
 }
 
 function taskLogFields(
@@ -417,38 +450,6 @@ function taskLogFields(
     taskKind: task.kind,
     trigger,
   };
-}
-
-function waitWithSignal<T>(
-  operation: Promise<T>,
-  signal: AbortSignal,
-): Promise<T> {
-  if (signal.aborted) {
-    void operation.catch(() => undefined);
-    return Promise.reject(abortReason(signal));
-  }
-  return new Promise<T>((resolve, reject) => {
-    const cleanup = () => signal.removeEventListener("abort", onAbort);
-    const onAbort = () => {
-      cleanup();
-      reject(abortReason(signal));
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-    void operation.then(
-      (value) => {
-        cleanup();
-        resolve(value);
-      },
-      (error) => {
-        cleanup();
-        reject(error);
-      },
-    );
-  });
-}
-
-function abortReason(signal: AbortSignal): unknown {
-  return signal.reason ?? new Error("Phase 3 re-entry aborted");
 }
 
 function runtimeErrorType(error: unknown): string {

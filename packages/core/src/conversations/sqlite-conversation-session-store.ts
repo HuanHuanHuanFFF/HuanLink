@@ -1,5 +1,3 @@
-import { DatabaseSync } from "node:sqlite";
-
 import {
   assertValidInboundChannelMessage,
   type ChannelConversationRoute,
@@ -58,27 +56,34 @@ import {
   type SqliteSessionRow,
   type SqliteToolCallRow,
 } from "./sqlite-conversation-codec.js";
-import { applySqliteConversationMigrations } from "./sqlite-migrations.js";
+import {
+  openSqliteDatabaseConnection,
+  type SqliteDatabaseConnection,
+} from "./sqlite-database-connection.js";
 
 const ENTRY_INDEX_STRIDE = 1024;
 
 /** SQLite-backed Conversation Store with persistent Channel and Tool facts. */
 export class SqliteConversationSessionStore implements ConversationSessionStore {
-  private readonly database: DatabaseSync;
-  private closed = false;
+  private readonly database: SqliteDatabaseConnection["database"];
+  private readonly connection: SqliteDatabaseConnection;
+  private readonly ownsConnection: boolean;
 
-  constructor(databasePath: string) {
-    this.database = new DatabaseSync(databasePath);
-    try {
-      this.database.exec("PRAGMA foreign_keys = ON");
-      this.database.exec("PRAGMA journal_mode = WAL");
-      this.database.exec("PRAGMA synchronous = NORMAL");
-      this.database.exec("PRAGMA busy_timeout = 5000");
-      applySqliteConversationMigrations(this.database);
-    } catch (error) {
-      this.database.close();
-      throw error;
+  constructor(databasePathOrConnection: string | SqliteDatabaseConnection) {
+    if (typeof databasePathOrConnection === "string") {
+      this.ownsConnection = true;
+      this.connection = openSqliteDatabaseConnection(databasePathOrConnection);
+    } else {
+      this.ownsConnection = false;
+      this.connection = databasePathOrConnection;
     }
+    this.database = this.connection.database;
+  }
+
+  static fromSharedConnection(
+    connection: SqliteDatabaseConnection,
+  ): SqliteConversationSessionStore {
+    return new SqliteConversationSessionStore(connection);
   }
 
   appendChannelMessage(
@@ -500,9 +505,8 @@ export class SqliteConversationSessionStore implements ConversationSessionStore 
 
   /** Closes the underlying database. Safe to call more than once. */
   close(): void {
-    if (!this.closed) {
-      this.database.close();
-      this.closed = true;
+    if (this.ownsConnection) {
+      this.connection.close();
     }
   }
 
@@ -720,8 +724,6 @@ export class SqliteConversationSessionStore implements ConversationSessionStore 
   }
 
   private assertOpen(): void {
-    if (this.closed) {
-      throw new Error("SQLite Conversation Store is closed");
-    }
+    this.connection.assertOpen("SQLite Conversation Store is closed");
   }
 }

@@ -2,7 +2,7 @@ import type {
   ChannelAdapter,
   ChannelOutboundMessagePart,
   ConversationJsonValue,
-  InMemoryConversationSessionStore,
+  ConversationSessionStore,
   RuntimeLogger,
   SessionToolHistoryRecorder,
 } from "@huanlink/core";
@@ -70,7 +70,7 @@ type ChannelReplyToolResult =
     };
 
 export type CreateChannelReplyToolOptions = {
-  sessions: InMemoryConversationSessionStore;
+  sessions: ConversationSessionStore;
   /** Defaults to the supplied Session Store without generating any IDs. */
   historyRecorder?: SessionToolHistoryRecorder;
   resolveAdapter(channelId: string): ChannelAdapter | undefined;

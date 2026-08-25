@@ -1,12 +1,15 @@
-import { Buffer } from "node:buffer";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { createBestEffortRuntimeLogger } from "./best-effort-runtime-logger.js";
-import { loadServerChannelRuntimeConfig } from "./local-user-config.js";
+import { createConfiguredServerRuntime } from "./configured-server-runtime.js";
+import {
+  loadHuanLinkServerStaticConfig,
+  loadServerChannelRuntimeConfig,
+} from "./local-user-config.js";
 import { startRuntimeWithSignalShutdown } from "./process-lifecycle.js";
 import { createServerRuntimeLogger } from "./server-runtime-logger.js";
-import { createServerRuntime } from "./server-runtime.js";
+import { createServerSqlitePersistence } from "./server-sqlite-persistence.js";
 
 await startHuanLinkServer().catch((error) => {
   console.error(`Failed to start HuanLink server: ${errorMessage(error)}`);
@@ -16,38 +19,25 @@ await startHuanLinkServer().catch((error) => {
 async function startHuanLinkServer(): Promise<void> {
   const projectRoot = fileURLToPath(new URL("../../../", import.meta.url));
   const configRoot = join(projectRoot, ".huanlink", "config");
-  const config = await loadServerChannelRuntimeConfig({ projectRoot });
+  const staticConfig = await loadHuanLinkServerStaticConfig({ projectRoot });
+  const channelConfig = await loadServerChannelRuntimeConfig({ projectRoot });
   const ownedLogger = createServerRuntimeLogger({
-    config,
+    config: channelConfig,
     moduleUrl: import.meta.url,
   });
   const logger = createBestEffortRuntimeLogger(ownedLogger);
   let lifecycleOwnsLogger = false;
 
   try {
-    const runtime = createServerRuntime({
-      config,
+    const runtime = await createConfiguredServerRuntime({
+      staticConfig,
+      channelConfig,
       configRoot,
-      loadConfig: () => loadServerChannelRuntimeConfig({ projectRoot }),
-      onChannelMessage: ({ sessionId, message }) => {
-        logger.info("channel.server.message_forwarded", {
-          sessionId,
-          channelId: message.route.channelId,
-          messageId: message.messageId,
-          conversationKind: message.route.conversationKind,
-          isSelf: message.sender.isSelf,
-          contentBytes: Buffer.byteLength(message.content, "utf8"),
-          ...(message.trigger === undefined
-            ? {}
-            : { trigger: message.trigger.kind }),
-        });
-      },
+      loadChannelConfig: () => loadServerChannelRuntimeConfig({ projectRoot }),
+      createPersistence: () => createServerSqlitePersistence({ projectRoot }),
       logger: logger.child({ source: "server.runtime" }),
     });
 
-    logger.warn("channel.server.downstream_not_configured", {
-      reason: "message_queue_deferred",
-    });
     lifecycleOwnsLogger = true;
     const state = await startRuntimeWithSignalShutdown({
       runtime,
@@ -62,7 +52,7 @@ async function startHuanLinkServer(): Promise<void> {
     }
 
     logger.info("server.ready", {
-      channelCount: config.channels.length,
+      channelCount: channelConfig.channels.length,
     });
   } catch (error) {
     if (!lifecycleOwnsLogger) {

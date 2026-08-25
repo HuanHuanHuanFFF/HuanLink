@@ -1539,6 +1539,94 @@ describe("Phase 3 HuanLink orchestration", () => {
     },
   );
 
+  test("drains the actual re-entry turn when its runner ignores shutdown", async () => {
+    const model = new DelegateThenSummarizeModel();
+    const initialRunner = new Runner({
+      modelProvider: new SingleModelProvider(model),
+      tracingDisabled: true,
+    });
+    const reentryStarted = deferred<AbortSignal | undefined>();
+    const releaseReentry = deferred();
+    let runnerCalls = 0;
+    const runner: OpenAiAgentsRunner = {
+      async run(agent, input, options) {
+        runnerCalls += 1;
+        if (runnerCalls === 1) {
+          return initialRunner.run(agent, input, options);
+        }
+        reentryStarted.resolve(options?.signal);
+        await releaseReentry.promise;
+        return { finalOutput: "late re-entry output" };
+      },
+    };
+    const onReentry = vi.fn();
+    const onBackgroundError = vi.fn<AgentCallBackgroundErrorListener>();
+    const runtime = createPhase3HuanLinkRuntime({
+      codexA2aOrigin: "http://127.0.0.1:1",
+      transport: terminalTransport("completed"),
+      runner,
+      onReentry,
+      onBackgroundError,
+    });
+    runtimes.push(runtime);
+
+    await runtime.runMainAgent({
+      runId: "run-phase3-noncooperative-reentry",
+      sessionId: "session-phase3-noncooperative-reentry",
+      input: "delegate and wait for shutdown",
+    });
+    const signal = await reentryStarted.promise;
+    const closeOperation = runtime.close();
+
+    expect(signal?.aborted).toBe(true);
+    await expect(settlesWithin(closeOperation, 50)).resolves.toBe(false);
+
+    releaseReentry.resolve();
+    await expect(closeOperation).resolves.toBeUndefined();
+    expect(onReentry).not.toHaveBeenCalled();
+    expect(onBackgroundError).not.toHaveBeenCalled();
+  });
+
+  test("aborts and drains the actual fresh turn before Phase3 closes", async () => {
+    const turnStarted = deferred<AbortSignal | undefined>();
+    const releaseTurn = deferred();
+    const runner: OpenAiAgentsRunner = {
+      run: async (_agent, _input, options) => {
+        turnStarted.resolve(options?.signal);
+        await releaseTurn.promise;
+        return { finalOutput: "done" };
+      },
+    };
+    const runtime = createPhase3HuanLinkRuntime({
+      codexA2aOrigin: "http://127.0.0.1:1",
+      transport: terminalTransport("completed"),
+      runner,
+    });
+    runtimes.push(runtime);
+
+    const turn = runtime.runMainAgent({
+      runId: "run-phase3-fresh-close",
+      sessionId: "session-phase3-fresh-close",
+      input: "wait until Phase3 closes",
+    });
+    const signal = await turnStarted.promise;
+    const closeOperation = runtime.close();
+
+    expect(signal?.aborted).toBe(true);
+    await expect(settlesWithin(closeOperation, 50)).resolves.toBe(false);
+
+    releaseTurn.resolve();
+    await expect(turn).rejects.toThrow(/closed/i);
+    await expect(closeOperation).resolves.toBeUndefined();
+    await expect(
+      runtime.runMainAgent({
+        runId: "run-phase3-after-close",
+        sessionId: "session-phase3-fresh-close",
+        input: "must not start",
+      }),
+    ).rejects.toThrow(/closed/i);
+  });
+
   test("reports a MainAgent re-entry failure through the background error callback", async () => {
     const model = new DelegateThenSummarizeModel();
     const observed = deferred<{

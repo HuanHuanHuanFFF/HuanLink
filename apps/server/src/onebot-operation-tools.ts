@@ -1,7 +1,7 @@
 import type {
   ChannelConversationRoute,
   ConversationJsonValue,
-  InMemoryConversationSessionStore,
+  ConversationSessionStore,
   RuntimeLogger,
   SessionToolHistoryRecorder,
   SessionId,
@@ -370,7 +370,7 @@ type OperationExecution = {
 };
 
 export type CreateOneBot11OperationToolsOptions = {
-  sessions: InMemoryConversationSessionStore;
+  sessions: ConversationSessionStore;
   /** Defaults to the supplied Session Store without generating any IDs. */
   historyRecorder?: SessionToolHistoryRecorder;
   resolveOperations(channelId: string): OneBot11Operations | undefined;

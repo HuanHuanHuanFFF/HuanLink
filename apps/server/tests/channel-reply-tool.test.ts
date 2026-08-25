@@ -3,6 +3,7 @@ import { describe, expect, test, vi } from "vitest";
 import {
   ChannelOperationError,
   InMemoryConversationSessionStore,
+  SqliteConversationSessionStore,
   type ChannelAdapter,
   type InboundChannelMessage,
   type SessionToolHistoryRecorder,
@@ -94,6 +95,49 @@ function fakeAdapter(messageId = "message-2"): ChannelAdapter & {
 }
 
 describe("current-session reply Tool", () => {
+  test("accepts a SQLite Conversation Store through the public Store contract", async () => {
+    const sessions = new SqliteConversationSessionStore(":memory:");
+    try {
+      sessions.appendChannelMessage(
+        "session-channel",
+        inboundMessage("message-1"),
+      );
+      const adapter = fakeAdapter();
+      const tool = createChannelReplyTool({
+        sessions,
+        resolveAdapter: () => adapter,
+      });
+      const argumentsJson = JSON.stringify({
+        parts: [{ type: "text", text: "persisted reply" }],
+      });
+
+      const output = await tool.invoke(
+        runContext("session-channel"),
+        argumentsJson,
+        { toolCall: toolCall("call-sqlite-reply", argumentsJson) },
+      );
+
+      expect(JSON.parse(String(output))).toEqual({
+        status: "success",
+        tool: "reply",
+        messageId: "message-2",
+      });
+      expect(sessions.getSession("session-channel")?.timeline).toContainEqual({
+        type: "agent_tool_result",
+        runId: "run-reply",
+        toolCallId: "call-sqlite-reply",
+        toolName: "reply",
+        output: {
+          status: "success",
+          tool: "reply",
+          messageId: "message-2",
+        },
+      });
+    } finally {
+      sessions.close();
+    }
+  });
+
   test("is exposed only for a session explicitly marked as an external channel", async () => {
     const sessions = new InMemoryConversationSessionStore();
     sessions.appendChannelMessage(
