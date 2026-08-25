@@ -385,6 +385,15 @@ B04 只建立进程内通用 Task。Task SQLite 表与重开语义按 B05-A 实�
 - 重启前返回的 HuanLink `taskId` 可按 B05-A 查询持久化状态；非终态只返回 `unknown` 与需要对账，不得据此自动探测外部 Task、重建 watcher 或触发 re-entry。
 - 创建目录、migration 或 Runtime 启动失败时不留下仍被占用的数据库句柄。
 
+### B05-B 实施结果（2026-08-21）
+
+- Core 已新增单一 SQLite owner/factory：一次打开、配置和迁移同一数据库连接，再向 Conversation Store 与 Async Tool Task Store 提供两个纯业务 facade；现有按路径构造的独立 Store 只保留给隔离测试。Server 在 `.huanlink/data/huanlink.sqlite` 创建正式资源，`reply` 与 OneBot Tool 只依赖 `ConversationSessionStore` 合同。
+- 配置化总 Runtime 现在从同一持久化资源构造 Task Service、Phase3 与 Channel；正式 `main.ts` 已移除 Channel-only 日志出口，加载完整静态配置并启动该总 Runtime。In-memory 资源只保留在单元测试、Fake Runtime 与显式隔离 seam。
+- 关闭链保持 Channel → Phase3 → SQLite owner → Logger。压力审查补齐了 fresh turn 与 re-entry 的真实 Promise 所有权：Phase3 在关闭时发出 abort，并等待底层 Runner、re-entry hook 与清理实际结束后才允许闭库；本批不引入硬超时或强制退出，非协作执行会让关闭保持 pending，而不会伪装关闭成功后继续写已关闭数据库。
+- 真实临时 SQLite 组合测试覆盖固定目录、消息与 Tool 历史、pending delivery、自身消息关联、重复消息去重、Task 重开 `unknown / reconciliation-required`、零自动 submit/continue/watch/cancel/send，以及目录创建、migration 与 A2A preflight 失败后的句柄释放；独立构造测试覆盖 Task recovery 失败时的 owner 清理。
+- 三路独立压力审查修复两处关闭竞态并补齐真实组合证据后，未留下 P0/P1/P2。新鲜验证为 Core `313`、Server `229`、A2A Client `23`、OneBot 11 `104`、OpenAI Integration `59`、Codex A2A Adapter `143` 个测试通过，另有 `2` 个既有条件测试跳过；全仓 typecheck、Prettier 与差异检查通过。全仓 build 仍被本机对既有 `packages/core/dist/**` 文件的 `EPERM` 占用锁阻断，不是 TypeScript 编译错误。
+- 本批没有执行真实 QQ、DeepSeek 或 Codex 外部 smoke，也没有自动恢复、自动对账或自动重发；这些仍留在 B06 与后续价值优先阶段。
+
 ### 实施顺序与停点
 
 B05-A 必须先完成 Task Store、迁移、重开投影和名额重建，并单独报告真实持久化边界；B05-B 随后只把已经验收的 Task Store 与现有 Conversation Store 接入生产 Server SQLite 生命周期，不改写 B05-A 的状态或恢复合同。B05-B 完成后再报告正式入口、文件生命周期与关闭顺序。任何一批都不能把 Task 可查询写成任务已自动恢复。
