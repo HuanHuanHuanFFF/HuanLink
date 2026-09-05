@@ -425,6 +425,55 @@ B05-A 必须先完成 Task Store、迁移、重开投影和名额重建，并单
 
 历史 Demo 与 Channel-only smoke 只能作对照，不能代替这次正式架构的新鲜证据。
 
+### B06 现场验证记录（2026-09-05，Asia/Shanghai）
+
+本轮真实联调通过：QQ 入站、MainAgent 显式回复、真实 A2A/Codex 异步执行、SQLite 任务与工具历史、终态回流回复，以及新消息的自身回流关联均取得现场证据。此结论限于以下已测场景，不代表 B06 的最终全仓回归与压力审查已经完成。
+
+#### 环境与修改范围
+
+- 主工作区为 `dev/v1.0-runtime-integration`，测试基线提交为 `7ed5ec1`，叠加本节记录的未提交修复；Node 为 `24.15.0`。本轮全仓 build 成功，B05-B 当时的 `dist` 文件锁未再次阻断构建。
+- MainAgent 使用 `deepseek-v4-flash`；Codex Adapter 连接已登录的 `codex app-server 0.145.0`，执行模型为 `gpt-5.4-mini`，任务显式使用 `high`。API Key 和 OneBot Token 保留在 Git 忽略的 `.env`，本记录不保存秘密值。
+- QQ 使用指定测试群的 allowlist，私聊 allowlist 为空，特权操作关闭。具体连接和名单以 `.huanlink/config/server/channels/onebot11.json` 为准。
+- Codex 只在独立工作区 `D:/CodingProject/HuanLink-B06-Smoke` 执行，使用现有 `spike/demo-v0` 分支，未改动主工作区的业务源码。Adapter 的旧入口仍硬编码该分支并通过环境变量接收工作区；这次真实测试不代表 Adapter JSON 入口迁移已经完成。
+
+#### 通过场景与证据
+
+1. 基础聊天：两次群消息分别启动 MainAgent，均通过显式 `reply` 返回成功，随后 Run 正常完成；不能把内部 final text 当作群回复证据。
+2. 异步编码：指定仅修改 `packages/core/tests/simple-lru-map.test.ts`，新增“对已有 key 再次 set 会更新值并刷新 LRU 顺序”的测试。实际只有该文件增加 14 行，无其他文件改动、无提交或推送。主线程独立重跑该文件 `3/3`，并重跑 smoke 工作区 Core 全集 `14 files / 122 tests`，全部通过；这些数量属于隔离旧分支，不是当前生产 Core 的全仓回归数量。
+3. 任务回流：本次成功任务只派发一次 A2A 请求，先保存并返回 `accepted`，随后经过 `working` 到达 `completed`；终态启动一次新的 MainAgent Run。初次受理与完成回复各调用一次 `reply`，均成功；完成回复包含相同 HuanLink task ID、修改文件和真实测试结果。
+4. 持久化：SQLite 中保留原始来源 Tool Call、初次 `accepted` Tool Result、最终 Task 快照、Artifact 和私有 A2A 引用。终态没有给原 Tool Call 再追加第二个 Result；完成回复属于新 Run。现场数据库 `integrity_check` 为 `ok`，外键检查无违规记录。
+5. 自身消息关联：启用平台自身消息上报后，用新的一条普通回复单独补验。消息 `948225445` 被观测为 `isSelf: true`，数据库中只有一条 Channel 事实，已关联原 `reply` Tool Call，pending delivery 已清除；本次只有一个 MainAgent Run 和一次回复，自身消息没有启动新 Run。启用前的历史 pending 不作为已补报或已清理处理。
+6. 脱敏检查：本次成功任务相关的 Server 与 Adapter 日志未发现已配置的模型 Key 或 OneBot Token。该检查只覆盖本次相关日志，不能扩写为所有历史日志与任意敏感载荷的完整审计。
+
+下表供本地日志与数据库交叉核验；A2A、Codex 标识仅是工程验收关联信息，不改变模型查询使用 HuanLink task ID 的合同。
+
+| 证据 | 标识 |
+| --- | --- |
+| 成功 HuanLink Task | `f508f4c9-0b57-4fc5-876b-bbf6029dc019` |
+| 来源 MainAgent Run | `a4260189-e6f3-4097-8c4d-629905398c70` |
+| 终态回流 Run | `65364001-7407-4c65-bd05-2531aa8ee42c` |
+| 私有 A2A Task | `51650ecc-698a-4b69-8fde-51e1ea5badac` |
+| Codex thread / turn | `01a07222-d503-7440-baf0-b7f4b9ebb77f` / `01a07222-e9cd-7283-b064-7876f110d95f` |
+| 受理 / 完成 QQ messageId | `1293288138` / `94412742` |
+| 自身消息补验 Run / messageId | `54b8bcf2-a42a-4f3a-ae2c-f15c2843b7b9` / `948225445` |
+
+本地证据入口为 `.huanlink/logs/server.jsonl`、`.huanlink/logs/codex-a2a-adapter.jsonl`、`.huanlink/data/huanlink.sqlite` 和 smoke 工作区 diff；运行产物不随本文提交。
+
+#### 现场问题与处理
+
+- **DeepSeek 拒绝空对象 Tool Schema：** `onebot_standard` 的 7 个无参数操作生成了空 `params` object，导致即使只要求回复文字，整个模型请求也返回 HTTP 400。已移除这些操作的模型侧 `params`，保留原无参 Operations 调用和 strict/权限边界。Luna xhigh 子 Agent 完成失败测试与修复，主线程复核；回归覆盖公开 Schema、无参 `.invoke` 及真实 SDK 桥接生成的完整请求。修复后真实 DeepSeek 请求返回 HTTP 200 并生成 `reply`；随后群内实际回复通过。Server 全集 `231 passed / 1 conditional skip`，类型检查、构建、修复文件格式与差异检查通过。
+- **Codex 继承不兼容的全局推理强度：** 任务 `720b28ed-300e-450a-94b5-0eb8cf41e249` 因 `gpt-5.4-mini` 配上全局 `max` 失败，失败事实保留，没有代码改动。已在 Adapter 每次 `turn/start` 显式传 `effort: "high"`，不修改用户全局 Codex 配置；回归先证明旧请求缺少该字段，再转绿。Adapter 全集 `143 passed / 1 conditional skip`，类型检查、构建、格式与差异检查通过。只重启 Adapter 后，新任务完成上述真实编码验收，未覆盖或复用旧失败 Task。
+- **OneBot 连接与自身上报：** 服务器防火墙未开放时 WebSocket 握手断开；用户开放后认证与测试群查询成功。平台未开启自身消息上报时，发送成功但关联保持 pending；开启后通过新回复补验，不据此推断历史消息会自动补报。
+- **本地测试进程停止：** 一次补验时 Server 与 Adapter 进程均已不存在，新消息未进入系统；日志没有正常关闭记录，具体退出原因未确定。已改用隐藏后台进程重新启动并核验 `server.ready`，后续补验成功。该处理不是服务守护、自动拉起或丢失消息补偿能力。
+
+#### 测试后待办与收口边界
+
+- 用户已确认在 B06 测试后统一设计并实现“每次派单显式指定执行参数”，包括推理强度与明确的目标项目选择；本轮只修复 Adapter 默认 `high`，不提前扩展 MainAgent/AgentCall/A2A 调用合同。
+- 项目选择方案应围绕稳定 `projectId` 与 Adapter 管理的工作区、分支映射展开，Codex 专属执行规则仍留在 Adapter。每次派单字段、默认值优先级、模型与强度能力校验、A2A 承载方式及其他执行选项尚待后续方案确定。
+- B06 收口前仍须对最终工作树完成本节自动化验收要求的全仓 format/build/test/typecheck/diff 检查，以及至少两路独立压力审查；本轮包级回归和前批审查不代替最终状态的这两项验收。
+- 本次没有执行真实长任务并发压力、运行中关闭/重启、崩溃恢复或完整敏感载荷审计；已有自动化证据与现场证据应分别说明，不推断未测试能力。
+- 当前代码、文档及 QQ 配置修改尚未提交或推送；smoke 工作区的测试改动单独保留，不混入主分支。记录整理不授权提交、推送、PR 或合并。
+
 ## 12. 提交、推送与模块门
 
 - 文档与代码分开提交；D13 计划、每批实施结果和代码不得混在同一提交。
