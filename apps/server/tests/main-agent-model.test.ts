@@ -1,10 +1,16 @@
 import { describe, expect, test, vi } from "vitest";
 
+import {
+  InMemoryConversationSessionStore,
+  type ChannelAdapter,
+} from "@huanlink/core";
 import type { AgentCallContinuator, AgentCallInvoker } from "@huanlink/core";
 import { CONTINUE_TASK_TOOL_NAME } from "@huanlink/integration-openai-agents";
+import type { OneBot11Operations } from "@huanlink/integration-onebot11";
 
 import {
   createDeepSeekMainAgentModelBinding,
+  createOneBot11OperationTools,
   createPhase3MainAgentRuntime,
 } from "../src/index.js";
 
@@ -42,6 +48,33 @@ describe("createDeepSeekMainAgentModelBinding", () => {
         throw new Error("Unexpected task continuation in this test");
       },
     );
+    const sessions = new InMemoryConversationSessionStore();
+    sessions.appendChannelMessage("session-deepseek-bridge", {
+      messageId: "message-deepseek-bridge",
+      route: {
+        channelId: "qq-main",
+        conversationKind: "group",
+        conversationId: "10001",
+      },
+      sender: {
+        id: "20002",
+        username: "Alice",
+        isSelf: false,
+      },
+      receivedAt: "2026-08-07T12:00:00.000Z",
+      content: "hello",
+      contentFormat: "onebot11.cq",
+    });
+    const onebotTools = createOneBot11OperationTools({
+      sessions,
+      resolveOperations: () =>
+        ({ standard: {}, privileged: {} }) as unknown as OneBot11Operations,
+      isRouteAllowed: () => true,
+      sessionIdForRoute: () => "session-deepseek-bridge",
+      runOutbound: async (_route, operation) => await operation(),
+      runOperation: async (_channelId, operation) => await operation(),
+    });
+    const fakeAdapter = { send: vi.fn() } as unknown as ChannelAdapter;
     const modelBinding = createDeepSeekMainAgentModelBinding({
       config: {
         provider: "deepseek",
@@ -58,6 +91,11 @@ describe("createDeepSeekMainAgentModelBinding", () => {
       },
       agentCallContinuator: { continueTask },
       modelBinding,
+      channelReply: {
+        sessions,
+        resolveAdapter: () => fakeAdapter,
+      },
+      additionalTools: [onebotTools.standard],
     });
 
     const result = await runtime.run({
@@ -86,30 +124,33 @@ describe("createDeepSeekMainAgentModelBinding", () => {
       model: "deepseek-v4-flash",
       thinking: { type: "enabled" },
       reasoning_effort: "high",
-      tools: [
-        {
-          type: "function",
-          function: {
-            name: "submit_codex_agent_call",
-            strict: true,
-          },
-        },
-        {
-          type: "function",
-          function: {
-            name: "get_task_status",
-            strict: true,
-          },
-        },
-        {
-          type: "function",
-          function: {
-            name: CONTINUE_TASK_TOOL_NAME,
-            strict: true,
-          },
-        },
-      ],
     });
+    const requestTools = requests[0]?.body.tools;
+    expect(
+      findFunctionTool(requestTools, "submit_codex_agent_call"),
+    ).toMatchObject({
+      type: "function",
+      function: { strict: true },
+    });
+    expect(findFunctionTool(requestTools, "get_task_status")).toMatchObject({
+      type: "function",
+      function: { strict: true },
+    });
+    expect(
+      findFunctionTool(requestTools, CONTINUE_TASK_TOOL_NAME),
+    ).toMatchObject({
+      type: "function",
+      function: { strict: true },
+    });
+    expect(findFunctionTool(requestTools, "reply")).toMatchObject({
+      type: "function",
+      function: { strict: true },
+    });
+    expect(findFunctionTool(requestTools, "onebot_standard")).toMatchObject({
+      type: "function",
+      function: { strict: true },
+    });
+    expect(containsEmptyObjectSchema(requestTools)).toBe(false);
   });
 });
 
@@ -125,6 +166,48 @@ function parseJsonBody(body: RequestInit["body"]): Record<string, unknown> {
     throw new Error("Expected DeepSeek request body to be JSON text");
   }
   return JSON.parse(body) as Record<string, unknown>;
+}
+
+function findFunctionTool(
+  tools: unknown,
+  name: string,
+): Record<string, unknown> | undefined {
+  if (!Array.isArray(tools)) {
+    return undefined;
+  }
+  return tools.find((candidate): candidate is Record<string, unknown> => {
+    if (candidate === null || typeof candidate !== "object") {
+      return false;
+    }
+    const functionDefinition = (candidate as Record<string, unknown>).function;
+    return (
+      functionDefinition !== null &&
+      typeof functionDefinition === "object" &&
+      (functionDefinition as Record<string, unknown>).name === name
+    );
+  });
+}
+
+function containsEmptyObjectSchema(schema: unknown): boolean {
+  if (Array.isArray(schema)) {
+    return schema.some(containsEmptyObjectSchema);
+  }
+  if (schema === null || typeof schema !== "object") {
+    return false;
+  }
+
+  const record = schema as Record<string, unknown>;
+  const properties = record.properties;
+  if (
+    record.type === "object" &&
+    (properties === undefined ||
+      properties === null ||
+      typeof properties !== "object" ||
+      Object.keys(properties).length === 0)
+  ) {
+    return true;
+  }
+  return Object.values(record).some(containsEmptyObjectSchema);
 }
 
 function toolCallResponse() {

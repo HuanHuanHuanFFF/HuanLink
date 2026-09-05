@@ -32,7 +32,6 @@ const positiveId = z.string().regex(/^[1-9]\d*$/u);
 const messageId = z.string().regex(/^-?\d+$/u);
 const nonBlank = z.string().regex(/\S/u);
 const messageText = z.string().min(1);
-const noParams = z.object({}).strict();
 const outboundPart = z.discriminatedUnion("type", [
   z.object({ type: z.literal("text"), text: messageText }).strict(),
   z
@@ -126,15 +125,11 @@ const standardRequest = z.discriminatedUnion("operation", [
       params: z.object({ messageId: nonBlank }).strict(),
     })
     .strict(),
-  z.object({ operation: z.literal("getLoginInfo"), params: noParams }).strict(),
-  z
-    .object({ operation: z.literal("getVersionInfo"), params: noParams })
-    .strict(),
-  z.object({ operation: z.literal("getStatus"), params: noParams }).strict(),
-  z.object({ operation: z.literal("canSendImage"), params: noParams }).strict(),
-  z
-    .object({ operation: z.literal("canSendRecord"), params: noParams })
-    .strict(),
+  z.object({ operation: z.literal("getLoginInfo") }).strict(),
+  z.object({ operation: z.literal("getVersionInfo") }).strict(),
+  z.object({ operation: z.literal("getStatus") }).strict(),
+  z.object({ operation: z.literal("canSendImage") }).strict(),
+  z.object({ operation: z.literal("canSendRecord") }).strict(),
   z
     .object({
       operation: z.literal("getStrangerInfo"),
@@ -143,9 +138,7 @@ const standardRequest = z.discriminatedUnion("operation", [
         .strict(),
     })
     .strict(),
-  z
-    .object({ operation: z.literal("getFriendList"), params: noParams })
-    .strict(),
+  z.object({ operation: z.literal("getFriendList") }).strict(),
   z
     .object({
       operation: z.literal("getGroupInfo"),
@@ -154,7 +147,7 @@ const standardRequest = z.discriminatedUnion("operation", [
         .strict(),
     })
     .strict(),
-  z.object({ operation: z.literal("getGroupList"), params: noParams }).strict(),
+  z.object({ operation: z.literal("getGroupList") }).strict(),
   z
     .object({
       operation: z.literal("getGroupMemberInfo"),

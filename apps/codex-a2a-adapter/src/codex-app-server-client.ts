@@ -319,6 +319,8 @@ export class CodexAppServerClient implements CodexRuntimeClient {
   async startTurn(options: StartCodexTurnOptions): Promise<{ turnId: string }> {
     const result = await this.request<{ turn: { id: string } }>("turn/start", {
       threadId: options.threadId,
+      // Keep Adapter tasks independent of the user's global Codex effort.
+      effort: "high",
       input: [
         {
           type: "text",

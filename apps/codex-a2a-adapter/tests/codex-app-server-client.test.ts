@@ -210,6 +210,7 @@ describe("CodexAppServerClient", () => {
       method: "turn/start",
       params: {
         threadId: "thread-1",
+        effort: "high",
         input: [
           {
             type: "text",

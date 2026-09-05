@@ -89,6 +89,10 @@ function operationsFixture() {
   const getForwardMessage = vi.fn(async () => ({
     messages: [{ content: "forwarded" }],
   }));
+  const getLoginInfo = vi.fn(async () => ({
+    user_id: "10000",
+    nickname: "HuanLink",
+  }));
   const sendLike = vi.fn(async () => ({ ok: true }));
   const setGroupBan = vi.fn(async () => ({ ok: true }));
   return {
@@ -98,6 +102,7 @@ function operationsFixture() {
         sendPrivateMessage,
         getMessage,
         getForwardMessage,
+        getLoginInfo,
         sendLike,
       },
       privileged: { setGroupBan },
@@ -106,6 +111,7 @@ function operationsFixture() {
     sendPrivateMessage,
     getMessage,
     getForwardMessage,
+    getLoginInfo,
     sendLike,
     setGroupBan,
   };
@@ -224,6 +230,48 @@ function createTestChannelRuntime(input: {
 }
 
 describe("OneBot 11 operation Tools", () => {
+  test("publishes no-parameter operations without empty object schemas", () => {
+    const { tools } = createFixture({
+      unsafePrivilegedChannelIds: ["qq-main"],
+    });
+
+    expect(containsEmptyObjectSchema(tools.standard.parameters)).toBe(false);
+    expect(tools.privileged).toBeDefined();
+    expect(containsEmptyObjectSchema(tools.privileged!.parameters)).toBe(false);
+    expect(
+      findOperationVariant(tools.standard.parameters, "getLoginInfo"),
+    ).toMatchObject({
+      type: "object",
+      required: ["operation"],
+    });
+    expect(
+      findOperationVariant(tools.standard.parameters, "getLoginInfo"),
+    ).not.toHaveProperty("properties.params");
+  });
+
+  test("dispatches a no-parameter standard operation without a params object", async () => {
+    const { getLoginInfo, tools } = createFixture();
+    const input = {
+      channelId: "qq-main",
+      request: { operation: "getLoginInfo" },
+    };
+    const argumentsJson = JSON.stringify(input);
+
+    const output = await tools.standard.invoke(context(), argumentsJson, {
+      toolCall: toolCall(
+        ONEBOT11_STANDARD_TOOL_NAME,
+        "call-get-login-info",
+        argumentsJson,
+      ),
+    });
+
+    expect(JSON.parse(String(output))).toEqual({
+      user_id: "10000",
+      nickname: "HuanLink",
+    });
+    expect(getLoginInfo).toHaveBeenCalledOnce();
+  });
+
   test("accepts a SQLite Conversation Store through the public Store contract", async () => {
     const sessions = new SqliteConversationSessionStore(":memory:");
     try {
@@ -893,3 +941,64 @@ describe("OneBot 11 operation Tools", () => {
     ]);
   });
 });
+
+function containsEmptyObjectSchema(schema: unknown): boolean {
+  if (Array.isArray(schema)) {
+    return schema.some(containsEmptyObjectSchema);
+  }
+  if (schema === null || typeof schema !== "object") {
+    return false;
+  }
+
+  const record = schema as Record<string, unknown>;
+  const properties = record.properties;
+  if (
+    record.type === "object" &&
+    (properties === undefined ||
+      properties === null ||
+      typeof properties !== "object" ||
+      Object.keys(properties).length === 0)
+  ) {
+    return true;
+  }
+  return Object.values(record).some(containsEmptyObjectSchema);
+}
+
+function findOperationVariant(
+  schema: unknown,
+  operation: string,
+): Record<string, unknown> | undefined {
+  if (Array.isArray(schema)) {
+    for (const item of schema) {
+      const match = findOperationVariant(item, operation);
+      if (match !== undefined) {
+        return match;
+      }
+    }
+    return undefined;
+  }
+  if (schema === null || typeof schema !== "object") {
+    return undefined;
+  }
+
+  const record = schema as Record<string, unknown>;
+  const properties = record.properties;
+  if (properties !== null && typeof properties === "object") {
+    const operationSchema = (properties as Record<string, unknown>).operation;
+    if (
+      operationSchema !== null &&
+      typeof operationSchema === "object" &&
+      (operationSchema as Record<string, unknown>).const === operation
+    ) {
+      return record;
+    }
+  }
+
+  for (const value of Object.values(record)) {
+    const match = findOperationVariant(value, operation);
+    if (match !== undefined) {
+      return match;
+    }
+  }
+  return undefined;
+}
