@@ -454,6 +454,21 @@ export class CodexTaskExecutor implements AgentExecutor {
       await this.validateExecutionWorkspace(execution);
     } catch (error) {
       if (execution.terminal || execution.pendingInput !== pending) return;
+      eventBus.publish(
+        AgentEvent.task({
+          ...(requestContext.task ?? createInitialTask(requestContext)),
+          status: {
+            state: TaskState.TASK_STATE_INPUT_REQUIRED,
+            timestamp: new Date().toISOString(),
+            message: createInputRequiredMessage(
+              execution,
+              pending.questions,
+              `Invalid user-input response: ${describeError(error)}`,
+              requestContext.userMessage.messageId,
+            ),
+          },
+        }),
+      );
       publishInputRequiredUpdate(
         execution,
         eventBus,
@@ -468,6 +483,16 @@ export class CodexTaskExecutor implements AgentExecutor {
     if (execution.terminal || execution.pendingInput !== pending) return;
 
     execution.pendingInput = undefined;
+    eventBus.publish(
+      AgentEvent.task({
+        ...(requestContext.task ?? createInitialTask(requestContext)),
+        status: {
+          state: TaskState.TASK_STATE_WORKING,
+          timestamp: new Date().toISOString(),
+          message: undefined,
+        },
+      }),
+    );
     this.writeLog("info", "adapter.task.input_submitted", {
       ...executionLogFields(execution),
       questionIds: pending.questions.map((question) => question.id),

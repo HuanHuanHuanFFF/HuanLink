@@ -349,6 +349,69 @@ afterEach(async () => {
 });
 
 describe("CodexTaskExecutor", () => {
+  it.each([true, false])(
+    "accepts another answer without client-side closing the earlier stream (failed final check: %s)",
+    async (failFinalCheck) => {
+      const runtime = new ControlledCodexRuntime();
+      scheduleInputRequest(runtime);
+      let validations = 0;
+      let failAt = -1;
+      const { client } = await startClient(runtime, {
+        validateWorkspace: async () => {
+          validations++;
+          if (validations === failAt)
+            throw new Error("Changed after admission");
+          return {
+            branch: "spike/demo-v0",
+            workspace: "D:/CodingProject/HuanLink",
+          };
+        },
+      });
+      const task = requireTask(
+        await client.sendMessage(createSendRequest("work", true)),
+      );
+      await waitForTaskState(
+        client,
+        task.id,
+        TaskState.TASK_STATE_INPUT_REQUIRED,
+      );
+      if (failFinalCheck) failAt = validations + 2;
+      else
+        runtime.onRespondToServerRequest = () => {
+          if (runtime.serverResponses.length === 1)
+            runtime.emitServerRequest(
+              userInputRequest({ id: "second-question" }),
+            );
+        };
+      const stream = client.sendMessageStream(
+        createContinuationRequest(task, { scope: ["Adapter only"] }),
+      );
+      try {
+        for (;;) {
+          const next = await stream.next();
+          if (next.done)
+            throw new Error("Expected the stream to stay open while paused");
+          if (
+            next.value.payload?.$case === "statusUpdate" &&
+            next.value.payload.value.status?.state ===
+              TaskState.TASK_STATE_INPUT_REQUIRED
+          )
+            break;
+        }
+        // The pinned SDK ends an input-required stream while the Task stays alive.
+        expect((await stream.next()).done).toBe(true);
+        await client.sendMessage(
+          createContinuationRequest(task, { scope: ["Adapter only"] }),
+        );
+        expect(runtime.serverResponses).toHaveLength(failFinalCheck ? 1 : 2);
+        expect(runtime.startTurnCalls).toHaveLength(1);
+      } finally {
+        runtime.emitClose(new Error("test cleanup"));
+        await stream.return(undefined);
+      }
+    },
+  );
+
   it("releases an unused admission when the SDK rejects the request before execution", async () => {
     const runtime = new ControlledCodexRuntime();
     const { client } = await startClient(runtime);
