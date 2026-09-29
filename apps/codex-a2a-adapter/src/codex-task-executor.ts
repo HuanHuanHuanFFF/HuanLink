@@ -267,14 +267,17 @@ export class CodexTaskExecutor implements AgentExecutor {
 
   private async stopAfterUncertainStart(): Promise<void> {
     this.closing = true;
-    const message =
-      "Codex turn start outcome is unknown; execution runtime stopped. Reconcile effects before retrying.";
+    let stopped = false;
     this.writeLog("error", "codex.turn.start_uncertain");
     try {
       await this.client.close();
+      stopped = true;
     } catch {
       this.writeLog("error", "codex.runtime.stop_failed");
     } finally {
+      const message = stopped
+        ? "Codex turn start outcome is unknown; execution runtime stopped. Reconcile effects before retrying."
+        : "Codex turn start outcome is unknown; execution runtime stop is unconfirmed. New work is blocked; inspect the process and reconcile effects before retrying.";
       for (const active of this.executions.values())
         this.finish(active, TaskState.TASK_STATE_FAILED, message);
     }
