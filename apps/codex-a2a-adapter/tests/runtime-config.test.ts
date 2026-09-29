@@ -37,6 +37,7 @@ const validProject = {
   workspace: ".",
   branch: "dev/v1.0",
   defaultModelId: "gpt-5.4-mini",
+  defaultReasoningEffort: "high",
 };
 
 const expectedRuntime = {
@@ -52,6 +53,7 @@ const expectedProject = {
   workspace: validProject.workspace,
   branch: validProject.branch,
   defaultModelId: validProject.defaultModelId,
+  defaultReasoningEffort: validProject.defaultReasoningEffort,
 };
 
 const validEntry = {
@@ -182,6 +184,25 @@ describe("adapter runtime config", () => {
 });
 
 describe("local Codex Adapter configuration", () => {
+  it("loads an explicit per-project reasoning default", async () => {
+    await withConfigRoot(
+      async (configRoot) => {
+        await writeConfigFile(
+          codexPath(configRoot, "projects", "huanlink.json"),
+          {
+            ...validProject,
+            defaultReasoningEffort: "high",
+          },
+        );
+      },
+      async (configRoot) => {
+        await expect(loadLocalConfig({ configRoot })).resolves.toMatchObject({
+          projects: [{ projectId: "huanlink", defaultReasoningEffort: "high" }],
+        });
+      },
+    );
+  });
+
   it("loads the repository's single tracked configuration tree", async () => {
     const config = await loadLocalConfig({
       configRoot: fileURLToPath(
@@ -483,6 +504,7 @@ describe("local Codex Adapter configuration", () => {
             workspace: ".",
             branch: " dev/v1.0 ",
             defaultModelId: " gpt-5.4-mini ",
+            defaultReasoningEffort: " high ",
           },
         );
       },
@@ -501,6 +523,7 @@ describe("local Codex Adapter configuration", () => {
               workspace: ".",
               branch: "dev/v1.0",
               defaultModelId: "gpt-5.4-mini",
+              defaultReasoningEffort: "high",
             },
           ],
         });
@@ -695,7 +718,7 @@ describe("local Codex Adapter configuration", () => {
     );
   });
 
-  it.each([".", "projects/demo"])(
+  it.each([".", "projects/demo", "/work/huanlink", "D:/work/huanlink"])(
     "accepts the project workspace %s without resolving it",
     async (workspace) => {
       await withConfigRoot(
@@ -717,31 +740,25 @@ describe("local Codex Adapter configuration", () => {
     },
   );
 
-  it.each([
-    "/work/huanlink",
-    "D:/work/huanlink",
-    "C:relative",
-    "projects\\demo",
-    "../escape",
-    " . ",
-    "",
-    " ",
-  ])("rejects the invalid project workspace %s", async (workspace) => {
-    await withConfigRoot(
-      async (configRoot) => {
-        await writeConfigFile(
-          codexPath(configRoot, "projects", "huanlink.json"),
-          {
-            ...validProject,
-            workspace,
-          },
-        );
-      },
-      async (configRoot) => {
-        await expectInvalidConfig(loadLocalConfig({ configRoot }));
-      },
-    );
-  });
+  it.each(["C:relative", "projects\\demo", "../escape", " . ", "", " "])(
+    "rejects the invalid project workspace %s",
+    async (workspace) => {
+      await withConfigRoot(
+        async (configRoot) => {
+          await writeConfigFile(
+            codexPath(configRoot, "projects", "huanlink.json"),
+            {
+              ...validProject,
+              workspace,
+            },
+          );
+        },
+        async (configRoot) => {
+          await expectInvalidConfig(loadLocalConfig({ configRoot }));
+        },
+      );
+    },
+  );
 
   it.each([
     ["damaged JSON", '{ "projectId": '],

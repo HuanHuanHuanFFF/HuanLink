@@ -135,6 +135,40 @@ describe("CodexAppServerClient", () => {
     expect(initialized).toEqual({ method: "initialized" });
 
     const client = await connecting;
+    const listing = client.listModels();
+    const firstPage = await readFromClient();
+    expect(firstPage).toMatchObject({
+      method: "model/list",
+      params: { includeHidden: true },
+    });
+    transport.toClient.write(
+      `${JSON.stringify({
+        id: firstPage.id,
+        result: {
+          data: [
+            {
+              id: "mini",
+              model: "gpt-5.4-mini",
+              supportedReasoningEfforts: [
+                { reasoningEffort: "high", description: "High" },
+              ],
+            },
+          ],
+          nextCursor: "page-2",
+        },
+      })}\n`,
+    );
+    const secondPage = await readFromClient();
+    expect(secondPage).toMatchObject({
+      method: "model/list",
+      params: { cursor: "page-2" },
+    });
+    transport.toClient.write(
+      `${JSON.stringify({ id: secondPage.id, result: { data: [], nextCursor: null } })}\n`,
+    );
+    await expect(listing).resolves.toEqual([
+      { model: "gpt-5.4-mini", reasoningEfforts: ["high"] },
+    ]);
     await client.close();
   });
 
@@ -204,13 +238,16 @@ describe("CodexAppServerClient", () => {
     const startingTurn = client.startTurn({
       threadId: "thread-1",
       prompt: "Implement the focused task",
+      model: "gpt-5.4-mini",
+      reasoningEffort: "low",
     });
     const turnRequest = await readFromClient();
     expect(turnRequest).toMatchObject({
       method: "turn/start",
       params: {
         threadId: "thread-1",
-        effort: "high",
+        effort: "low",
+        model: "gpt-5.4-mini",
         input: [
           {
             type: "text",

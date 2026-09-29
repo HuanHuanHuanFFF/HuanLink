@@ -29,6 +29,11 @@ import {
 import { RecordingRuntimeLogger } from "./support/recording-runtime-logger.js";
 
 class ControlledCodexRuntime implements CodexRuntimeClient {
+  async listModels() {
+    return [
+      { model: "gpt-5.4-mini", reasoningEfforts: ["low", "high", "xhigh"] },
+    ];
+  }
   closeCalls = 0;
   readonly discardedServerRequests: Array<string | number> = [];
   readonly interruptCalls: InterruptCodexTurnOptions[] = [];
