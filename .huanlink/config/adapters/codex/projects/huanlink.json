@@ -2,7 +2,7 @@
   "version": 1,
   "projectId": "huanlink",
   "workspace": ".",
-  "branch": "dev/v1.0",
+  "branch": "dev/v1.0-runtime-integration",
   "defaultModelId": "gpt-5.4-mini",
   "defaultReasoningEffort": "high"
 }

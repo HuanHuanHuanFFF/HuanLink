@@ -22,6 +22,7 @@ import type {
   StartCodexTurnOptions,
 } from "../src/codex-app-server-client.js";
 import { CodexTaskExecutor } from "../src/codex-task-executor.js";
+import type { CodexProject } from "../src/dispatch-policy.js";
 import {
   startAdapterServer,
   type RunningAdapterServer,
@@ -98,14 +99,14 @@ class ControlledCodexRuntime implements CodexRuntimeClient {
     options: StartCodexThreadOptions,
   ): Promise<{ threadId: string }> {
     this.startThreadCalls.push(options);
-    return { threadId: "thread-1" };
+    return { threadId: `thread-${this.startThreadCalls.length}` };
   }
 
   async startTurn(options: StartCodexTurnOptions): Promise<{ turnId: string }> {
     this.startTurnCalls.push(options);
     this.onStartTurn?.();
     await this.startTurnGate;
-    return { turnId: "turn-1" };
+    return { turnId: `turn-${this.startTurnCalls.length}` };
   }
 
   async interruptTurn(options: InterruptCodexTurnOptions): Promise<void> {
@@ -134,12 +135,19 @@ class ControlledCodexRuntime implements CodexRuntimeClient {
 
 const runningServers: RunningAdapterServer[] = [];
 
-function createSendRequest(text: string, returnImmediately: boolean) {
+function createSendRequest(
+  text: string,
+  returnImmediately: boolean,
+  dispatch: Record<string, unknown> = { projectId: "huanlink" },
+) {
   return SendMessageRequest.fromJSON({
     message: {
       messageId: randomUUID(),
       role: "ROLE_USER",
-      parts: [{ text }],
+      parts: [
+        { text },
+        { data: { type: "huanlink.codex-task.v1", ...dispatch } },
+      ],
     },
     configuration: { returnImmediately },
   });
@@ -229,6 +237,7 @@ function taskStateFrom(event: StreamResponse): TaskState | undefined {
 async function startClient(
   runtime: ControlledCodexRuntime,
   options: {
+    projects?: CodexProject[];
     cancelTimeoutMs?: number;
     logger?: RecordingRuntimeLogger;
     validateWorkspace?: () => Promise<{
@@ -239,19 +248,30 @@ async function startClient(
 ): Promise<{ client: Client; executor: CodexTaskExecutor }> {
   const executor = new CodexTaskExecutor({
     client: runtime,
-    workspace: "D:/CodingProject/HuanLink",
-    expectedBranch: "spike/demo-v0",
-    model: "gpt-5.4-mini",
+    projects: options.projects ?? [
+      {
+        projectId: "huanlink",
+        workspace: "D:/CodingProject/HuanLink",
+        branch: "spike/demo-v0",
+        defaultModelId: "gpt-5.4-mini",
+        defaultReasoningEffort: "high",
+      },
+    ],
+    models: await runtime.listModels(),
     cancelTimeoutMs: options.cancelTimeoutMs,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
     validateWorkspace:
       options.validateWorkspace ??
-      (async () => ({
-        branch: "spike/demo-v0",
-        workspace: "D:/CodingProject/HuanLink",
+      (async (workspace, branch) => ({
+        branch,
+        workspace,
       })),
   });
-  const server = await startAdapterServer({ executor, port: 0 });
+  const server = await startAdapterServer({
+    executor,
+    port: 0,
+    validateMessage: (message) => executor.validateMessage(message),
+  });
   runningServers.push(server);
   return {
     client: await new ClientFactory().createFromUrl(server.origin),
@@ -325,6 +345,169 @@ afterEach(async () => {
 });
 
 describe("CodexTaskExecutor", () => {
+  it("shares one workspace slot across project aliases and releases it after completion", async () => {
+    const runtime = new ControlledCodexRuntime();
+    const projects = ["alpha", "beta"].map((projectId) => ({
+      projectId,
+      workspace: "D:/projects/shared",
+      branch: "main",
+      defaultModelId: "gpt-5.4-mini",
+      defaultReasoningEffort: "high",
+    }));
+    const { client } = await startClient(runtime, { projects });
+    const tasks = await Promise.all(
+      projects.map((project) =>
+        client
+          .sendMessage(
+            createSendRequest("work", true, { projectId: project.projectId }),
+          )
+          .then(requireTask),
+      ),
+    );
+    await expect
+      .poll(
+        async () =>
+          (
+            await Promise.all(
+              tasks.map((task) =>
+                client.getTask(GetTaskRequest.fromJSON({ id: task.id })),
+              ),
+            )
+          ).filter(
+            (task) => task.status?.state === TaskState.TASK_STATE_REJECTED,
+          ).length,
+      )
+      .toBe(1);
+    expect(runtime.startTurnCalls).toHaveLength(1);
+    const active = (
+      await Promise.all(
+        tasks.map((task) =>
+          client.getTask(GetTaskRequest.fromJSON({ id: task.id })),
+        ),
+      )
+    ).find((task) => task.status?.state !== TaskState.TASK_STATE_REJECTED)!;
+    runtime.emit({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: { type: "agentMessage", phase: "final_answer", text: "done" },
+      },
+    });
+    runtime.emit({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: { id: "turn-1", status: "completed", items: [] },
+      },
+    });
+    await waitForTaskState(client, active.id, TaskState.TASK_STATE_COMPLETED);
+    const next = requireTask(
+      await client.sendMessage(
+        createSendRequest("next", true, { projectId: "alpha" }),
+      ),
+    );
+    await expect.poll(() => runtime.startTurnCalls.length).toBe(2);
+    runtime.emitClose(new Error("test cleanup"));
+    await waitForTaskState(client, next.id, TaskState.TASK_STATE_FAILED);
+  });
+
+  it("isolates the same conversational context across projects and runs different workspaces concurrently", async () => {
+    const runtime = new ControlledCodexRuntime();
+    const projects = ["alpha", "beta"].map((projectId) => ({
+      projectId,
+      workspace: `D:/projects/${projectId}`,
+      branch: "main",
+      defaultModelId: "gpt-5.4-mini",
+      defaultReasoningEffort: "high",
+    }));
+    const { client } = await startClient(runtime, { projects });
+    const requests = projects.map((project) => {
+      const request = createSendRequest("work", true, {
+        projectId: project.projectId,
+        reasoningEffort: "low",
+      });
+      request.message!.contextId = "shared-context";
+      return request;
+    });
+    const tasks = await Promise.all(
+      requests.map((request) => client.sendMessage(request).then(requireTask)),
+    );
+    await expect.poll(() => runtime.startTurnCalls.length).toBe(2);
+    expect(runtime.startThreadCalls.map((call) => call.cwd).sort()).toEqual([
+      "D:/projects/alpha",
+      "D:/projects/beta",
+    ]);
+    expect(
+      new Set(runtime.startTurnCalls.map((call) => call.threadId)).size,
+    ).toBe(2);
+    expect(
+      runtime.startTurnCalls.every((call) => call.reasoningEffort === "low"),
+    ).toBe(true);
+    runtime.emitClose(new Error("test cleanup"));
+    await Promise.all(
+      tasks.map((task) =>
+        waitForTaskState(client, task.id, TaskState.TASK_STATE_FAILED),
+      ),
+    );
+  });
+
+  it("does not allow continuation to replace the original project or execution parameters", async () => {
+    const runtime = new ControlledCodexRuntime();
+    scheduleInputRequest(runtime);
+    const { client } = await startClient(runtime);
+    const task = requireTask(
+      await client.sendMessage(createSendRequest("work", true)),
+    );
+    await waitForTaskState(
+      client,
+      task.id,
+      TaskState.TASK_STATE_INPUT_REQUIRED,
+    );
+    const busy = requireTask(
+      await client.sendMessage(
+        createSendRequest("second task while paused", true),
+      ),
+    );
+    await waitForTaskState(client, busy.id, TaskState.TASK_STATE_REJECTED);
+    const continuation = createContinuationRequest(task, {
+      scope: ["Adapter only"],
+    });
+    continuation.message!.parts.push(
+      ...createSendRequest("other", true, { projectId: "other" }).message!
+        .parts,
+    );
+    await expect(client.sendMessage(continuation)).rejects.toThrow();
+    expect(runtime.serverResponses).toEqual([]);
+    expect(runtime.startTurnCalls).toHaveLength(1);
+    runtime.emitClose(new Error("test cleanup"));
+  });
+
+  it("rejects an unknown project before accepting or starting a Codex task", async () => {
+    const runtime = new ControlledCodexRuntime();
+    const { client } = await startClient(runtime);
+    await expect(
+      client.sendMessage(
+        createSendRequest("Do work", true, { projectId: "missing" }),
+      ),
+    ).rejects.toThrow();
+    expect(runtime.startThreadCalls).toEqual([]);
+  });
+
+  it("rejects an unsupported reasoning effort instead of using a default", async () => {
+    const runtime = new ControlledCodexRuntime();
+    const { client } = await startClient(runtime);
+    await expect(
+      client.sendMessage(
+        createSendRequest("Do work", true, {
+          projectId: "huanlink",
+          reasoningEffort: "max",
+        }),
+      ),
+    ).rejects.toThrow();
+    expect(runtime.startTurnCalls).toEqual([]);
+  });
+
   it("returns a submitted Task before workspace validation finishes", async () => {
     const runtime = new ControlledCodexRuntime();
     let releaseValidation!: () => void;
@@ -435,6 +618,8 @@ describe("CodexTaskExecutor", () => {
       {
         threadId: "thread-1",
         prompt: "Implement the focused task",
+        model: "gpt-5.4-mini",
+        reasoningEffort: "high",
       },
     ]);
 
@@ -1255,11 +1440,11 @@ describe("CodexTaskExecutor", () => {
     const rejected = await waitForTaskState(
       client,
       conflicting.id,
-      TaskState.TASK_STATE_FAILED,
+      TaskState.TASK_STATE_REJECTED,
     );
     expect(rejected.status?.message?.parts[0]?.content).toEqual({
       $case: "text",
-      value: "Codex thread thread-1 already has an active task",
+      value: "Codex workspace is busy",
     });
 
     runtime.emit({

@@ -112,6 +112,7 @@ describe("createDeepSeekMainAgentModelBinding", () => {
       contextId: "session-deepseek-bridge",
       skillId: "codex-code-task",
       input: "add one focused validation",
+      inputData: { type: "huanlink.codex-task.v1", projectId: "huanlink" },
       executionMode: "async",
       toolName: "submit_codex_agent_call",
       sourceToolCallId: "call-submit-codex",
@@ -227,6 +228,7 @@ function toolCallResponse() {
               function: {
                 name: "submit_codex_agent_call",
                 arguments: JSON.stringify({
+                  projectId: "huanlink",
                   task: "add one focused validation",
                   executionMode: "async",
                 }),

@@ -48,7 +48,7 @@ describe("Phase 3 Task re-entry", () => {
       runId: "run-source-private",
       toolCallId: "sdk-call-private",
       toolName: "start_fake_delayed_work",
-      arguments: { task: "update the parser" },
+      arguments: { projectId: "huanlink", task: "update the parser" },
     });
     const taskService = new AsyncToolTaskService({
       maxActiveTasksPerSession: 2,
@@ -134,7 +134,7 @@ describe("Phase 3 Task re-entry", () => {
         runId: `run-parallel-${suffix}`,
         toolCallId: `call-parallel-${suffix}`,
         toolName: "start_fake_delayed_work",
-        arguments: { task: `task ${suffix}` },
+        arguments: { projectId: "huanlink", task: `task ${suffix}` },
       });
     }
     const taskIds = ["huanlink-parallel-a", "huanlink-parallel-b"];
@@ -225,7 +225,10 @@ describe("Phase 3 Task re-entry", () => {
       runId: "run-legacy-agent-call",
       toolCallId: "sdk-owner-call",
       toolName: "submit_codex_agent_call",
-      arguments: { task: "legacy AgentCall terminal event" },
+      arguments: {
+        projectId: "huanlink",
+        task: "legacy AgentCall terminal event",
+      },
     });
     const taskService = new AsyncToolTaskService({
       maxActiveTasksPerSession: 2,
@@ -373,7 +376,7 @@ describe("Phase 3 Task re-entry", () => {
       runId: "run-input-source",
       toolCallId: "sdk-input-private",
       toolName: "submit_codex_agent_call",
-      arguments: { task: "update parser behavior" },
+      arguments: { projectId: "huanlink", task: "update parser behavior" },
     });
     const taskService = new AsyncToolTaskService({
       maxActiveTasksPerSession: 2,
@@ -445,7 +448,7 @@ describe("Phase 3 Task re-entry", () => {
       runId: "run-repeat-input",
       toolCallId: "call-repeat-input",
       toolName: "submit_codex_agent_call",
-      arguments: { task: "choose a parser mode" },
+      arguments: { projectId: "huanlink", task: "choose a parser mode" },
     });
     const taskService = new AsyncToolTaskService({
       maxActiveTasksPerSession: 2,
@@ -532,7 +535,10 @@ describe("Phase 3 Task re-entry", () => {
       runId: "run-stale-input",
       toolCallId: "call-stale-input",
       toolName: "submit_codex_agent_call",
-      arguments: { task: "finish without stale questions" },
+      arguments: {
+        projectId: "huanlink",
+        task: "finish without stale questions",
+      },
     });
     const taskService = new AsyncToolTaskService({
       maxActiveTasksPerSession: 2,
@@ -626,7 +632,7 @@ describe("Phase 3 Task re-entry", () => {
       runId: "run-continue-task",
       toolCallId: "call-continue-task",
       toolName: "submit_codex_agent_call",
-      arguments: { task: "finish after one choice" },
+      arguments: { projectId: "huanlink", task: "finish after one choice" },
     });
     const taskService = new AsyncToolTaskService({
       maxActiveTasksPerSession: 2,
@@ -754,7 +760,7 @@ describe("Phase 3 Task re-entry", () => {
       runId: "run-model-failure",
       toolCallId: "call-model-failure",
       toolName: "start_fake_delayed_work",
-      arguments: { task: "fail during re-entry" },
+      arguments: { projectId: "huanlink", task: "fail during re-entry" },
     });
     const taskService = new AsyncToolTaskService({
       maxActiveTasksPerSession: 2,
@@ -816,7 +822,7 @@ describe("Phase 3 Task re-entry", () => {
       runId: "run-close-reentry",
       toolCallId: "call-close-reentry",
       toolName: "start_fake_delayed_work",
-      arguments: { task: "wait until shutdown" },
+      arguments: { projectId: "huanlink", task: "wait until shutdown" },
     });
     const taskService = new AsyncToolTaskService({
       maxActiveTasksPerSession: 2,
@@ -1062,7 +1068,11 @@ class SubmitReplyThenTerminalReplyModel implements Model {
         return toolCallResponse(
           "call-submit-reply-composition",
           SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
-          { task: "update the parser", executionMode: "async" },
+          {
+            projectId: "huanlink",
+            task: "update the parser",
+            executionMode: "async",
+          },
         );
       case 2:
         return toolCallResponse(

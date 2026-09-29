@@ -30,6 +30,7 @@ import {
 import {
   A2aProtocolError,
   errorLogFields,
+  isRequestMalformed,
   isRetryableObservationError,
   isTaskNotCancelable,
   isUnsupportedOperation,
@@ -122,7 +123,12 @@ export class A2aAgentCallTransport implements AgentCallTransport {
             ? {}
             : { contextId: request.contextId }),
           role: "ROLE_USER",
-          parts: [{ text: request.input }],
+          parts: [
+            { text: request.input },
+            ...(request.inputData === undefined
+              ? []
+              : [{ data: request.inputData }]),
+          ],
         },
         configuration: { returnImmediately: true },
       });
@@ -162,6 +168,16 @@ export class A2aAgentCallTransport implements AgentCallTransport {
       });
       return { outcome: "accepted", snapshot };
     } catch (error) {
+      // A protocol-level malformed-request rejection occurs before acceptance;
+      // transport failures and invalid responses remain uncertain.
+      if (isRequestMalformed(error)) {
+        this.writeLog("error", "a2a.submit.failed", {
+          ...fields,
+          dispatchOutcome: "not-dispatched",
+          ...errorLogFields(error),
+        });
+        return { outcome: "not-dispatched", error };
+      }
       this.writeLog("error", "a2a.submit.failed", {
         ...fields,
         dispatchOutcome: "dispatch-uncertain",

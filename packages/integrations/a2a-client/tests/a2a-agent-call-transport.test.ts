@@ -10,6 +10,7 @@ import {
 import { ClientFactory, type Client } from "@a2a-js/sdk/client";
 import {
   AgentEvent,
+  RequestMalformedError,
   TaskNotCancelableError,
   type AgentExecutor,
   type ExecutionEventBus,
@@ -337,6 +338,62 @@ afterEach(async () => {
 });
 
 describe("A2aAgentCallTransport", () => {
+  test("keeps an unmarked SDK malformed error uncertain because execution may already have started", async () => {
+    const client = {
+      protocolVersion: A2A_PROTOCOL_VERSION,
+      getAgentCard: async () => testAgentCard(),
+      sendMessage: async () => {
+        throw new RequestMalformedError(
+          "Execution finished before a message or task was produced.",
+        );
+      },
+    } as unknown as Client;
+    vi.spyOn(ClientFactory.prototype, "createFromUrl").mockResolvedValue(
+      client,
+    );
+    const transport = new A2aAgentCallTransport({ origin: "http://unused" });
+    await expect(
+      transport.submitTask({
+        messageId: "uncertain-sdk",
+        skillId: "codex-code-task",
+        input: "test",
+      }),
+    ).resolves.toMatchObject({ outcome: "dispatch-uncertain" });
+  });
+  test("preserves structured dispatch data and treats preaccept parameter rejection as not dispatched", async () => {
+    let received: unknown;
+    const execute = vi.fn();
+    const server = await startAdapterServer({
+      executor: { execute, cancelTask: async () => {} },
+      port: 0,
+      validateMessage: (message) => {
+        received = message.parts.find(
+          (part) => part.content?.$case === "data",
+        )?.content;
+        throw new RequestMalformedError(
+          "HUANLINK_PREACCEPT_REJECTED: Unsupported Codex model or reasoning effort",
+        );
+      },
+    });
+    servers.push(server);
+    const transport = new A2aAgentCallTransport({ origin: server.origin });
+    const inputData = {
+      type: "huanlink.codex-task.v1",
+      projectId: "demo",
+      reasoningEffort: "max",
+    };
+    await expect(
+      transport.submitTask({
+        messageId: "rejected-dispatch",
+        skillId: "codex-code-task",
+        input: "test",
+        inputData,
+      }),
+    ).resolves.toMatchObject({ outcome: "not-dispatched" });
+    expect(received).toEqual({ $case: "data", value: inputData });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
   test("discovers the Codex skill and observes a standard Task to its final Artifact", async () => {
     const completion = deferred();
     const logger = new RecordingLogger();

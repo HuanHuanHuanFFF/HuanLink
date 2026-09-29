@@ -23,6 +23,29 @@ export const SUBMIT_CODEX_AGENT_CALL_TOOL_NAME =
   "submit_codex_agent_call" as const;
 
 const parameters = z.object({
+  projectId: z
+    .string()
+    .trim()
+    .min(1)
+    .describe(
+      "Required registered Codex project ID. Ask the user if unknown; never supply a filesystem path.",
+    ),
+  modelId: z
+    .string()
+    .trim()
+    .min(1)
+    .optional()
+    .describe(
+      "Optional execution model override; otherwise use the project's configured default.",
+    ),
+  reasoningEffort: z
+    .string()
+    .trim()
+    .min(1)
+    .optional()
+    .describe(
+      "Optional reasoning effort override; must be supported by the selected model. Otherwise use the project default.",
+    ),
   task: z
     .string()
     .trim()
@@ -57,7 +80,11 @@ export function createCodexAgentCallTool(
     isEnabled: ({ runContext }) =>
       runContext.context.trigger === "user" ||
       runContext.context.trigger === "agent_call_terminal",
-    execute: async ({ task, executionMode = "async" }, runContext, details) => {
+    execute: async (
+      { task, projectId, modelId, reasoningEffort, executionMode = "async" },
+      runContext,
+      details,
+    ) => {
       if (!runContext) {
         throw new Error("Codex AgentCall tool requires a HuanLink RunContext");
       }
@@ -92,6 +119,12 @@ export function createCodexAgentCallTool(
           skillId,
           toolName: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
           input: task,
+          inputData: {
+            type: "huanlink.codex-task.v1",
+            projectId,
+            ...(modelId === undefined ? {} : { modelId }),
+            ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+          },
           ...(signal === undefined ? {} : { signal }),
         };
         let request: AgentCallRequest;

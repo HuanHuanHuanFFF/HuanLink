@@ -104,6 +104,7 @@ export type AgentCallTaskSnapshot = {
 };
 
 export type AgentCallTransportSubmitRequest = {
+  inputData?: Readonly<Record<string, unknown>>;
   messageId: string;
   skillId: string;
   input: string;
@@ -158,6 +159,7 @@ export interface AgentCallTransport {
 }
 
 type AgentCallRequestBase = {
+  inputData?: Readonly<Record<string, unknown>>;
   runId: RunId;
   sessionId: SessionId;
   skillId: string;

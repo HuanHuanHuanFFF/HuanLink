@@ -79,7 +79,10 @@ describe("MainAgent Tool Session history integration", () => {
       invoker: { invoke },
       historyRecorder: history,
     });
-    const input = { task: "add a narrow regression test" };
+    const input = {
+      projectId: "huanlink",
+      task: "add a narrow regression test",
+    };
     const argumentsJson = JSON.stringify(input);
 
     const output = await tool.invoke(context(), argumentsJson, {
@@ -167,6 +170,7 @@ describe("MainAgent Tool Session history integration", () => {
       const outputs = [];
       for (const taskNumber of [1, 2, 3]) {
         const argumentsJson = JSON.stringify({
+          projectId: "huanlink",
           task: `run delayed task ${taskNumber}`,
         });
         outputs.push(
@@ -250,6 +254,7 @@ describe("MainAgent Tool Session history integration", () => {
       historyRecorder: history,
     });
     const argumentsJson = JSON.stringify({
+      projectId: "huanlink",
       task: "fail before the remote task is accepted",
     });
 

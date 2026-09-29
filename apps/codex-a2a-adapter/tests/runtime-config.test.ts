@@ -27,7 +27,7 @@ const validRuntime = {
   host: "127.0.0.1",
   port: 4000,
   codexExecutable: "codex.cmd",
-  expectedCodexVersion: "0.144.1",
+  expectedCodexVersion: "0.145.0",
   heartbeatIntervalMs: 30_000,
 };
 
@@ -35,7 +35,7 @@ const validProject = {
   version: 1,
   projectId: "huanlink",
   workspace: ".",
-  branch: "dev/v1.0",
+  branch: "dev/v1.0-runtime-integration",
   defaultModelId: "gpt-5.4-mini",
   defaultReasoningEffort: "high",
 };
@@ -494,7 +494,7 @@ describe("local Codex Adapter configuration", () => {
           ...validRuntime,
           host: " localhost ",
           codexExecutable: " codex.cmd ",
-          expectedCodexVersion: " 0.144.1 ",
+          expectedCodexVersion: " 0.145.0 ",
         });
         await writeConfigFile(
           codexPath(configRoot, "projects", "huanlink.json"),
@@ -502,7 +502,7 @@ describe("local Codex Adapter configuration", () => {
             ...validProject,
             projectId: " huanlink ",
             workspace: ".",
-            branch: " dev/v1.0 ",
+            branch: " dev/v1.0-runtime-integration ",
             defaultModelId: " gpt-5.4-mini ",
             defaultReasoningEffort: " high ",
           },
@@ -514,14 +514,14 @@ describe("local Codex Adapter configuration", () => {
             host: "localhost",
             port: 4000,
             codexExecutable: "codex.cmd",
-            expectedCodexVersion: "0.144.1",
+            expectedCodexVersion: "0.145.0",
             heartbeatIntervalMs: 30_000,
           },
           projects: [
             {
               projectId: "huanlink",
               workspace: ".",
-              branch: "dev/v1.0",
+              branch: "dev/v1.0-runtime-integration",
               defaultModelId: "gpt-5.4-mini",
               defaultReasoningEffort: "high",
             },

@@ -171,6 +171,7 @@ class DelegateThenSummarizeModel implements Model {
             callId: "phase3-tool-call",
             name: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
             arguments: JSON.stringify({
+              projectId: "huanlink",
               task: "make a controlled Phase 3 code change",
             }),
           },
@@ -213,6 +214,7 @@ class BlockingThenReplyModel implements Model {
             callId: "phase3-blocking-tool-call",
             name: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
             arguments: JSON.stringify({
+              projectId: "huanlink",
               task: "make a controlled Phase 3 code change",
               executionMode: "blocking",
             }),
@@ -247,7 +249,10 @@ class SubmitThenQueryStatusModel implements Model {
             type: "function_call",
             callId: "phase3-submit-before-status",
             name: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
-            arguments: JSON.stringify({ task: "start one status-test task" }),
+            arguments: JSON.stringify({
+              projectId: "huanlink",
+              task: "start one status-test task",
+            }),
           },
         ],
       };
@@ -299,7 +304,10 @@ class DelegateContinueThenSummarizeModel implements Model {
             type: "function_call",
             callId: "phase3-submit-before-input",
             name: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
-            arguments: JSON.stringify({ task: "start one resumable task" }),
+            arguments: JSON.stringify({
+              projectId: "huanlink",
+              task: "start one resumable task",
+            }),
           },
         ],
       };
@@ -359,7 +367,10 @@ class DelegateFollowUpAfterTerminalModel implements Model {
             type: "function_call",
             callId: "phase3-sequence-first",
             name: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
-            arguments: JSON.stringify({ task: "run the first sequence step" }),
+            arguments: JSON.stringify({
+              projectId: "huanlink",
+              task: "run the first sequence step",
+            }),
           },
         ],
       };
@@ -379,6 +390,7 @@ class DelegateFollowUpAfterTerminalModel implements Model {
             callId: "phase3-sequence-follow-up",
             name: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
             arguments: JSON.stringify({
+              projectId: "huanlink",
               task: "run the pre-authorized second sequence step",
             }),
           },
@@ -858,7 +870,11 @@ describe("Phase 3 HuanLink orchestration", () => {
         runId: "run-submit-before-terminal",
         toolCallId: "call-submit-before-terminal",
         toolName: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
-        arguments: { task: "long external task", executionMode: "async" },
+        arguments: {
+          projectId: "huanlink",
+          task: "long external task",
+          executionMode: "async",
+        },
       });
     const accepted = await runtime.agentCalls.invoke({
       runId: "run-submit-before-terminal",

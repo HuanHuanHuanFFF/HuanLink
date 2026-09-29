@@ -30,6 +30,40 @@ import { ThrowingRuntimeLogger } from "./support/throwing-runtime-logger.js";
 
 const delegatedTask = "add one focused validation and test it";
 
+test("passes explicit project and execution overrides as structured input", async () => {
+  const invoke = vi.fn<AgentCallInvoker["invoke"]>(async () => ({
+    status: "accepted",
+    taskId: "task-1",
+    state: "submitted",
+  }));
+  const tool = createCodexAgentCallTool({ invoker: { invoke } });
+  const args = JSON.stringify({
+    task: delegatedTask,
+    projectId: "demo",
+    modelId: "model-b",
+    reasoningEffort: "low",
+  });
+  await tool.invoke(
+    new RunContext<OpenAiAgentsRunContext>({
+      runId: "run-1",
+      sessionId: "session-1",
+      trigger: "user",
+    }),
+    args,
+    toolCallDetails("call-1", args),
+  );
+  expect(invoke).toHaveBeenCalledWith(
+    expect.objectContaining({
+      inputData: {
+        type: "huanlink.codex-task.v1",
+        projectId: "demo",
+        modelId: "model-b",
+        reasoningEffort: "low",
+      },
+    }),
+  );
+});
+
 function toolCallDetails(
   callId: string,
   argumentsJson: string,
@@ -78,6 +112,7 @@ class ToolCallingThenReplyModel implements Model {
             callId: "tool-call-01",
             name: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
             arguments: JSON.stringify({
+              projectId: "huanlink",
               task: delegatedTask,
               ...(this.executionMode === undefined
                 ? {}
@@ -183,7 +218,11 @@ describe("createCodexAgentCallTool", () => {
 
     const output = await tool.invoke(
       context,
-      JSON.stringify({ task: delegatedTask, executionMode: "async" }),
+      JSON.stringify({
+        projectId: "huanlink",
+        task: delegatedTask,
+        executionMode: "async",
+      }),
     );
 
     expect(invoke).not.toHaveBeenCalled();
@@ -212,10 +251,18 @@ describe("createCodexAgentCallTool", () => {
 
     const output = await tool.invoke(
       context,
-      JSON.stringify({ task: delegatedTask, executionMode: "async" }),
+      JSON.stringify({
+        projectId: "huanlink",
+        task: delegatedTask,
+        executionMode: "async",
+      }),
       toolCallDetails(
         "tool-call-public-receipt",
-        JSON.stringify({ task: delegatedTask, executionMode: "async" }),
+        JSON.stringify({
+          projectId: "huanlink",
+          task: delegatedTask,
+          executionMode: "async",
+        }),
       ),
     );
 
@@ -231,6 +278,7 @@ describe("createCodexAgentCallTool", () => {
       skillId: "codex-code-task",
       toolName: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
       input: delegatedTask,
+      inputData: { type: "huanlink.codex-task.v1", projectId: "huanlink" },
       executionMode: "async",
       sourceToolCallId: "tool-call-public-receipt",
     });
@@ -265,6 +313,7 @@ describe("createCodexAgentCallTool", () => {
       trigger: "user",
     });
     const argumentsJson = JSON.stringify({
+      projectId: "huanlink",
       task: delegatedTask,
       executionMode: "async",
     });
@@ -310,6 +359,7 @@ describe("createCodexAgentCallTool", () => {
       trigger: "user",
     });
     const argumentsJson = JSON.stringify({
+      projectId: "huanlink",
       task: delegatedTask,
       executionMode: "blocking",
     });
@@ -334,6 +384,7 @@ describe("createCodexAgentCallTool", () => {
       skillId: "codex-code-task",
       toolName: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
       input: delegatedTask,
+      inputData: { type: "huanlink.codex-task.v1", projectId: "huanlink" },
       executionMode: "blocking",
       sourceToolCallId: "tool-call-blocking-uncertain",
     });
@@ -364,6 +415,7 @@ describe("createCodexAgentCallTool", () => {
       trigger: "user",
     });
     const argumentsJson = JSON.stringify({
+      projectId: "huanlink",
       task: delegatedTask,
       executionMode: "async",
     });
@@ -401,6 +453,7 @@ describe("createCodexAgentCallTool", () => {
       trigger: "user",
     });
     const argumentsJson = JSON.stringify({
+      projectId: "huanlink",
       task: delegatedTask,
       executionMode: "async",
     });
@@ -460,6 +513,7 @@ describe("createCodexAgentCallTool", () => {
       skillId: "codex-code-task",
       toolName: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
       input: delegatedTask,
+      inputData: { type: "huanlink.codex-task.v1", projectId: "huanlink" },
       executionMode: scenario.expectedMode,
       sourceToolCallId: "tool-call-01",
       signal: abortController.signal,
@@ -573,10 +627,18 @@ describe("createCodexAgentCallTool", () => {
 
       const output = await tool.invoke(
         context,
-        JSON.stringify({ task: delegatedTask, executionMode: "async" }),
+        JSON.stringify({
+          projectId: "huanlink",
+          task: delegatedTask,
+          executionMode: "async",
+        }),
         toolCallDetails(
           "tool-call-logger-failure",
-          JSON.stringify({ task: delegatedTask, executionMode: "async" }),
+          JSON.stringify({
+            projectId: "huanlink",
+            task: delegatedTask,
+            executionMode: "async",
+          }),
         ),
       );
 
@@ -609,10 +671,18 @@ describe("createCodexAgentCallTool", () => {
 
     const output = await tool.invoke(
       context,
-      JSON.stringify({ task: delegatedTask, executionMode: "async" }),
+      JSON.stringify({
+        projectId: "huanlink",
+        task: delegatedTask,
+        executionMode: "async",
+      }),
       toolCallDetails(
         "tool-call-business-failure",
-        JSON.stringify({ task: delegatedTask, executionMode: "async" }),
+        JSON.stringify({
+          projectId: "huanlink",
+          task: delegatedTask,
+          executionMode: "async",
+        }),
       ),
     );
 
@@ -662,10 +732,18 @@ describe("createCodexAgentCallTool", () => {
     await expect(
       tool.invoke(
         context,
-        JSON.stringify({ task: delegatedTask, executionMode: "async" }),
+        JSON.stringify({
+          projectId: "huanlink",
+          task: delegatedTask,
+          executionMode: "async",
+        }),
         toolCallDetails(
           "tool-call-original-error",
-          JSON.stringify({ task: delegatedTask, executionMode: "async" }),
+          JSON.stringify({
+            projectId: "huanlink",
+            task: delegatedTask,
+            executionMode: "async",
+          }),
           timeoutController.signal,
         ),
       ),
@@ -757,12 +835,14 @@ describe("createCodexAgentCallTool", () => {
     await tool.invoke(
       context,
       JSON.stringify({
+        projectId: "huanlink",
         task: "run the already authorized follow-up",
         executionMode: "blocking",
       }),
       toolCallDetails(
         "tool-call-terminal-follow-up",
         JSON.stringify({
+          projectId: "huanlink",
           task: "run the already authorized follow-up",
           executionMode: "blocking",
         }),

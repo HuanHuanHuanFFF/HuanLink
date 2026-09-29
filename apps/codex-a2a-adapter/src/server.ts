@@ -1,10 +1,15 @@
 import { createServer, type Server } from "node:http";
 
-import { AGENT_CARD_PATH } from "@a2a-js/sdk";
+import {
+  AGENT_CARD_PATH,
+  type Message,
+  type SendMessageRequest,
+} from "@a2a-js/sdk";
 import {
   DefaultRequestHandler,
   InMemoryTaskStore,
   type AgentExecutor,
+  type ServerCallContext,
 } from "@a2a-js/sdk/server";
 import {
   UserBuilder,
@@ -16,6 +21,7 @@ import express, { type RequestHandler, type Response } from "express";
 import { createAgentCard } from "./agent-card.js";
 
 export interface StartAdapterServerOptions {
+  validateMessage?: (message: Message) => void;
   executor: AgentExecutor;
   heartbeatIntervalMs?: number;
   host?: string;
@@ -48,7 +54,23 @@ export async function startAdapterServer(
   try {
     const origin = `http://${formatHost(host)}:${address.port}`;
     const agentCard = createAgentCard(origin);
-    const requestHandler = new DefaultRequestHandler(
+    class ValidatingRequestHandler extends DefaultRequestHandler {
+      override async sendMessage(
+        params: SendMessageRequest,
+        context: ServerCallContext,
+      ) {
+        if (params.message) options.validateMessage?.(params.message);
+        return super.sendMessage(params, context);
+      }
+      override async *sendMessageStream(
+        params: SendMessageRequest,
+        context: ServerCallContext,
+      ) {
+        if (params.message) options.validateMessage?.(params.message);
+        yield* super.sendMessageStream(params, context);
+      }
+    }
+    const requestHandler = new ValidatingRequestHandler(
       agentCard,
       new InMemoryTaskStore(),
       options.executor,

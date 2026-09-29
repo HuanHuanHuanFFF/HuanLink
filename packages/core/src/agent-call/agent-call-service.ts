@@ -650,6 +650,9 @@ export class AgentCallService
           messageId: agentCallId,
           skillId: capability.id,
           input: request.input,
+          ...(request.inputData === undefined
+            ? {}
+            : { inputData: structuredClone(request.inputData) }),
           ...(request.contextId === undefined
             ? {}
             : { contextId: request.contextId }),
