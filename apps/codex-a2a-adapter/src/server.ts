@@ -21,7 +21,7 @@ import express, { type RequestHandler, type Response } from "express";
 import { createAgentCard } from "./agent-card.js";
 
 export interface StartAdapterServerOptions {
-  validateMessage?: (message: Message) => void;
+  validateMessage?: (message: Message) => void | (() => void);
   executor: AgentExecutor;
   heartbeatIntervalMs?: number;
   host?: string;
@@ -59,15 +59,27 @@ export async function startAdapterServer(
         params: SendMessageRequest,
         context: ServerCallContext,
       ) {
-        if (params.message) options.validateMessage?.(params.message);
-        return super.sendMessage(params, context);
+        const release = params.message
+          ? options.validateMessage?.(params.message)
+          : undefined;
+        try {
+          return await super.sendMessage(params, context);
+        } finally {
+          release?.();
+        }
       }
       override async *sendMessageStream(
         params: SendMessageRequest,
         context: ServerCallContext,
       ) {
-        if (params.message) options.validateMessage?.(params.message);
-        yield* super.sendMessageStream(params, context);
+        const release = params.message
+          ? options.validateMessage?.(params.message)
+          : undefined;
+        try {
+          yield* super.sendMessageStream(params, context);
+        } finally {
+          release?.();
+        }
       }
     }
     const requestHandler = new ValidatingRequestHandler(

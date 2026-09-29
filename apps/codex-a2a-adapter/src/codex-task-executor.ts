@@ -74,6 +74,10 @@ export class CodexTaskExecutor implements AgentExecutor {
   private readonly logger: RuntimeLogger;
   private readonly dispatchPolicy: CodexDispatchPolicy;
   private readonly activeWorkspaces = new Map<string, InFlightExecution>();
+  private readonly pendingAdmissions = new Map<
+    string,
+    { token: symbol; messageId: string }
+  >();
   private readonly executions = new Map<string, InFlightExecution>();
   private readonly executionByThread = new Map<string, InFlightExecution>();
   private readonly executionByTurn = new Map<string, InFlightExecution>();
@@ -86,6 +90,7 @@ export class CodexTaskExecutor implements AgentExecutor {
   private readonly unsubscribeServerRequests: () => void;
   private closing = false;
   private closePromise: Promise<void> | undefined;
+  private uncertainStartFailure: Promise<void> | undefined;
 
   constructor(options: CodexTaskExecutorOptions) {
     this.client = options.client;
@@ -118,6 +123,22 @@ export class CodexTaskExecutor implements AgentExecutor {
     }
 
     const execution = createExecution(requestContext, eventBus);
+    const dispatch = this.dispatchPolicy.resolve(requestContext.userMessage);
+    const workspaceKey = canonicalWorkspaceKey(dispatch.project.workspace);
+    const admission = this.pendingAdmissions.get(workspaceKey);
+    if (
+      this.activeWorkspaces.has(workspaceKey) ||
+      (admission &&
+        admission.messageId !== requestContext.userMessage.messageId)
+    ) {
+      throw new RequestMalformedError(
+        "HUANLINK_PREACCEPT_REJECTED: Codex workspace is busy",
+      );
+    }
+    this.pendingAdmissions.delete(workspaceKey);
+    execution.project = dispatch.project;
+    execution.workspaceKey = workspaceKey;
+    this.activeWorkspaces.set(workspaceKey, execution);
     this.executions.set(execution.taskId, execution);
     this.writeLog("info", "adapter.task.received", {
       ...executionLogFields(execution),
@@ -136,8 +157,6 @@ export class CodexTaskExecutor implements AgentExecutor {
     }
 
     try {
-      const dispatch = this.dispatchPolicy.resolve(requestContext.userMessage);
-      execution.project = dispatch.project;
       const validated = await this.validateWorkspace(
         dispatch.project.workspace,
         dispatch.project.branch,
@@ -146,20 +165,8 @@ export class CodexTaskExecutor implements AgentExecutor {
         return;
       }
 
-      const workspaceKey =
-        process.platform === "win32"
-          ? validated.workspace.toLowerCase()
-          : validated.workspace;
-      if (this.activeWorkspaces.has(workspaceKey)) {
-        this.finish(
-          execution,
-          TaskState.TASK_STATE_REJECTED,
-          "Codex workspace is busy",
-        );
-        return;
-      }
-      execution.workspaceKey = workspaceKey;
-      this.activeWorkspaces.set(workspaceKey, execution);
+      if (canonicalWorkspaceKey(validated.workspace) !== workspaceKey)
+        throw new Error("Configured workspace changed after startup");
       execution.threadId = await this.getOrCreateThread(
         JSON.stringify([
           dispatch.project.projectId,
@@ -185,6 +192,14 @@ export class CodexTaskExecutor implements AgentExecutor {
       }
       this.executionByThread.set(execution.threadId, execution);
 
+      const ready = await this.validateWorkspace(
+        dispatch.project.workspace,
+        dispatch.project.branch,
+      );
+      if (execution.terminal) return;
+      if (canonicalWorkspaceKey(ready.workspace) !== workspaceKey)
+        throw new Error("Configured workspace changed before turn start");
+
       execution.turnStarting = true;
       const started = await this.client.startTurn({
         threadId: execution.threadId,
@@ -202,6 +217,10 @@ export class CodexTaskExecutor implements AgentExecutor {
 
       await execution.terminalPromise;
     } catch (error) {
+      if (execution.turnStarting && !execution.terminal) {
+        this.uncertainStartFailure ??= this.stopAfterUncertainStart();
+        await this.uncertainStartFailure;
+      }
       this.finish(
         execution,
         TaskState.TASK_STATE_FAILED,
@@ -212,10 +231,25 @@ export class CodexTaskExecutor implements AgentExecutor {
     }
   }
 
-  validateMessage(message: Message): void {
+  validateMessage(message: Message): void | (() => void) {
     if (!message.taskId) {
-      this.dispatchPolicy.resolve(message);
-      return;
+      const dispatch = this.dispatchPolicy.resolve(message);
+      const key = canonicalWorkspaceKey(dispatch.project.workspace);
+      if (
+        this.closing ||
+        this.activeWorkspaces.has(key) ||
+        this.pendingAdmissions.has(key)
+      ) {
+        throw new RequestMalformedError(
+          "HUANLINK_PREACCEPT_REJECTED: Codex workspace is busy or shutting down",
+        );
+      }
+      const token = Symbol();
+      this.pendingAdmissions.set(key, { token, messageId: message.messageId });
+      return () => {
+        if (this.pendingAdmissions.get(key)?.token === token)
+          this.pendingAdmissions.delete(key);
+      };
     }
     // Continuations answer the existing task; execution parameters cannot change.
     if (
@@ -228,6 +262,21 @@ export class CodexTaskExecutor implements AgentExecutor {
       throw new RequestMalformedError(
         "HUANLINK_PREACCEPT_REJECTED: Task continuation cannot change Codex execution options",
       );
+    }
+  }
+
+  private async stopAfterUncertainStart(): Promise<void> {
+    this.closing = true;
+    const message =
+      "Codex turn start outcome is unknown; execution runtime stopped. Reconcile effects before retrying.";
+    this.writeLog("error", "codex.turn.start_uncertain");
+    try {
+      await this.client.close();
+    } catch {
+      this.writeLog("error", "codex.runtime.stop_failed");
+    } finally {
+      for (const active of this.executions.values())
+        this.finish(active, TaskState.TASK_STATE_FAILED, message);
     }
   }
 
@@ -769,6 +818,10 @@ function executionLogFields(execution: InFlightExecution): RuntimeLogFields {
     a2aTaskId: execution.taskId,
     contextId: execution.contextId,
   };
+}
+
+function canonicalWorkspaceKey(workspace: string): string {
+  return process.platform === "win32" ? workspace.toLowerCase() : workspace;
 }
 
 function createInitialTask(requestContext: RequestContext): Task {

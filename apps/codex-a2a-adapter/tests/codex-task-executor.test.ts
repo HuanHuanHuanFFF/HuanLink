@@ -49,6 +49,8 @@ class ControlledCodexRuntime implements CodexRuntimeClient {
   onRespondToServerRequest?: () => void;
   respondToServerRequestError?: Error;
   startTurnGate?: Promise<void>;
+  startThreadGate?: Promise<void>;
+  startTurnError?: Error;
   private readonly listeners = new Set<
     (notification: CodexAppServerNotification) => void
   >();
@@ -99,6 +101,7 @@ class ControlledCodexRuntime implements CodexRuntimeClient {
     options: StartCodexThreadOptions,
   ): Promise<{ threadId: string }> {
     this.startThreadCalls.push(options);
+    await this.startThreadGate;
     return { threadId: `thread-${this.startThreadCalls.length}` };
   }
 
@@ -106,6 +109,7 @@ class ControlledCodexRuntime implements CodexRuntimeClient {
     this.startTurnCalls.push(options);
     this.onStartTurn?.();
     await this.startTurnGate;
+    if (this.startTurnError) throw this.startTurnError;
     return { turnId: `turn-${this.startTurnCalls.length}` };
   }
 
@@ -345,6 +349,55 @@ afterEach(async () => {
 });
 
 describe("CodexTaskExecutor", () => {
+  it("does not start a turn if the branch changes while thread creation is pending", async () => {
+    const runtime = new ControlledCodexRuntime();
+    let release!: () => void;
+    runtime.startThreadGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let changed = false;
+    const { client } = await startClient(runtime, {
+      validateWorkspace: async () => {
+        if (changed) throw new Error("Branch changed during thread creation");
+        return {
+          branch: "spike/demo-v0",
+          workspace: "D:/CodingProject/HuanLink",
+        };
+      },
+    });
+    const task = requireTask(
+      await client.sendMessage(createSendRequest("work", true)),
+    );
+    await expect.poll(() => runtime.startThreadCalls.length).toBe(1);
+    changed = true;
+    release();
+    await waitForTaskState(client, task.id, TaskState.TASK_STATE_FAILED);
+    expect(runtime.startTurnCalls).toEqual([]);
+  });
+
+  it("closes the execution runtime after an uncertain turn start and refuses new work", async () => {
+    const runtime = new ControlledCodexRuntime();
+    runtime.startTurnError = new Error("Response lost after dispatch");
+    runtime.onStartTurn = () =>
+      runtime.emit({
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          turn: { id: "turn-1", status: "inProgress", items: [] },
+        },
+      });
+    const { client } = await startClient(runtime);
+    const task = requireTask(
+      await client.sendMessage(createSendRequest("work", true)),
+    );
+    await waitForTaskState(client, task.id, TaskState.TASK_STATE_FAILED);
+    expect(runtime.closeCalls).toBe(1);
+    await expect(
+      client.sendMessage(createSendRequest("unsafe retry", true)),
+    ).rejects.toThrow();
+    expect(runtime.startTurnCalls).toHaveLength(1);
+  });
+
   it("shares one workspace slot across project aliases and releases it after completion", async () => {
     const runtime = new ControlledCodexRuntime();
     const projects = ["alpha", "beta"].map((projectId) => ({
@@ -355,7 +408,7 @@ describe("CodexTaskExecutor", () => {
       defaultReasoningEffort: "high",
     }));
     const { client } = await startClient(runtime, { projects });
-    const tasks = await Promise.all(
+    const tasks = await Promise.allSettled(
       projects.map((project) =>
         client
           .sendMessage(
@@ -364,28 +417,12 @@ describe("CodexTaskExecutor", () => {
           .then(requireTask),
       ),
     );
-    await expect
-      .poll(
-        async () =>
-          (
-            await Promise.all(
-              tasks.map((task) =>
-                client.getTask(GetTaskRequest.fromJSON({ id: task.id })),
-              ),
-            )
-          ).filter(
-            (task) => task.status?.state === TaskState.TASK_STATE_REJECTED,
-          ).length,
-      )
-      .toBe(1);
-    expect(runtime.startTurnCalls).toHaveLength(1);
-    const active = (
-      await Promise.all(
-        tasks.map((task) =>
-          client.getTask(GetTaskRequest.fromJSON({ id: task.id })),
-        ),
-      )
-    ).find((task) => task.status?.state !== TaskState.TASK_STATE_REJECTED)!;
+    expect(tasks.filter((task) => task.status === "rejected")).toHaveLength(1);
+    const accepted = tasks.find((task) => task.status === "fulfilled");
+    if (accepted?.status !== "fulfilled")
+      throw new Error("Expected one accepted task");
+    const active = accepted.value;
+    await expect.poll(() => runtime.startTurnCalls.length).toBe(1);
     runtime.emit({
       method: "item/completed",
       params: {
@@ -464,12 +501,9 @@ describe("CodexTaskExecutor", () => {
       task.id,
       TaskState.TASK_STATE_INPUT_REQUIRED,
     );
-    const busy = requireTask(
-      await client.sendMessage(
-        createSendRequest("second task while paused", true),
-      ),
-    );
-    await waitForTaskState(client, busy.id, TaskState.TASK_STATE_REJECTED);
+    await expect(
+      client.sendMessage(createSendRequest("second task while paused", true)),
+    ).rejects.toThrow("workspace is busy");
     const continuation = createContinuationRequest(task, {
       scope: ["Adapter only"],
     });
@@ -1434,18 +1468,9 @@ describe("CodexTaskExecutor", () => {
     );
     await expect.poll(() => runtime.startTurnCalls).toHaveLength(1);
 
-    const conflicting = requireTask(
-      await client.sendMessage(createSendRequest("Conflicting task", true)),
-    );
-    const rejected = await waitForTaskState(
-      client,
-      conflicting.id,
-      TaskState.TASK_STATE_REJECTED,
-    );
-    expect(rejected.status?.message?.parts[0]?.content).toEqual({
-      $case: "text",
-      value: "Codex workspace is busy",
-    });
+    await expect(
+      client.sendMessage(createSendRequest("Conflicting task", true)),
+    ).rejects.toThrow("workspace is busy");
 
     runtime.emit({
       method: "item/completed",
@@ -1668,7 +1693,7 @@ describe("CodexTaskExecutor", () => {
     const { client } = await startClient(runtime, {
       validateWorkspace: async () => {
         validations += 1;
-        if (validations === 2) {
+        if (validations === 3) {
           throw new Error("Expected branch spike/demo-v0, found main");
         }
         return {
@@ -1686,7 +1711,7 @@ describe("CodexTaskExecutor", () => {
       submitted.id,
       TaskState.TASK_STATE_FAILED,
     );
-    expect(validations).toBe(2);
+    expect(validations).toBe(3);
     expect(failed.artifacts).toEqual([]);
     expect(failed.status?.message?.parts[0]?.content).toEqual({
       $case: "text",
