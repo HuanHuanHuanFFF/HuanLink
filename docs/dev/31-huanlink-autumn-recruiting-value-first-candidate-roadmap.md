@@ -4,7 +4,7 @@
 >
 > **定位边界：** HuanLink 是面向本地单用户的异构 Agent 协作与 A2A 外层编排项目。QQ 与 Codex 是第一个真实验证场景，不是项目的最终产品边界。
 
-> **进度同步（2026-09-30）：** P0/P0.5 已由 [D13](./D13-server-runtime-production-loop-plan.md) 实施：正式 Runtime、Conversation/Task SQLite 接线及真实 QQ/A2A/Codex 闭环已有记录，B06 也已按后续确认的定向审查范围收口。当前最明确的后续需求是每次派单指定执行参数与目标项目，具体方案尚待独立 Adapter 计划确定。
+> **进度同步（2026-09-30）：** P0/P0.5 已由 [D13](./D13-server-runtime-production-loop-plan.md) 实施：正式 Runtime、Conversation/Task SQLite 接线及真实 QQ/A2A/Codex 闭环已有记录，B06 也已按后续确认的定向审查范围收口。每次派单执行参数与目标项目选择已转入用户确认的 [D14](./D14-codex-dispatch-configuration-plan.md)，该计划记录最新实现与验收状态。
 >
 > 本文第 2 节保留 2026-08-08 的历史基线，第 5～6 节的候选方案也不是当前待执行清单；并发上限、Task 持久化及验收口径等以较新的 D13 为准。P1～P3 的其余模块、近期 Jev 权限判断和受控多 Agent 会话讨论均未因本次同步获得实施授权，不需要为推进下一模块先补齐所有候选基础设施。
 

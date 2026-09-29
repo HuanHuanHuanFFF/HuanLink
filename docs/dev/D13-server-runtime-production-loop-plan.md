@@ -4,7 +4,7 @@
 > [`31-huanlink-autumn-recruiting-value-first-candidate-roadmap.md`](./31-huanlink-autumn-recruiting-value-first-candidate-roadmap.md)
 > 中的 P0 与相邻 P0.5。正式 Runtime、SQLite 接线和真实 QQ/A2A/Codex 闭环已有实现与验收记录；证据范围及最终审查调整见第 11 节，不宣称本次重跑了全仓测试或真实 smoke。
 >
-> 当前核对基线为 `dev/v1.0-runtime-integration` 的 `2a4dc0a`，远端同名分支也指向该提交。下一项已确认需求是派单执行参数与目标项目选择，具体方案仍待独立 Adapter 计划确定；本次状态同步不启动新批次，也不授权提交、推送、PR 或合并。
+> D13 收口核对基线为 `dev/v1.0-runtime-integration` 的 `2a4dc0a`，核对时远端同名分支也指向该提交。后续项目派单改造已由 [D14](./D14-codex-dispatch-configuration-plan.md) 独立确认并实施，仍属于同一分支；Adapter 的最新范围、进度及提交权限以 D14 和用户后续授权为准。
 >
 > 下文各批次的修改、验收设计和带日期的实施结果保留历史语境。前批的“尚未接线”等限制可能已由后批解决；当前事实以第 2 节和第 11 节收口记录为准。
 
@@ -34,7 +34,7 @@ P0 完成后应证明当前正式入口能够处理一次真实请求，而不�
 
 ## 2. 文档关系与当前事实（2026-09-30）
 
-- 本计划仍是 Server Runtime 正式闭环模块的事实与边界入口。B01～B05 的实现已落地，B06 的真实验收、后续独立审查和提交情况见第 11 节；尚未激活下一项 Adapter 开发批次。
+- 本计划仍是 Server Runtime 正式闭环模块的事实与边界入口。B01～B05 的实现已落地，B06 的真实验收、后续独立审查和提交情况见第 11 节；后续 Adapter 开发批次由 D14 管理。
 - [`D11-channel-contract-v1-implementation-plan.md`](./D11-channel-contract-v1-implementation-plan.md) 的 Channel Contract、OneBot Adapter、名单与 route 保序继续使用；Channel 不写 Session、不去重、不决定 Agent 触发，这些职责由下游 Coordinator 承担。
 - 正式 `apps/server/src/main.ts` 已通过配置化总 Runtime 接入 Channel、SessionIngressCoordinator、MainAgent、AgentCall/A2A 和 re-entry，不再是 Channel-only 日志出口。
 - [`D12-sqlite-conversation-store-implementation-plan.md`](./D12-sqlite-conversation-store-implementation-plan.md) 的 Conversation Store 与 B05-A 的 Task Store 已在 B05-B 接入同一生产 SQLite owner；固定路径为 `.huanlink/data/huanlink.sqlite`，由 Server 管理创建与关闭。生产入口使用 SQLite，In-memory 保留给测试和显式隔离场景。
@@ -42,7 +42,7 @@ P0 完成后应证明当前正式入口能够处理一次真实请求，而不�
 - AgentCall 已接入通用 AsyncToolTask，使用统一 HuanLink `taskId`，A2A 与普通异步 Tool 分池限额默认为 2 和 3；普通非 A2A 异步 Tool 目前只有 Fake 验证接缝，没有新增真实生产接入。
 - `reply`、`onebot_standard` 和开关控制的 `onebot_privileged` 已注入正式 Runtime，并依赖 Conversation Store 合同；特权 Tool 仍是默认关闭的显式无保护开关，不代表已实现权限审批。
 - Session 与 Task 事实已持久化；重启后的非终态 Task 变为 `unknown / reconciliation-required` 并保留名额。这不是恢复执行、手动远端对账、自动 watcher 或可靠回流。
-- Codex Adapter 的 JSON loader 已存在，但 `main.ts` 仍使用环境变量和固定 `spike/demo-v0` 分支；`turn/start` 仍固定 `effort: "high"`。稳定项目选择、每次派单执行参数和 Adapter 配置迁移是已记录的后续需求，不因本轮收口而视为完成。
+- 在 D13 收口基线中，Codex Adapter 的 JSON loader 尚未接入 `main.ts`，仍使用环境变量、固定 `spike/demo-v0` 分支与 `effort: "high"`；这部分后续改造现已转入 D14，不能再把该历史缺口当作最新 Adapter 的实现状态。
 
 ## 3. 已确认的产品与运行语义
 
@@ -483,7 +483,7 @@ B05-A 必须先完成 Task Store、迁移、重开投影和名额重建，并单
 
 #### 已确认后续需求与未激活候选
 
-**最明确的后续需求是每次派单指定执行参数与目标项目。** 用户已确认要做；目前仅完成 Adapter 默认 `high` 的修复，尚未完成正式 JSON 入口迁移与新的派单合同。具体字段、模型覆盖与默认值优先级、模型/强度能力校验、稳定 `projectId` 到工作区/分支的映射、跨项目上下文隔离和同工作区并发策略，应在独立 Adapter 计划中确认。Codex 专属规则仍由 Adapter 持有，不写入 MainAgent 或 Core 配置；本次同步不启动实施。
+**每次派单执行参数与目标项目选择已转入 [D14](./D14-codex-dispatch-configuration-plan.md)。** 用户随后确认固定工作区、同目录忙时拒绝、必填项目和可选模型/强度覆盖；其 JSON 接线、能力校验、会话隔离和验收由 D14 记录。Codex 专属规则仍由 Adapter 持有，不写入 MainAgent 或 Core 配置；D13 不重复承担该批次。
 
 其余未实现能力分开记录，不能作为 D13 尚未完成的隐含要求：
 
