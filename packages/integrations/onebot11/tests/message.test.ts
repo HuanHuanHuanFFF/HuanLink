@@ -1,16 +1,16 @@
 import { describe, expect, test } from "vitest";
 
-import { CHANNEL_INBOUND_CONTENT_TOO_LARGE_PLACEHOLDER_V1 } from "@huanlink/core";
+import { CHANNEL_INBOUND_CONTENT_TOO_LARGE_PLACEHOLDER } from "@huanlink/core";
 
-import { parseOneBot11MessageV1 } from "../src/index.js";
+import { parseOneBot11Message } from "../src/index.js";
 
 const options = {
   channelId: "qq-main",
 };
 
-describe("parseOneBot11MessageV1", () => {
-  test("maps a group message array to the V1 route, sender, CQ content, reply, and trigger", () => {
-    const message = parseOneBot11MessageV1(
+describe("parseOneBot11Message", () => {
+  test("maps a group message array to the Channel route, sender, CQ content, reply, and trigger", () => {
+    const message = parseOneBot11Message(
       {
         time: 1_704_067_200,
         self_id: 10_001,
@@ -63,7 +63,7 @@ describe("parseOneBot11MessageV1", () => {
   test("keeps a self-sent private CQ string unchanged and marks its sender", () => {
     const content =
       "sent [CQ:image,url=https://example.invalid/a.gif,key=fixture-key]";
-    const message = parseOneBot11MessageV1(
+    const message = parseOneBot11Message(
       {
         time: 1_704_067_200,
         self_id: "10001",
@@ -96,7 +96,7 @@ describe("parseOneBot11MessageV1", () => {
   });
 
   test("replaces normalized CQ content above 8 KiB with session metadata only", () => {
-    const message = parseOneBot11MessageV1(
+    const message = parseOneBot11Message(
       {
         time: 1_704_067_200,
         self_id: "10001",
@@ -112,7 +112,7 @@ describe("parseOneBot11MessageV1", () => {
     );
 
     expect(message).toMatchObject({
-      content: CHANNEL_INBOUND_CONTENT_TOO_LARGE_PLACEHOLDER_V1,
+      content: CHANNEL_INBOUND_CONTENT_TOO_LARGE_PLACEHOLDER,
       contentOmitted: {
         reason: "too_large",
         originalSizeBytes: 8193,
@@ -123,7 +123,7 @@ describe("parseOneBot11MessageV1", () => {
   test("preserves an incoming private CQ string and isolates it by peer id", () => {
     const content =
       "[CQ:reply,id=77][CQ:at,qq=10001] hello [CQ:future,key=fixture]";
-    const message = parseOneBot11MessageV1(
+    const message = parseOneBot11Message(
       {
         time: 1_704_067_200,
         self_id: "10001",
@@ -155,7 +155,7 @@ describe("parseOneBot11MessageV1", () => {
   });
 
   test("does not assemble a slash command across a non-text message segment", () => {
-    const message = parseOneBot11MessageV1(
+    const message = parseOneBot11Message(
       {
         time: 1_704_067_200,
         self_id: "10001",
@@ -179,7 +179,7 @@ describe("parseOneBot11MessageV1", () => {
   });
 
   test("recognizes a platform-independent slash command without a mention", () => {
-    const message = parseOneBot11MessageV1(
+    const message = parseOneBot11Message(
       {
         time: 1_704_067_200,
         self_id: "10001",
@@ -198,7 +198,7 @@ describe("parseOneBot11MessageV1", () => {
   });
 
   test("recognizes a command after mentioning the current bot", () => {
-    const message = parseOneBot11MessageV1(
+    const message = parseOneBot11Message(
       {
         time: 1_704_067_200,
         self_id: "10001",
@@ -220,7 +220,7 @@ describe("parseOneBot11MessageV1", () => {
   });
 
   test("keeps command priority when the command also mentions the current bot", () => {
-    const message = parseOneBot11MessageV1(
+    const message = parseOneBot11Message(
       {
         time: 1_704_067_200,
         self_id: "10001",
@@ -242,7 +242,7 @@ describe("parseOneBot11MessageV1", () => {
   });
 
   test("does not recognize a command after mentioning another user", () => {
-    const message = parseOneBot11MessageV1(
+    const message = parseOneBot11Message(
       {
         time: 1_704_067_200,
         self_id: "10001",
@@ -264,7 +264,7 @@ describe("parseOneBot11MessageV1", () => {
   });
 
   test("allows repeated self mentions and whitespace before a command", () => {
-    const message = parseOneBot11MessageV1(
+    const message = parseOneBot11Message(
       {
         time: 1_704_067_200,
         self_id: "10001",
@@ -309,7 +309,7 @@ describe("parseOneBot11MessageV1", () => {
   ])(
     "blocks a command when mentioning another user first: %s",
     (_name, segments) => {
-      const message = parseOneBot11MessageV1(
+      const message = parseOneBot11Message(
         {
           time: 1_704_067_200,
           self_id: "10001",
@@ -329,7 +329,7 @@ describe("parseOneBot11MessageV1", () => {
   );
 
   test("keeps a parameterless message segment whose OneBot data is null", () => {
-    const message = parseOneBot11MessageV1(
+    const message = parseOneBot11Message(
       {
         time: 1_704_067_200,
         self_id: "10001",
@@ -352,7 +352,7 @@ describe("parseOneBot11MessageV1", () => {
   });
 
   test("falls back to the sender id without inventing a display name", () => {
-    const message = parseOneBot11MessageV1(
+    const message = parseOneBot11Message(
       {
         time: 1_704_067_200,
         self_id: "10001",

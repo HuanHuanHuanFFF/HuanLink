@@ -6,7 +6,7 @@ import type {
   OneBot11Transport,
 } from "../src/index.js";
 import {
-  OneBot11ChannelAdapterV1,
+  OneBot11ChannelAdapter,
   OneBot11DeliveryUncertainError,
   OneBot11OperationNotSupportedError,
   OneBot11Operations,
@@ -454,7 +454,7 @@ describe("OneBot11Operations", () => {
 
   test("exposes the same operations from the Channel Adapter instance", () => {
     const transport = new FakeOneBot11Transport();
-    const adapter = new OneBot11ChannelAdapterV1({
+    const adapter = new OneBot11ChannelAdapter({
       channelId: "qq-main",
       transport,
     });

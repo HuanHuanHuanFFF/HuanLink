@@ -1,5 +1,6 @@
 import {
   TaskNotCancelableError,
+  RequestMalformedError,
   UnsupportedOperationError,
 } from "@a2a-js/sdk/client";
 import { type RuntimeLogFields } from "@huanlink/core";
@@ -99,6 +100,17 @@ export function isUnsupportedOperation(error: unknown): boolean {
   return hasCause(
     error,
     (candidate) => candidate instanceof UnsupportedOperationError,
+  );
+}
+
+export function isRequestMalformed(error: unknown): boolean {
+  // The SDK can also emit RequestMalformedError after executor startup. Only
+  // this explicit Adapter preflight marker proves that execution never began.
+  return hasCause(
+    error,
+    (candidate) =>
+      candidate instanceof RequestMalformedError &&
+      candidate.message.startsWith("HUANLINK_PREACCEPT_REJECTED:"),
   );
 }
 

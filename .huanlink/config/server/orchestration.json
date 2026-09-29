@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "defaultAgentId": "codex-local",
+  "a2aTaskPolicy": {
+    "maxActiveTasksPerSession": 2
+  },
+  "asyncToolTaskPolicy": {
+    "maxActiveTasksPerSession": 3
+  }
+}

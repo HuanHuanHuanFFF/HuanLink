@@ -1,8 +1,8 @@
 import { describe, expect, test } from "vitest";
 
-import { resolveChannelTriggerV1 } from "../src/index.js";
+import { resolveChannelTrigger } from "../src/index.js";
 
-describe("resolveChannelTriggerV1", () => {
+describe("resolveChannelTrigger", () => {
   test.each([
     "/model",
     "/model gpt-5",
@@ -11,7 +11,7 @@ describe("resolveChannelTriggerV1", () => {
     "/unknown",
   ])("recognizes a leading slash command: %s", (leadingText) => {
     expect(
-      resolveChannelTriggerV1({
+      resolveChannelTrigger({
         mentionedSelf: false,
         leadingText,
       }),
@@ -20,7 +20,7 @@ describe("resolveChannelTriggerV1", () => {
 
   test("gives a valid command priority over a self mention", () => {
     expect(
-      resolveChannelTriggerV1({
+      resolveChannelTrigger({
         mentionedSelf: true,
         leadingText: "  /model gpt-5",
       }),
@@ -31,7 +31,7 @@ describe("resolveChannelTriggerV1", () => {
     "falls back to mention when a self mention has no valid command: %s",
     (leadingText) => {
       expect(
-        resolveChannelTriggerV1({
+        resolveChannelTrigger({
           mentionedSelf: true,
           leadingText,
         }),
@@ -41,7 +41,7 @@ describe("resolveChannelTriggerV1", () => {
 
   test("returns mention when the platform supplied no leading text", () => {
     expect(
-      resolveChannelTriggerV1({
+      resolveChannelTrigger({
         mentionedSelf: true,
       }),
     ).toEqual({ kind: "mention" });
@@ -51,7 +51,7 @@ describe("resolveChannelTriggerV1", () => {
     "does not trigger without a mention or valid command: %s",
     (leadingText) => {
       expect(
-        resolveChannelTriggerV1({
+        resolveChannelTrigger({
           mentionedSelf: false,
           ...(leadingText === undefined ? {} : { leadingText }),
         }),

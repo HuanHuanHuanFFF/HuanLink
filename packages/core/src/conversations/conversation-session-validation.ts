@@ -1,4 +1,4 @@
-import type { ChannelConversationRouteV1 } from "../channels/contract-v1.js";
+import type { ChannelConversationRoute } from "../channels/contract.js";
 
 /** 校验 Session 和 Tool 关联使用的非空标识。 */
 export function requireConversationIdentifier(
@@ -20,10 +20,27 @@ export function validateConversationToolIdentity(
   requireConversationIdentifier(value.toolName, `${label} toolName`);
 }
 
+/** 校验 Tool Call 恰好携带一种可持久化参数形式。 */
+export function validateConversationToolCallPayload(
+  value: { arguments?: unknown; rawArguments?: unknown },
+  label: string,
+): void {
+  const hasArguments = value.arguments !== undefined;
+  const hasRawArguments = value.rawArguments !== undefined;
+  if (hasArguments === hasRawArguments) {
+    throw new Error(
+      `${label} must contain exactly one of arguments or rawArguments`,
+    );
+  }
+  if (hasRawArguments && typeof value.rawArguments !== "string") {
+    throw new Error(`${label} rawArguments must be a string`);
+  }
+}
+
 /** 比较同一 Session 的固定 Channel 路由。 */
 export function isSameConversationRoute(
-  left: ChannelConversationRouteV1,
-  right: ChannelConversationRouteV1,
+  left: ChannelConversationRoute,
+  right: ChannelConversationRoute,
 ): boolean {
   return (
     left.channelId === right.channelId &&

@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import type { Readable, Writable } from "node:stream";
+import { z } from "zod";
 
 export interface CodexAppServerTransport {
   stdin: Writable;
@@ -70,6 +71,13 @@ export interface StartCodexThreadOptions {
 export interface StartCodexTurnOptions {
   prompt: string;
   threadId: string;
+  model?: string;
+  reasoningEffort?: string;
+}
+
+export interface CodexModelCapability {
+  model: string;
+  reasoningEfforts: string[];
 }
 
 export interface InterruptCodexTurnOptions {
@@ -78,6 +86,7 @@ export interface InterruptCodexTurnOptions {
 }
 
 export interface CodexRuntimeClient {
+  listModels(): Promise<CodexModelCapability[]>;
   close(): Promise<void>;
   discardServerRequest(id: CodexAppServerRequestId): void;
   interruptTurn(options: InterruptCodexTurnOptions): Promise<void>;
@@ -319,6 +328,9 @@ export class CodexAppServerClient implements CodexRuntimeClient {
   async startTurn(options: StartCodexTurnOptions): Promise<{ turnId: string }> {
     const result = await this.request<{ turn: { id: string } }>("turn/start", {
       threadId: options.threadId,
+      // Keep Adapter tasks independent of the user's global Codex effort.
+      effort: options.reasoningEffort ?? "high",
+      ...(options.model === undefined ? {} : { model: options.model }),
       input: [
         {
           type: "text",
@@ -332,6 +344,46 @@ export class CodexAppServerClient implements CodexRuntimeClient {
 
   async interruptTurn(options: InterruptCodexTurnOptions): Promise<void> {
     await this.request<Record<string, never>>("turn/interrupt", options);
+  }
+
+  async listModels(): Promise<CodexModelCapability[]> {
+    const models: CodexModelCapability[] = [];
+    const seen = new Set<string>();
+    let cursor: string | undefined;
+    const pageSchema = z.object({
+      data: z.array(
+        z.object({
+          model: z.string().min(1),
+          supportedReasoningEfforts: z
+            .array(z.object({ reasoningEffort: z.string().min(1) }))
+            .min(1),
+        }),
+      ),
+      nextCursor: z.string().min(1).nullable(),
+    });
+    do {
+      if (seen.size >= 100 || (cursor !== undefined && seen.has(cursor))) {
+        throw new Error("Invalid Codex model catalog pagination");
+      }
+      if (cursor !== undefined) seen.add(cursor);
+      const response = await this.request<unknown>("model/list", {
+        includeHidden: true,
+        limit: 100,
+        ...(cursor === undefined ? {} : { cursor }),
+      });
+      const parsed = pageSchema.safeParse(response);
+      if (!parsed.success) throw new Error("Invalid Codex model catalog");
+      models.push(
+        ...parsed.data.data.map((model) => ({
+          model: model.model,
+          reasoningEfforts: model.supportedReasoningEfforts.map(
+            (item) => item.reasoningEffort,
+          ),
+        })),
+      );
+      cursor = parsed.data.nextCursor ?? undefined;
+    } while (cursor !== undefined);
+    return models;
   }
 
   private request<Result>(method: string, params: unknown): Promise<Result> {

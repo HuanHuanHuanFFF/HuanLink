@@ -1,14 +1,14 @@
 import { describe, expect, test, vi } from "vitest";
 
 import {
-  type ChannelAdapterV1,
-  type ChannelConversationKindV1,
-  type ChannelDescriptorV1,
-  type ChannelMessageListenerV1,
-  type DeliveryReceiptV1,
-  type InboundChannelMessageV1,
-  type RetractChannelMessageCommandV1,
-  type SendChannelMessageCommandV1,
+  type ChannelAdapter,
+  type ChannelConversationKind,
+  type ChannelDescriptor,
+  type ChannelMessageListener,
+  type DeliveryReceipt,
+  type InboundChannelMessage,
+  type RetractChannelMessageCommand,
+  type SendChannelMessageCommand,
 } from "@huanlink/core";
 
 import {
@@ -16,16 +16,13 @@ import {
   type ChannelRuntimeMessage,
 } from "../src/channel-runtime.js";
 
-class FakeChannelAdapter implements ChannelAdapterV1 {
-  readonly descriptor: ChannelDescriptorV1;
-  private readonly listeners = new Set<ChannelMessageListenerV1>();
+class FakeChannelAdapter implements ChannelAdapter {
+  readonly descriptor: ChannelDescriptor;
+  private readonly listeners = new Set<ChannelMessageListener>();
 
   constructor(
     channelId: string,
-    conversationKinds: readonly ChannelConversationKindV1[] = [
-      "direct",
-      "group",
-    ],
+    conversationKinds: readonly ChannelConversationKind[] = ["direct", "group"],
   ) {
     this.descriptor = {
       channelId,
@@ -53,23 +50,23 @@ class FakeChannelAdapter implements ChannelAdapterV1 {
     return Promise.resolve();
   }
 
-  onMessage(listener: ChannelMessageListenerV1): () => void {
+  onMessage(listener: ChannelMessageListener): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
 
-  send(_command: SendChannelMessageCommandV1): Promise<DeliveryReceiptV1> {
+  send(_command: SendChannelMessageCommand): Promise<DeliveryReceipt> {
     return Promise.resolve({
       channelId: this.descriptor.channelId,
       messageId: "sent-1",
     });
   }
 
-  retract(_command: RetractChannelMessageCommandV1): Promise<void> {
+  retract(_command: RetractChannelMessageCommand): Promise<void> {
     return Promise.resolve();
   }
 
-  emit(message: InboundChannelMessageV1): void {
+  emit(message: InboundChannelMessage): void {
     for (const listener of [...this.listeners]) {
       void listener(message);
     }
@@ -83,7 +80,7 @@ function inboundMessage(input: {
   conversationKind?: "direct" | "group";
   isSelf?: boolean;
   trigger?: "mention" | "command";
-}): InboundChannelMessageV1 {
+}): InboundChannelMessage {
   return {
     messageId: input.messageId,
     route: {
@@ -487,7 +484,7 @@ describe("ChannelRuntime", () => {
   test("serializes outbound operations per session without blocking another session", async () => {
     const adapter = new FakeChannelAdapter("qq-main");
     let releaseFirst!: () => void;
-    const firstPending = new Promise<DeliveryReceiptV1>((resolve) => {
+    const firstPending = new Promise<DeliveryReceipt>((resolve) => {
       releaseFirst = () =>
         resolve({ channelId: "qq-main", messageId: "sent-first" });
     });
@@ -515,7 +512,7 @@ describe("ChannelRuntime", () => {
     });
     await runtime.start();
     const ordered = runtime.resolveAdapter("qq-main")!;
-    const firstCommand: SendChannelMessageCommandV1 = {
+    const firstCommand: SendChannelMessageCommand = {
       route: {
         channelId: "qq-main",
         conversationKind: "group",
@@ -523,11 +520,11 @@ describe("ChannelRuntime", () => {
       },
       parts: [{ type: "text", text: "first" }],
     };
-    const secondCommand: SendChannelMessageCommandV1 = {
+    const secondCommand: SendChannelMessageCommand = {
       ...firstCommand,
       parts: [{ type: "text", text: "second" }],
     };
-    const otherSessionCommand: SendChannelMessageCommandV1 = {
+    const otherSessionCommand: SendChannelMessageCommand = {
       route: {
         channelId: "qq-main",
         conversationKind: "direct",
@@ -567,7 +564,7 @@ describe("ChannelRuntime", () => {
     let releaseFirst!: () => void;
     const send = vi.spyOn(adapter, "send").mockImplementationOnce(
       () =>
-        new Promise<DeliveryReceiptV1>((resolve) => {
+        new Promise<DeliveryReceipt>((resolve) => {
           releaseFirst = () =>
             resolve({ channelId: "qq-main", messageId: "sent-first" });
         }),
@@ -585,7 +582,7 @@ describe("ChannelRuntime", () => {
     });
     await runtime.start();
     const ordered = runtime.resolveAdapter("qq-main")!;
-    const command: SendChannelMessageCommandV1 = {
+    const command: SendChannelMessageCommand = {
       route: {
         channelId: "qq-main",
         conversationKind: "group",
@@ -638,7 +635,7 @@ describe("ChannelRuntime", () => {
       onMessage,
     });
     const ordered = runtime.resolveAdapter("qq-main")!;
-    const command: SendChannelMessageCommandV1 = {
+    const command: SendChannelMessageCommand = {
       route: {
         channelId: "qq-main",
         conversationKind: "group",
@@ -722,7 +719,7 @@ describe("ChannelRuntime", () => {
     let releaseFirst!: () => void;
     const send = vi.spyOn(adapter, "send").mockImplementationOnce(
       () =>
-        new Promise<DeliveryReceiptV1>((resolve) => {
+        new Promise<DeliveryReceipt>((resolve) => {
           releaseFirst = () =>
             resolve({ channelId: "qq-main", messageId: "sent-first" });
         }),
@@ -740,7 +737,7 @@ describe("ChannelRuntime", () => {
     });
     await runtime.start();
     const ordered = runtime.resolveAdapter("qq-main")!;
-    const command: SendChannelMessageCommandV1 = {
+    const command: SendChannelMessageCommand = {
       route: {
         channelId: "qq-main",
         conversationKind: "group",

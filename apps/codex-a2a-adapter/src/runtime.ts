@@ -1,6 +1,8 @@
 import {
   CodexAppServerClient,
   spawnCodexAppServerTransport,
+  type SpawnCodexAppServerOptions,
+  type CodexAppServerTransport,
 } from "./codex-app-server-client.js";
 import {
   NoopRuntimeLogger,
@@ -11,21 +13,42 @@ import {
 import { CodexTaskExecutor } from "./codex-task-executor.js";
 import { startAdapterServer } from "./server.js";
 import { validateDemoWorkspace } from "./workspace-guard.js";
+import { isAbsolute, resolve, win32, join } from "node:path";
+import type { CodexProject } from "./dispatch-policy.js";
+import { loadCodexAdapterLocalConfig } from "./runtime-config.js";
 
 export interface StartCodexAdapterRuntimeOptions {
+  spawnTransport?: (
+    options: SpawnCodexAppServerOptions,
+  ) => CodexAppServerTransport;
   codexExecutable: string;
-  codexModel: string;
-  expectedBranch: string;
+  projects: readonly CodexProject[];
+  projectRoot: string;
+  heartbeatIntervalMs?: number;
   expectedCodexVersion: string;
   host: string;
   logger?: RuntimeLogger;
   port: number;
-  workspace: string;
 }
 
 export interface RunningCodexAdapterRuntime {
   origin: string;
   close(): Promise<void>;
+}
+
+export async function startConfiguredCodexAdapterRuntime(options: {
+  projectRoot: string;
+  logger?: RuntimeLogger;
+  spawnTransport?: StartCodexAdapterRuntimeOptions["spawnTransport"];
+}): Promise<RunningCodexAdapterRuntime> {
+  const config = await loadCodexAdapterLocalConfig({
+    configRoot: join(options.projectRoot, ".huanlink", "config"),
+  });
+  return startCodexAdapterRuntime({
+    ...config.runtime,
+    projects: config.projects,
+    ...options,
+  });
 }
 
 export async function startCodexAdapterRuntime(
@@ -35,55 +58,65 @@ export async function startCodexAdapterRuntime(
   writeLog(logger, "info", "adapter.runtime.starting", {
     host: options.host,
     port: options.port,
-    model: options.codexModel,
   });
-  const validated = await validateDemoWorkspace(
-    options.workspace,
-    options.expectedBranch,
+  const projects = await Promise.all(
+    options.projects.map(async (project) => {
+      if (win32.isAbsolute(project.workspace) && !isAbsolute(project.workspace))
+        throw new Error("Project workspace belongs to a different platform");
+      const validated = await validateDemoWorkspace(
+        resolve(options.projectRoot, project.workspace),
+        project.branch,
+      );
+      return { ...project, workspace: validated.workspace };
+    }),
   );
-  writeLog(logger, "info", "adapter.workspace.validated", {
-    branch: validated.branch,
-    workspace: validated.workspace,
-  });
   writeLog(logger, "info", "codex.app_server.starting");
-  const transport = spawnCodexAppServerTransport({
+  const transport = (options.spawnTransport ?? spawnCodexAppServerTransport)({
     executable: options.codexExecutable,
-    cwd: validated.workspace,
+    cwd: options.projectRoot,
   });
   const client = await CodexAppServerClient.connect({
     transport,
     expectedVersion: options.expectedCodexVersion,
   });
   writeLog(logger, "info", "codex.app_server.connected");
-  const executor = new CodexTaskExecutor({
-    client,
-    model: options.codexModel,
-    logger,
-    workspace: validated.workspace,
-    expectedBranch: options.expectedBranch,
-  });
-
+  let executor: CodexTaskExecutor | undefined;
   let server;
   try {
+    executor = new CodexTaskExecutor({
+      client,
+      logger,
+      projects,
+      models: await client.listModels(),
+    });
+    const activeExecutor = executor;
     server = await startAdapterServer({
-      executor,
+      executor: activeExecutor,
+      validateMessage: (message) => activeExecutor.validateMessage(message),
       host: options.host,
       port: options.port,
+      heartbeatIntervalMs: options.heartbeatIntervalMs,
     });
     writeLog(logger, "info", "adapter.a2a.started", {
       origin: server.origin,
     });
   } catch (error) {
-    await executor.close();
+    await executor?.close();
     await client.close();
     throw error;
   }
 
   let closePromise: Promise<void> | undefined;
+  const activeExecutor = executor;
   return {
     origin: server.origin,
     close() {
-      closePromise ??= closeRuntime(server.close(), executor, client, logger);
+      closePromise ??= closeRuntime(
+        server.close(),
+        activeExecutor,
+        client,
+        logger,
+      );
       return closePromise;
     },
   };

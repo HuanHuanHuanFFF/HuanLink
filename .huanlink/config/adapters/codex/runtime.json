@@ -3,6 +3,6 @@
   "host": "127.0.0.1",
   "port": 4000,
   "codexExecutable": "codex.cmd",
-  "expectedCodexVersion": "0.144.1",
+  "expectedCodexVersion": "0.145.0",
   "heartbeatIntervalMs": 30000
 }

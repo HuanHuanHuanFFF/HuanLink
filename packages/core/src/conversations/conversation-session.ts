@@ -1,8 +1,8 @@
 import type {
-  DeliveryReceiptV1,
-  ChannelConversationRouteV1,
-  InboundChannelMessageV1,
-} from "../channels/contract-v1.js";
+  DeliveryReceipt,
+  ChannelConversationRoute,
+  InboundChannelMessage,
+} from "../channels/contract.js";
 import type { RunId, SessionId } from "../shared/ids.js";
 
 /** 可安全保存在结构化 Agent 会话历史中的 JSON 值。 */
@@ -18,7 +18,7 @@ export type ConversationJsonValue =
 export type ConversationSessionMetadata = {
   /** 显式区分可向外部聊天回复的 Session，不根据 ID 或连接状态推断。 */
   readonly kind: "external_channel";
-  readonly route: ChannelConversationRouteV1;
+  readonly route: ChannelConversationRoute;
   readonly contentFormat: string;
 };
 
@@ -41,9 +41,22 @@ export type ConversationChannelMessageEntry = {
   readonly type: "channel_message";
   readonly channelId: string;
   readonly messageId: string;
-  readonly observed?: InboundChannelMessageV1;
+  readonly observed?: InboundChannelMessage;
   readonly outbound?: ConversationOutboundDelivery;
 };
+
+/** Tool Call 参数的两种互斥持久化形式。 */
+export type ConversationAgentToolCallPayload =
+  | {
+      /** 已由调用方解析并校验的结构化参数；保持既有持久格式兼容。 */
+      readonly arguments: Readonly<Record<string, ConversationJsonValue>>;
+      readonly rawArguments?: never;
+    }
+  | {
+      /** SDK 未能解析或校验时保留的原始参数，不伪造结构化 JSON。 */
+      readonly rawArguments: string;
+      readonly arguments?: never;
+    };
 
 /** Agent 发出的结构化 Tool Call；参数不降级为展示文本。 */
 export type ConversationAgentToolCallEntry = {
@@ -51,8 +64,7 @@ export type ConversationAgentToolCallEntry = {
   readonly runId: RunId;
   readonly toolCallId: string;
   readonly toolName: string;
-  readonly arguments: Readonly<Record<string, ConversationJsonValue>>;
-};
+} & ConversationAgentToolCallPayload;
 
 /** 与 Tool Call 配对的结构化 Tool Result。 */
 export type ConversationAgentToolResultEntry = {
@@ -69,27 +81,56 @@ export type ConversationTimelineEntry =
   | ConversationAgentToolCallEntry
   | ConversationAgentToolResultEntry;
 
-/** 进程存活期间的一份完整 Channel Conversation Session。 */
+/** 一份完整的 Channel Conversation Session；生命周期由 Store 实现决定。 */
 export type ConversationSession = {
   readonly metadata: ConversationSessionMetadata;
   readonly timeline: readonly ConversationTimelineEntry[];
 };
 
+/** Stable ordering key for one stored Session timeline entry. */
+export type ConversationSessionEntryIndex = number;
+
+/** One immutable fact exposed after the Session context cursor. */
+export type ConversationSessionContextEntry = {
+  readonly entryIndex: ConversationSessionEntryIndex;
+  readonly entry: ConversationTimelineEntry;
+};
+
+/** Stable location and immutable facts for one precisely addressed Tool Call. */
+export type ConversationAgentToolCallLocation = {
+  readonly entryIndex: ConversationSessionEntryIndex;
+  readonly entry: ConversationAgentToolCallEntry;
+};
+
+/** Future compaction boundary; current Stores do not write summaries. */
+export type ConversationSessionContextSummary = {
+  readonly text: string;
+  readonly throughEntryIndex: ConversationSessionEntryIndex;
+};
+
+/** Metadata plus the ordered facts that remain after an optional cursor. */
+export type ConversationSessionContextWindow = {
+  readonly metadata: ConversationSessionMetadata;
+  readonly summary?: ConversationSessionContextSummary;
+  readonly entries: readonly ConversationSessionContextEntry[];
+};
+
 /** 成功发送后登记待回流关联所需的可信数据。 */
 export type RecordConversationOutboundDelivery = {
-  readonly route: ChannelConversationRouteV1;
+  readonly route: ChannelConversationRoute;
   readonly contentFormat: string;
-  readonly receipt: DeliveryReceiptV1;
+  readonly receipt: DeliveryReceipt;
   readonly sentAt: string;
   readonly runId: RunId;
   readonly toolCallId: string;
   readonly sourceSessionId: SessionId;
 };
 
-export type AppendConversationAgentToolCall = Omit<
-  ConversationAgentToolCallEntry,
-  "type"
->;
+export type AppendConversationAgentToolCall = {
+  readonly runId: RunId;
+  readonly toolCallId: string;
+  readonly toolName: string;
+} & ConversationAgentToolCallPayload;
 
 export type AppendConversationAgentToolResult = Omit<
   ConversationAgentToolResultEntry,

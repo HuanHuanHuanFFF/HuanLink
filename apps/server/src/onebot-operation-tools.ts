@@ -1,12 +1,20 @@
 import type {
-  ChannelConversationRouteV1,
+  ChannelConversationRoute,
   ConversationJsonValue,
-  InMemoryConversationSessionStore,
+  ConversationSessionStore,
   RuntimeLogger,
+  SessionToolHistoryRecorder,
   SessionId,
 } from "@huanlink/core";
-import { ChannelOperationError, NoopRuntimeLogger } from "@huanlink/core";
-import type { OpenAiAgentsRunContext } from "@huanlink/integration-openai-agents";
+import {
+  ChannelOperationError,
+  ConversationSessionStoreToolHistoryRecorder,
+  NoopRuntimeLogger,
+} from "@huanlink/core";
+import {
+  type OpenAiAgentsRunContext,
+  withSessionToolHistory,
+} from "@huanlink/integration-openai-agents";
 import {
   OneBot11DeliveryUncertainError,
   OneBot11RemoteActionError,
@@ -24,7 +32,6 @@ const positiveId = z.string().regex(/^[1-9]\d*$/u);
 const messageId = z.string().regex(/^-?\d+$/u);
 const nonBlank = z.string().regex(/\S/u);
 const messageText = z.string().min(1);
-const noParams = z.object({}).strict();
 const outboundPart = z.discriminatedUnion("type", [
   z.object({ type: z.literal("text"), text: messageText }).strict(),
   z
@@ -118,15 +125,11 @@ const standardRequest = z.discriminatedUnion("operation", [
       params: z.object({ messageId: nonBlank }).strict(),
     })
     .strict(),
-  z.object({ operation: z.literal("getLoginInfo"), params: noParams }).strict(),
-  z
-    .object({ operation: z.literal("getVersionInfo"), params: noParams })
-    .strict(),
-  z.object({ operation: z.literal("getStatus"), params: noParams }).strict(),
-  z.object({ operation: z.literal("canSendImage"), params: noParams }).strict(),
-  z
-    .object({ operation: z.literal("canSendRecord"), params: noParams })
-    .strict(),
+  z.object({ operation: z.literal("getLoginInfo") }).strict(),
+  z.object({ operation: z.literal("getVersionInfo") }).strict(),
+  z.object({ operation: z.literal("getStatus") }).strict(),
+  z.object({ operation: z.literal("canSendImage") }).strict(),
+  z.object({ operation: z.literal("canSendRecord") }).strict(),
   z
     .object({
       operation: z.literal("getStrangerInfo"),
@@ -135,9 +138,7 @@ const standardRequest = z.discriminatedUnion("operation", [
         .strict(),
     })
     .strict(),
-  z
-    .object({ operation: z.literal("getFriendList"), params: noParams })
-    .strict(),
+  z.object({ operation: z.literal("getFriendList") }).strict(),
   z
     .object({
       operation: z.literal("getGroupInfo"),
@@ -146,7 +147,7 @@ const standardRequest = z.discriminatedUnion("operation", [
         .strict(),
     })
     .strict(),
-  z.object({ operation: z.literal("getGroupList"), params: noParams }).strict(),
+  z.object({ operation: z.literal("getGroupList") }).strict(),
   z
     .object({
       operation: z.literal("getGroupMemberInfo"),
@@ -352,7 +353,7 @@ type ToolResult =
     };
 
 type OutboundDelivery = {
-  readonly route: ChannelConversationRouteV1;
+  readonly route: ChannelConversationRoute;
   readonly messageId: string;
 };
 
@@ -362,19 +363,21 @@ type OperationExecution = {
 };
 
 export type CreateOneBot11OperationToolsOptions = {
-  sessions: InMemoryConversationSessionStore;
+  sessions: ConversationSessionStore;
+  /** Defaults to the supplied Session Store without generating any IDs. */
+  historyRecorder?: SessionToolHistoryRecorder;
   resolveOperations(channelId: string): OneBot11Operations | undefined;
-  isRouteAllowed(route: ChannelConversationRouteV1): boolean;
+  isRouteAllowed(route: ChannelConversationRoute): boolean;
   /**
    * Decides whether destructive OneBot operations may target a Channel.
    * Omit the predicate unless the caller intentionally accepts that risk.
    */
   isUnsafePrivilegedOperationsEnabled?(channelId: string): boolean;
   /** Channel Runtime owns the canonical route-to-Session mapping. */
-  sessionIdForRoute(route: ChannelConversationRouteV1): SessionId;
+  sessionIdForRoute(route: ChannelConversationRoute): SessionId;
   /** Channel Runtime owns serialization of all target-session outbound work. */
   runOutbound<T>(
-    route: ChannelConversationRouteV1,
+    route: ChannelConversationRoute,
     operation: () => Promise<T>,
   ): Promise<T>;
   /** Applies Channel Runtime lifecycle gates without adding route-list checks. */
@@ -401,54 +404,76 @@ export function createOneBot11OperationTools(
   const logger = createBestEffortRuntimeLogger(
     options.logger ?? new NoopRuntimeLogger(),
   );
+  const historyRecorder =
+    options.historyRecorder ??
+    new ConversationSessionStoreToolHistoryRecorder(options.sessions);
 
-  const standard = tool<typeof standardParameters, OpenAiAgentsRunContext>({
-    name: ONEBOT11_STANDARD_TOOL_NAME,
-    description:
-      "Run one named, non-privileged OneBot 11 operation. Operations with an explicit group or private target must be in HuanLink's allowed Channel range; account-level list and status queries have no target and return the configured account's raw data.",
-    parameters: standardParameters,
-    strict: true,
-    isEnabled: ({ runContext }) =>
-      isExternalSession(options, runContext.context.sessionId),
-    errorFunction: (_context, error) =>
-      JSON.stringify(errorResult(ONEBOT11_STANDARD_TOOL_NAME, error)),
-    execute: async (input, runContext, details) =>
-      await executeToolCall({
-        options,
-        logger,
-        toolName: ONEBOT11_STANDARD_TOOL_NAME,
-        input,
-        runContext,
-        toolCallId: details?.toolCall?.callId,
-        operation: async (operations) =>
-          executeStandard(options, operations, input),
-      }),
-  });
+  const standard = withSessionToolHistory(
+    tool<typeof standardParameters, OpenAiAgentsRunContext>({
+      name: ONEBOT11_STANDARD_TOOL_NAME,
+      description:
+        "Run one named, non-privileged OneBot 11 operation. Operations with an explicit group or private target must be in HuanLink's allowed Channel range; account-level list and status queries have no target and return the configured account's raw data.",
+      parameters: standardParameters,
+      strict: true,
+      isEnabled: ({ runContext }) =>
+        isExternalSession(options, runContext.context.sessionId),
+      errorFunction: (_context, error) =>
+        JSON.stringify(errorResult(ONEBOT11_STANDARD_TOOL_NAME, error)),
+      execute: async (input, runContext, details) =>
+        await executeToolCall({
+          options,
+          logger,
+          toolName: ONEBOT11_STANDARD_TOOL_NAME,
+          input,
+          runContext,
+          toolCallId: details?.toolCall?.callId,
+          operation: async (operations) =>
+            executeStandard(options, operations, input),
+        }),
+    }),
+    historyRecorder,
+    logger,
+    parseStandardHistoryArguments,
+  );
   const privileged =
     options.isUnsafePrivilegedOperationsEnabled !== undefined
-      ? tool<typeof privilegedParameters, OpenAiAgentsRunContext>({
-          name: ONEBOT11_PRIVILEGED_TOOL_NAME,
-          description:
-            "Run one named destructive OneBot 11 operation. This Tool currently has no approval, target-list, or message-ownership protection and executes immediately.",
-          parameters: privilegedParameters,
-          strict: true,
-          isEnabled: ({ runContext }) =>
-            isExternalSession(options, runContext.context.sessionId),
-          errorFunction: (_context, error) =>
-            JSON.stringify(errorResult(ONEBOT11_PRIVILEGED_TOOL_NAME, error)),
-          execute: async (input, runContext, details) =>
-            await executeToolCall({
-              options,
-              logger,
-              toolName: ONEBOT11_PRIVILEGED_TOOL_NAME,
-              input,
-              runContext,
-              toolCallId: details?.toolCall?.callId,
-              operation: async (operations) => ({
-                data: await executePrivileged(operations, input),
+      ? withSessionToolHistory(
+          tool<typeof privilegedParameters, OpenAiAgentsRunContext>({
+            name: ONEBOT11_PRIVILEGED_TOOL_NAME,
+            description:
+              "Run one named destructive OneBot 11 operation. This Tool currently has no approval, target-list, or message-ownership protection and executes immediately.",
+            parameters: privilegedParameters,
+            strict: true,
+            isEnabled: ({ runContext }) => {
+              const metadata = options.sessions.getSessionMetadata(
+                runContext.context.sessionId,
+              );
+              return (
+                metadata?.kind === "external_channel" &&
+                options.isUnsafePrivilegedOperationsEnabled?.(
+                  metadata.route.channelId,
+                ) === true
+              );
+            },
+            errorFunction: (_context, error) =>
+              JSON.stringify(errorResult(ONEBOT11_PRIVILEGED_TOOL_NAME, error)),
+            execute: async (input, runContext, details) =>
+              await executeToolCall({
+                options,
+                logger,
+                toolName: ONEBOT11_PRIVILEGED_TOOL_NAME,
+                input,
+                runContext,
+                toolCallId: details?.toolCall?.callId,
+                operation: async (operations) => ({
+                  data: await executePrivileged(operations, input),
+                }),
               }),
-            }),
-        })
+          }),
+          historyRecorder,
+          logger,
+          parsePrivilegedHistoryArguments,
+        )
       : undefined;
 
   if (privileged !== undefined) {
@@ -458,6 +483,22 @@ export function createOneBot11OperationTools(
   }
 
   return { standard, privileged };
+}
+
+function parseStandardHistoryArguments(
+  rawArguments: string,
+): Readonly<Record<string, ConversationJsonValue>> {
+  return standardParameters.parse(
+    JSON.parse(rawArguments),
+  ) as unknown as Readonly<Record<string, ConversationJsonValue>>;
+}
+
+function parsePrivilegedHistoryArguments(
+  rawArguments: string,
+): Readonly<Record<string, ConversationJsonValue>> {
+  return privilegedParameters.parse(
+    JSON.parse(rawArguments),
+  ) as unknown as Readonly<Record<string, ConversationJsonValue>>;
 }
 
 async function executeToolCall<
@@ -506,35 +547,7 @@ async function executeToolCall<
     channelId: input.input.channelId,
     operation: input.input.request.operation,
   });
-  try {
-    input.options.sessions.appendAgentToolCall(context.sessionId, {
-      runId: context.runId,
-      toolCallId: input.toolCallId,
-      toolName: input.toolName,
-      arguments: input.input as unknown as Readonly<
-        Record<string, ConversationJsonValue>
-      >,
-    });
-  } catch (error) {
-    toolLogger.error("onebot.operation.tool_call_record_failed", {
-      errorType: errorType(error),
-    });
-    return JSON.stringify(errorResult(input.toolName, error));
-  }
-
   const complete = (result: ToolResult): string => {
-    try {
-      input.options.sessions.appendAgentToolResult(context.sessionId, {
-        runId: context.runId,
-        toolCallId: input.toolCallId!,
-        toolName: input.toolName,
-        output: result,
-      });
-    } catch (error) {
-      toolLogger.error("onebot.operation.tool_result_record_failed", {
-        errorType: errorType(error),
-      });
-    }
     toolLogger.info("onebot.operation.completed", {
       status: isErrorResult(result) ? result.status : "success",
     });
@@ -781,7 +794,7 @@ async function executePrivileged(
 
 async function executeSend(
   options: CreateOneBot11OperationToolsOptions,
-  route: ChannelConversationRouteV1,
+  route: ChannelConversationRoute,
   send: () => Promise<unknown>,
 ): Promise<OperationExecution> {
   assertAllowed(options, route);
@@ -797,7 +810,7 @@ async function executeSend(
 
 async function runAllowedOutbound<T>(
   options: CreateOneBot11OperationToolsOptions,
-  route: ChannelConversationRouteV1,
+  route: ChannelConversationRoute,
   operation: () => Promise<T>,
 ): Promise<T> {
   assertAllowed(options, route);
@@ -806,7 +819,7 @@ async function runAllowedOutbound<T>(
 
 function assertAllowed(
   options: CreateOneBot11OperationToolsOptions,
-  route: ChannelConversationRouteV1,
+  route: ChannelConversationRoute,
 ): void {
   if (!options.isRouteAllowed(route)) {
     throw new Error("OneBot target is not allowed");
@@ -816,14 +829,14 @@ function assertAllowed(
 function groupRoute(
   channelId: string,
   groupId: string,
-): ChannelConversationRouteV1 {
+): ChannelConversationRoute {
   return { channelId, conversationKind: "group", conversationId: groupId };
 }
 
 function directRoute(
   channelId: string,
   userId: string,
-): ChannelConversationRouteV1 {
+): ChannelConversationRoute {
   return { channelId, conversationKind: "direct", conversationId: userId };
 }
 

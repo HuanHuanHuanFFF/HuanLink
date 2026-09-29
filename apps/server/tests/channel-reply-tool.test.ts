@@ -3,8 +3,10 @@ import { describe, expect, test, vi } from "vitest";
 import {
   ChannelOperationError,
   InMemoryConversationSessionStore,
-  type ChannelAdapterV1,
-  type InboundChannelMessageV1,
+  SqliteConversationSessionStore,
+  type ChannelAdapter,
+  type InboundChannelMessage,
+  type SessionToolHistoryRecorder,
 } from "@huanlink/core";
 import type { OpenAiAgentsRunContext } from "@huanlink/integration-openai-agents";
 import { Agent, RunContext, tool } from "@openai/agents";
@@ -13,11 +15,12 @@ import { z } from "zod";
 import { createChannelReplyTool } from "../src/channel-reply-tool.js";
 import { createChannelRuntime } from "../src/channel-runtime.js";
 import { createPhase3MainAgentRuntime } from "../src/main-agent-runtime.js";
+import { RecordingRuntimeLogger } from "./support/recording-runtime-logger.js";
 
 function inboundMessage(
   messageId: string,
-  overrides: Partial<InboundChannelMessageV1> = {},
-): InboundChannelMessageV1 {
+  overrides: Partial<InboundChannelMessage> = {},
+): InboundChannelMessage {
   return {
     messageId,
     route: {
@@ -54,10 +57,10 @@ function toolCall(callId: string, argumentsJson: string) {
   };
 }
 
-function fakeAdapter(messageId = "message-2"): ChannelAdapterV1 & {
-  send: ReturnType<typeof vi.fn<ChannelAdapterV1["send"]>>;
+function fakeAdapter(messageId = "message-2"): ChannelAdapter & {
+  send: ReturnType<typeof vi.fn<ChannelAdapter["send"]>>;
 } {
-  const send = vi.fn<ChannelAdapterV1["send"]>(async () => ({
+  const send = vi.fn<ChannelAdapter["send"]>(async () => ({
     channelId: "qq-main",
     messageId,
   }));
@@ -92,6 +95,49 @@ function fakeAdapter(messageId = "message-2"): ChannelAdapterV1 & {
 }
 
 describe("current-session reply Tool", () => {
+  test("accepts a SQLite Conversation Store through the public Store contract", async () => {
+    const sessions = new SqliteConversationSessionStore(":memory:");
+    try {
+      sessions.appendChannelMessage(
+        "session-channel",
+        inboundMessage("message-1"),
+      );
+      const adapter = fakeAdapter();
+      const tool = createChannelReplyTool({
+        sessions,
+        resolveAdapter: () => adapter,
+      });
+      const argumentsJson = JSON.stringify({
+        parts: [{ type: "text", text: "persisted reply" }],
+      });
+
+      const output = await tool.invoke(
+        runContext("session-channel"),
+        argumentsJson,
+        { toolCall: toolCall("call-sqlite-reply", argumentsJson) },
+      );
+
+      expect(JSON.parse(String(output))).toEqual({
+        status: "success",
+        tool: "reply",
+        messageId: "message-2",
+      });
+      expect(sessions.getSession("session-channel")?.timeline).toContainEqual({
+        type: "agent_tool_result",
+        runId: "run-reply",
+        toolCallId: "call-sqlite-reply",
+        toolName: "reply",
+        output: {
+          status: "success",
+          tool: "reply",
+          messageId: "message-2",
+        },
+      });
+    } finally {
+      sessions.close();
+    }
+  });
+
   test("is exposed only for a session explicitly marked as an external channel", async () => {
     const sessions = new InMemoryConversationSessionStore();
     sessions.appendChannelMessage(
@@ -204,6 +250,138 @@ describe("current-session reply Tool", () => {
         },
       }),
     );
+  });
+
+  test("does not send when recording the SDK Tool Call fails", async () => {
+    const sessions = new InMemoryConversationSessionStore();
+    sessions.appendChannelMessage(
+      "session-channel",
+      inboundMessage("message-1"),
+    );
+    const adapter = fakeAdapter();
+    const logger = new RecordingRuntimeLogger();
+    const historyRecorder: SessionToolHistoryRecorder = {
+      recordToolCall: () => {
+        throw new Error("history write secret");
+      },
+      recordToolResult: () => undefined,
+    };
+    const tool = createChannelReplyTool({
+      sessions,
+      historyRecorder,
+      logger,
+      resolveAdapter: () => adapter,
+    });
+    const argumentsJson = JSON.stringify({
+      parts: [{ type: "text", text: "reply secret content" }],
+    });
+
+    await expect(
+      tool.invoke(runContext("session-channel"), argumentsJson, {
+        toolCall: toolCall("call-history-write-failure", argumentsJson),
+      }),
+    ).rejects.toThrow("Tool history Call recording failed");
+
+    expect(adapter.send).not.toHaveBeenCalled();
+    expect(logger.entries).toContainEqual({
+      level: "error",
+      message: "main_agent.tool.history.write_failed",
+      fields: {
+        runId: "run-reply",
+        sessionId: "session-channel",
+        toolCallId: "call-history-write-failure",
+        toolName: "reply",
+        historyStage: "call",
+        errorType: "Error",
+      },
+    });
+    expect(JSON.stringify(logger.entries)).not.toContain("secret");
+  });
+
+  test("keeps schema-invalid JSON arguments raw in Tool history", async () => {
+    const sessions = new InMemoryConversationSessionStore();
+    sessions.appendChannelMessage(
+      "session-channel",
+      inboundMessage("message-1"),
+    );
+    const adapter = fakeAdapter();
+    const tool = createChannelReplyTool({
+      sessions,
+      resolveAdapter: () => adapter,
+    });
+    const argumentsJson = JSON.stringify({ parts: [] });
+
+    const output = await tool.invoke(
+      runContext("session-channel"),
+      argumentsJson,
+      { toolCall: toolCall("call-schema-invalid", argumentsJson) },
+    );
+
+    expect(JSON.parse(String(output))).toMatchObject({
+      status: "error",
+      tool: "reply",
+    });
+    expect(adapter.send).not.toHaveBeenCalled();
+    expect(sessions.getSession("session-channel")?.timeline.at(-2)).toEqual({
+      type: "agent_tool_call",
+      runId: "run-reply",
+      toolCallId: "call-schema-invalid",
+      toolName: "reply",
+      rawArguments: argumentsJson,
+    });
+  });
+
+  test("keeps a successful reply result when recording its Tool Result fails", async () => {
+    const sessions = new InMemoryConversationSessionStore();
+    sessions.appendChannelMessage(
+      "session-channel",
+      inboundMessage("message-1"),
+    );
+    const adapter = fakeAdapter();
+    const logger = new RecordingRuntimeLogger();
+    const historyRecorder: SessionToolHistoryRecorder = {
+      recordToolCall: (sessionId, call) =>
+        sessions.appendAgentToolCall(sessionId, call),
+      recordToolResult: () => {
+        throw new Error("history result secret");
+      },
+    };
+    const tool = createChannelReplyTool({
+      sessions,
+      historyRecorder,
+      logger,
+      resolveAdapter: () => adapter,
+    });
+    const argumentsJson = JSON.stringify({
+      parts: [{ type: "text", text: "reply secret content" }],
+    });
+
+    const output = await tool.invoke(
+      runContext("session-channel"),
+      argumentsJson,
+      { toolCall: toolCall("call-history-result-failure", argumentsJson) },
+    );
+
+    expect(JSON.parse(String(output))).toEqual({
+      status: "success",
+      tool: "reply",
+      messageId: "message-2",
+      historyWarning: "Tool result history was not persisted.",
+    });
+    expect(adapter.send).toHaveBeenCalledOnce();
+    expect(logger.entries).toContainEqual({
+      level: "error",
+      message: "main_agent.tool.history.write_failed",
+      fields: {
+        runId: "run-reply",
+        sessionId: "session-channel",
+        toolCallId: "call-history-result-failure",
+        toolName: "reply",
+        historyStage: "result",
+        errorType: "Error",
+      },
+    });
+    expect(JSON.stringify(logger.entries)).not.toContain("secret");
   });
 
   test("returns the original definite adapter error and never retries inside the Tool", async () => {
@@ -517,20 +695,17 @@ describe("current-session reply Tool", () => {
     });
     const observedTools: string[][] = [];
     const runtime = createPhase3MainAgentRuntime({
-      invoker: {
+      agentCallInvoker: {
         invoke: async () => ({
           status: "accepted",
-          executionMode: "async",
-          agentCallId: "unused-agent-call",
-          taskId: "unused-a2a-task",
+          taskId: "unused-huanlink-task",
           state: "submitted",
         }),
       },
-      taskReader: {
-        getByAgentCallId: () => undefined,
-        getByTaskId: () => undefined,
+      taskStatusReader: {
+        getStatus: (_sessionId, taskId) => ({ status: "not-found", taskId }),
       },
-      taskContinuator: {
+      agentCallContinuator: {
         continueTask: async () => {
           throw new Error("Unexpected continuation");
         },

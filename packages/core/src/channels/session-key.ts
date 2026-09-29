@@ -1,10 +1,10 @@
 import type { SessionId } from "../shared/ids.js";
 
-import type { ChannelConversationRouteV1 } from "./channel-instance-v1.js";
-import { assertValidChannelConversationRoute } from "./channel-validation-v1.js";
+import type { ChannelConversationRoute } from "./channel-instance.js";
+import { assertValidChannelConversationRoute } from "./channel-validation.js";
 
 export function channelSessionIdFor(
-  route: ChannelConversationRouteV1,
+  route: ChannelConversationRoute,
 ): SessionId {
   assertValidChannelConversationRoute(route);
 

@@ -3,17 +3,22 @@ import { randomUUID } from "node:crypto";
 import {
   AgentCallService,
   AgentTurnScheduler,
+  AsyncToolTaskService,
   NoopRuntimeLogger,
+  isAsyncToolTaskTerminalState,
+  type AsyncToolTask,
+  type AsyncToolTaskStatus,
   type AgentCallBackgroundErrorListener,
-  type AgentCallRecord,
   type AgentCallTransport,
   type AgentRuntimeInput,
   type AgentRuntimeResult,
   type AgentRuntimeTrigger,
+  type ConversationSessionStore,
   type RunId,
   type RuntimeLogFields,
   type RuntimeLogger,
   type SessionId,
+  type SessionToolHistoryRecorder,
 } from "@huanlink/core";
 import { A2aAgentCallTransport } from "@huanlink/integration-a2a-client";
 import type {
@@ -23,10 +28,9 @@ import type {
 import type { Tool } from "@openai/agents";
 
 import {
-  buildAgentCallPausedPayload,
-  buildAgentCallPausedReentryInput,
-  buildAgentCallReentryInput,
-  type AgentCallPausedPayload,
+  buildAsyncToolTaskInputRequiredReentryInput,
+  buildAsyncToolTaskReentryInput,
+  buildTaskReentrySessionContext,
 } from "./agent-call-reentry.js";
 import {
   createPhase3MainAgentRuntime,
@@ -43,13 +47,12 @@ export type Phase3ReentryResult = {
   latestContext: string;
   input: string;
   output: string;
-  agentCall: AgentCallRecord;
-  paused?: AgentCallPausedPayload;
+  task: AsyncToolTaskStatus;
 };
 
 export type Phase3BeforeReentryInput = Pick<
   Phase3ReentryResult,
-  "sessionId" | "trigger" | "reason" | "agentCall"
+  "sessionId" | "trigger" | "reason" | "task"
 > & { signal: AbortSignal };
 
 export type Phase3ReentryCleanup = () => Promise<void> | void;
@@ -57,17 +60,22 @@ export type Phase3ReentryCleanup = () => Promise<void> | void;
 export type CreatePhase3HuanLinkRuntimeOptions = {
   codexA2aOrigin: string;
   codexSkillId?: string;
+  /** Stable configured identity persisted only in AgentCall private references. */
+  agentId?: string;
   runner?: OpenAiAgentsRunner;
   modelBinding?: MainAgentModelBinding;
   transport?: AgentCallTransport;
   createRunId?: () => RunId;
   getLatestContext?: (sessionId: SessionId) => Promise<string> | string;
+  taskService: AsyncToolTaskService;
+  sessionStore: ConversationSessionStore;
   beforeReentry?: (
     input: Phase3BeforeReentryInput,
   ) => Promise<Phase3ReentryCleanup | void> | Phase3ReentryCleanup | void;
   onReentry?: (result: Phase3ReentryResult) => Promise<void> | void;
   onBackgroundError?: AgentCallBackgroundErrorListener;
   logger?: RuntimeLogger;
+  historyRecorder?: SessionToolHistoryRecorder;
   channelReply?: CreateChannelReplyToolOptions;
   /** Server 组合根提供的平台受控 Tool。 */
   additionalTools?: readonly Tool<OpenAiAgentsRunContext>[];
@@ -75,8 +83,11 @@ export type CreatePhase3HuanLinkRuntimeOptions = {
 
 export type Phase3MainAgentInput = Pick<
   AgentRuntimeInput,
-  "runId" | "sessionId" | "input" | "signal"
->;
+  "runId" | "sessionId" | "signal"
+> & {
+  /** Compatibility seam for isolated callers that have not injected a Context reader. */
+  readonly input?: string;
+};
 
 export interface Phase3HuanLinkRuntime {
   readonly agentCalls: AgentCallService;
@@ -98,15 +109,18 @@ export function createPhase3HuanLinkRuntime(
     });
   const agentCalls = new AgentCallService({
     transport,
+    taskService: options.taskService,
+    ...(options.agentId === undefined ? {} : { agentId: options.agentId }),
     logger: logger.child({ source: "agent_call.service" }),
   });
   const mainAgent = createPhase3MainAgentRuntime({
-    invoker: agentCalls,
-    taskReader: agentCalls,
-    taskContinuator: agentCalls,
+    agentCallInvoker: agentCalls,
+    taskStatusReader: options.taskService,
+    agentCallContinuator: agentCalls,
     codexSkillId: options.codexSkillId,
     runner: options.runner,
     modelBinding: options.modelBinding,
+    historyRecorder: options.historyRecorder,
     ...(options.channelReply === undefined
       ? {}
       : { channelReply: options.channelReply }),
@@ -123,24 +137,23 @@ export function createPhase3HuanLinkRuntime(
   const onReentry = options.onReentry ?? (() => undefined);
   const onBackgroundError =
     options.onBackgroundError ??
-    ((error: Error, record: AgentCallRecord | undefined) => {
-      console.error(
-        `Phase 3 AgentCall background failure${
-          record === undefined
-            ? ""
-            : ` for ${record.agentCallId}/${record.taskId}`
-        }`,
-        error,
-      );
+    ((error: Error) => {
+      logger.error("main_agent.background.failed", {
+        errorType: runtimeErrorType(error),
+      });
     });
 
   const unsubscribeBackgroundError =
     agentCalls.onBackgroundError(onBackgroundError);
   let closed = false;
   let closeOperation: Promise<void> | undefined;
+  const activeFreshTurns = new Map<
+    AbortController,
+    Promise<AgentRuntimeResult>
+  >();
 
-  const runMainAgentTurn = async (
-    input: Phase3MainAgentInput & { trigger: AgentRuntimeTrigger },
+  const executeMainAgentTurn = async (
+    input: AgentRuntimeInput & { readonly trigger: AgentRuntimeTrigger },
   ): Promise<AgentRuntimeResult> => {
     const fields = {
       sessionId: input.sessionId,
@@ -153,7 +166,11 @@ export function createPhase3HuanLinkRuntime(
       inputChars: input.input.length,
     });
     try {
-      const result = await turns.run(input);
+      const result = await mainAgent.run({
+        ...input,
+        input: input.input ?? "",
+      });
+      input.signal?.throwIfAborted();
       logger.info("main_agent.run.completed", fields);
       logger.debug("main_agent.run.output", {
         ...fields,
@@ -173,79 +190,125 @@ export function createPhase3HuanLinkRuntime(
     }
   };
 
-  const runReentry = async (
-    agentCall: AgentCallRecord,
+  const runTaskReentry = async (
+    task: AsyncToolTask,
     trigger: Phase3ReentryResult["trigger"],
     signal: AbortSignal,
   ): Promise<void> => {
     const reason =
       trigger === "agent_call_input_required" ? "input-required" : "terminal";
-    const baseFields = agentCallLogFields(agentCall, trigger);
+    const baseFields = taskLogFields(task, trigger);
     logger.info("main_agent.reentry.started", baseFields);
-    let cleanup: Phase3ReentryCleanup | void = undefined;
     let runId: RunId | undefined;
+    let skipped = false;
     try {
-      cleanup = await waitWithSignal(
-        Promise.resolve().then(() =>
-          beforeReentry({
-            sessionId: agentCall.sessionId,
-            trigger,
-            reason,
-            agentCall,
-            signal,
-          }),
-        ),
+      await turns.runOperation({
+        sessionId: task.sessionId,
         signal,
-      );
-      signal.throwIfAborted();
-      const latestContext = await waitWithSignal(
-        Promise.resolve().then(() => getLatestContext(agentCall.sessionId)),
-        signal,
-      );
-      const currentRunId = createRunId();
-      runId = currentRunId;
-      const paused =
-        trigger === "agent_call_input_required"
-          ? buildAgentCallPausedPayload(agentCall, latestContext)
-          : undefined;
-      const input =
-        paused === undefined
-          ? buildAgentCallReentryInput(agentCall, latestContext)
-          : buildAgentCallPausedReentryInput(paused);
-      const reentryFields = { ...baseFields, runId: currentRunId };
-      logger.info("main_agent.reentry.context_ready", reentryFields);
-      logger.debug("main_agent.reentry.payload", {
-        ...reentryFields,
-        latestContextChars: latestContext.length,
-        inputChars: input.length,
+        operation: async () => {
+          const status = options.taskService.getStatus(
+            task.sessionId,
+            task.taskId,
+          );
+          if (status.status !== "found") {
+            throw new Error(
+              `Async Tool Task ${task.taskId} was not found in this Session`,
+            );
+          }
+          const triggerMatchesCurrentState =
+            trigger === "agent_call_input_required"
+              ? status.state === "input-required"
+              : isAsyncToolTaskTerminalState(status.state);
+          if (!triggerMatchesCurrentState) {
+            skipped = true;
+            logger.info("main_agent.reentry.skipped", {
+              ...baseFields,
+              currentState: status.state,
+              skipReason: "stale_trigger",
+            });
+            return;
+          }
+          const cleanup = await Promise.resolve().then(() =>
+            beforeReentry({
+              sessionId: task.sessionId,
+              trigger,
+              reason,
+              task: status,
+              signal,
+            }),
+          );
+          try {
+            signal.throwIfAborted();
+            const sourceToolCall = options.sessionStore.getAgentToolCall(
+              task.sessionId,
+              task.sourceRunId,
+              task.sourceToolCallId,
+            );
+            if (sourceToolCall === undefined) {
+              throw new Error(
+                `Async Tool Task ${task.taskId} source Tool Call was not found`,
+              );
+            }
+            const window = options.sessionStore.getSessionContextWindow(
+              task.sessionId,
+            );
+            if (window === undefined) {
+              throw new Error(
+                `Conversation Session ${task.sessionId} does not exist`,
+              );
+            }
+            const latestContext = buildTaskReentrySessionContext(
+              window,
+              sourceToolCall,
+            );
+            const currentRunId = createRunId();
+            runId = currentRunId;
+            const input =
+              trigger === "agent_call_input_required"
+                ? buildAsyncToolTaskInputRequiredReentryInput(
+                    status,
+                    latestContext,
+                  )
+                : buildAsyncToolTaskReentryInput(status, latestContext);
+            const reentryFields = { ...baseFields, runId: currentRunId };
+            logger.info("main_agent.reentry.context_ready", reentryFields);
+            logger.debug("main_agent.reentry.payload", {
+              ...reentryFields,
+              latestContextChars: latestContext.length,
+              inputChars: input.length,
+            });
+            const result = await executeMainAgentTurn({
+              runId: currentRunId,
+              sessionId: task.sessionId,
+              trigger,
+              input,
+              signal,
+            });
+            await Promise.resolve().then(() =>
+              onReentry({
+                runId: currentRunId,
+                sessionId: task.sessionId,
+                trigger,
+                reason,
+                latestContext,
+                input,
+                output: result.output,
+                task: status,
+              }),
+            );
+          } finally {
+            if (cleanup !== undefined) {
+              await cleanup();
+            }
+          }
+        },
       });
-      const result = await waitWithSignal(
-        runMainAgentTurn({
-          runId: currentRunId,
-          sessionId: agentCall.sessionId,
-          trigger,
-          input,
-          signal,
-        }),
-        signal,
-      );
-      await waitWithSignal(
-        Promise.resolve().then(() =>
-          onReentry({
-            runId: currentRunId,
-            sessionId: agentCall.sessionId,
-            trigger,
-            reason,
-            latestContext,
-            input,
-            output: result.output,
-            agentCall,
-            ...(paused === undefined ? {} : { paused }),
-          }),
-        ),
-        signal,
-      );
-      logger.info("main_agent.reentry.completed", reentryFields);
+      if (!skipped) {
+        logger.info("main_agent.reentry.completed", {
+          ...baseFields,
+          ...(runId === undefined ? {} : { runId }),
+        });
+      }
     } catch (error) {
       const failureFields = {
         ...baseFields,
@@ -260,52 +323,92 @@ export function createPhase3HuanLinkRuntime(
         });
       }
       throw error;
-    } finally {
-      if (cleanup !== undefined) {
-        await cleanup();
-      }
     }
   };
 
-  const superviseReentry = (
-    agentCall: AgentCallRecord,
+  const superviseTaskReentry = (
+    task: AsyncToolTask,
     trigger: Phase3ReentryResult["trigger"],
-  ): Promise<void> => {
+  ): void => {
     if (closed) {
-      return Promise.resolve();
+      return;
     }
     const controller = new AbortController();
-    const operation = runReentry(agentCall, trigger, controller.signal)
+    const operation = runTaskReentry(task, trigger, controller.signal)
       .catch((error) => {
         if (closed && controller.signal.aborted) {
           return;
         }
-        throw error;
+        onBackgroundError(normalizeRuntimeError(error), undefined);
       })
       .finally(() => activeReentries.delete(controller));
     activeReentries.set(controller, operation);
+  };
+
+  const runFreshMainAgent = (
+    input: Phase3MainAgentInput,
+  ): Promise<AgentRuntimeResult> => {
+    if (closed) {
+      return Promise.reject(new Error("Phase 3 runtime is closed"));
+    }
+    const controller = new AbortController();
+    const unlinkCallerSignal = linkAbortSignal(input.signal, controller);
+    const operation = turns
+      .runOperation({
+        sessionId: input.sessionId,
+        signal: controller.signal,
+        operation: async () => {
+          const projectedInput =
+            options.getLatestContext === undefined
+              ? input.input
+              : await Promise.resolve().then(() =>
+                  getLatestContext(input.sessionId),
+                );
+          controller.signal.throwIfAborted();
+          if (projectedInput === undefined) {
+            throw new Error(
+              "Phase 3 requires a Session context reader for fresh turns",
+            );
+          }
+          return await executeMainAgentTurn({
+            ...input,
+            trigger: "user",
+            input: projectedInput,
+            signal: controller.signal,
+          });
+        },
+      })
+      .finally(() => {
+        unlinkCallerSignal();
+        activeFreshTurns.delete(controller);
+      });
+    activeFreshTurns.set(controller, operation);
     return operation;
   };
 
-  const unsubscribePaused = agentCalls.onPaused((agentCall) =>
-    superviseReentry(agentCall, "agent_call_input_required"),
+  const unsubscribeTaskInputRequired = options.taskService.onInputRequired(
+    (task) => superviseTaskReentry(task, "agent_call_input_required"),
   );
-  const unsubscribeTerminal = agentCalls.onTerminal((agentCall) =>
-    superviseReentry(agentCall, "agent_call_terminal"),
+  const unsubscribeTaskTerminal = options.taskService.onTerminal((task) =>
+    superviseTaskReentry(task, "agent_call_terminal"),
   );
 
   const performClose = async (): Promise<void> => {
     closed = true;
-    unsubscribePaused();
-    unsubscribeTerminal();
+    unsubscribeTaskInputRequired();
+    unsubscribeTaskTerminal();
     const closeReason = new Error("Phase 3 runtime closed");
+    for (const controller of activeFreshTurns.keys()) {
+      controller.abort(closeReason);
+    }
     for (const controller of activeReentries.keys()) {
       controller.abort(closeReason);
     }
+    const freshTurnDrain = Promise.allSettled([...activeFreshTurns.values()]);
     const reentryDrain = Promise.allSettled([...activeReentries.values()]);
     try {
       await agentCalls.close();
-      await reentryDrain;
+      await Promise.all([freshTurnDrain, reentryDrain]);
     } finally {
       unsubscribeBackgroundError();
     }
@@ -313,11 +416,7 @@ export function createPhase3HuanLinkRuntime(
 
   return {
     agentCalls,
-    runMainAgent: (input) =>
-      runMainAgentTurn({
-        ...input,
-        trigger: "user",
-      }),
+    runMainAgent: runFreshMainAgent,
     close() {
       closeOperation ??= performClose();
       return closeOperation;
@@ -325,53 +424,38 @@ export function createPhase3HuanLinkRuntime(
   };
 }
 
-function agentCallLogFields(
-  agentCall: AgentCallRecord,
+function linkAbortSignal(
+  source: AbortSignal | undefined,
+  target: AbortController,
+): () => void {
+  if (source === undefined) {
+    return () => undefined;
+  }
+  const abort = () => target.abort(source.reason);
+  if (source.aborted) {
+    abort();
+    return () => undefined;
+  }
+  source.addEventListener("abort", abort, { once: true });
+  return () => source.removeEventListener("abort", abort);
+}
+
+function taskLogFields(
+  task: AsyncToolTask,
   trigger: Phase3ReentryResult["trigger"],
 ): RuntimeLogFields {
   return {
-    sessionId: agentCall.sessionId,
-    agentCallId: agentCall.agentCallId,
-    a2aTaskId: agentCall.taskId,
-    ...(agentCall.contextId === undefined
-      ? {}
-      : { contextId: agentCall.contextId }),
+    sessionId: task.sessionId,
+    taskId: task.taskId,
+    taskKind: task.kind,
     trigger,
   };
 }
 
-function waitWithSignal<T>(
-  operation: Promise<T>,
-  signal: AbortSignal,
-): Promise<T> {
-  if (signal.aborted) {
-    void operation.catch(() => undefined);
-    return Promise.reject(abortReason(signal));
-  }
-  return new Promise<T>((resolve, reject) => {
-    const cleanup = () => signal.removeEventListener("abort", onAbort);
-    const onAbort = () => {
-      cleanup();
-      reject(abortReason(signal));
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-    void operation.then(
-      (value) => {
-        cleanup();
-        resolve(value);
-      },
-      (error) => {
-        cleanup();
-        reject(error);
-      },
-    );
-  });
-}
-
-function abortReason(signal: AbortSignal): unknown {
-  return signal.reason ?? new Error("Phase 3 re-entry aborted");
-}
-
 function runtimeErrorType(error: unknown): string {
   return error instanceof Error ? error.name : typeof error;
+}
+
+function normalizeRuntimeError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
 }

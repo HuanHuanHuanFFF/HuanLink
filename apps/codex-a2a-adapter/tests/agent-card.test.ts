@@ -44,6 +44,11 @@ describe("Codex A2A adapter Agent Card", () => {
       "Runs HuanLink code tasks through the official codex app-server, treating the configured workspace folder as the working focus rather than a hard modification boundary.",
     );
     expect(card.skills.map((skill) => skill.id)).toEqual(["codex-code-task"]);
+    expect(card.skills[0]?.inputModes).toEqual([
+      "text/plain",
+      "application/json",
+    ]);
+    expect(card.skills[0]?.description).toContain("projectId");
   });
 
   it("serves the standard well-known Agent Card path", async () => {

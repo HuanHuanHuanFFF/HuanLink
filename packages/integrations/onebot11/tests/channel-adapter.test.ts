@@ -6,8 +6,8 @@ import type {
   OneBot11Transport,
 } from "../src/index.js";
 import {
-  createForwardWebSocketOneBot11ChannelAdapterV1,
-  OneBot11ChannelAdapterV1,
+  createForwardWebSocketOneBot11ChannelAdapter,
+  OneBot11ChannelAdapter,
   OneBot11DeliveryUncertainError,
   OneBot11RemoteActionError,
   OneBot11TransportUnavailableError,
@@ -48,7 +48,7 @@ class FakeOneBot11Transport implements OneBot11Transport {
 
 function createAdapter(transport = new FakeOneBot11Transport()) {
   return {
-    adapter: new OneBot11ChannelAdapterV1({
+    adapter: new OneBot11ChannelAdapter({
       channelId: "qq-main",
       accountId: "10001",
       transport,
@@ -57,7 +57,7 @@ function createAdapter(transport = new FakeOneBot11Transport()) {
   };
 }
 
-describe("OneBot11ChannelAdapterV1", () => {
+describe("OneBot11ChannelAdapter", () => {
   test("declares only the group, direct, reply, retract, and implemented part capabilities", () => {
     const { adapter } = createAdapter();
 
@@ -429,8 +429,8 @@ describe("OneBot11ChannelAdapterV1", () => {
     expect(transport.actions).toEqual([]);
   });
 
-  test("builds the V1 adapter factory without starting a connection", async () => {
-    const adapter = createForwardWebSocketOneBot11ChannelAdapterV1({
+  test("builds the Channel adapter factory without starting a connection", async () => {
+    const adapter = createForwardWebSocketOneBot11ChannelAdapter({
       channelId: "qq-main",
       accountId: "10001",
       url: "ws://127.0.0.1:65535/",

@@ -6,10 +6,10 @@ import {
   ChannelOperationError,
   assertValidRetractChannelMessageCommand,
   assertValidSendChannelMessageCommand,
-  type ChannelAttachmentKindV1,
-  type ChannelOutboundMessagePartV1,
-  type RetractChannelMessageCommandV1,
-  type SendChannelMessageCommandV1,
+  type ChannelAttachmentKind,
+  type ChannelOutboundMessagePart,
+  type RetractChannelMessageCommand,
+  type SendChannelMessageCommand,
 } from "@huanlink/core";
 
 import type {
@@ -19,11 +19,11 @@ import type {
 } from "./codec.js";
 
 /**
- * 将 HuanLink V1 发送命令转换为 OneBot 11 群聊或私聊 Action。
+ * 将 HuanLink Channel 发送命令转换为 OneBot 11 群聊或私聊 Action。
  * 保留回复和 Parts 顺序；本机媒体路径会先检查可读性并转换为 file URL。
  */
-export async function createOneBot11SendMessageActionV1(
-  command: SendChannelMessageCommandV1,
+export async function createOneBot11SendMessageAction(
+  command: SendChannelMessageCommand,
   channelId: string,
   echo: string,
 ): Promise<OneBot11Action> {
@@ -77,10 +77,10 @@ export async function createOneBot11SendMessageActionV1(
 }
 
 /**
- * 将 HuanLink V1 主动撤回命令转换为 OneBot 11 `delete_msg` Action。
+ * 将 HuanLink Channel 主动撤回命令转换为 OneBot 11 `delete_msg` Action。
  */
-export function createOneBot11DeleteMessageActionV1(
-  command: RetractChannelMessageCommandV1,
+export function createOneBot11DeleteMessageAction(
+  command: RetractChannelMessageCommand,
   channelId: string,
   echo: string,
 ): OneBot11Action {
@@ -121,7 +121,7 @@ export function readOneBot11MessageId(
 
 /** 将一个通用出站 Part 映射为对应的 OneBot 11 消息段。 */
 async function mapOutboundPart(
-  part: ChannelOutboundMessagePartV1,
+  part: ChannelOutboundMessagePart,
 ): Promise<OneBot11MessageSegment> {
   switch (part.type) {
     case "text":
@@ -149,7 +149,7 @@ async function mapOutboundPart(
  * OneBot 11 公共消息段不提供通用文件上传，`file` 交由后续专属操作处理。
  */
 function mediaSegment(
-  kind: ChannelAttachmentKindV1,
+  kind: ChannelAttachmentKind,
   file: string,
 ): OneBot11MessageSegment {
   if (kind === "file") {
@@ -190,7 +190,7 @@ function assertMatchingChannel(actual: string, expected: string): void {
   }
 }
 
-/** 限制 OneBot V1 通用发送只使用无 Thread 的群聊或私聊路由。 */
+/** 限制 OneBot Channel 通用发送只使用无 Thread 的群聊或私聊路由。 */
 function assertSupportedRoute(
   conversationKind: string,
   threadId: string | undefined,
@@ -265,7 +265,7 @@ function parseMentionTargetParameter(input: string): string | number {
 }
 
 /** 复用 Core 合同校验，并将失败统一映射为 Channel 操作错误。 */
-function validateSendCommand(command: SendChannelMessageCommandV1): void {
+function validateSendCommand(command: SendChannelMessageCommand): void {
   try {
     assertValidSendChannelMessageCommand(command);
   } catch (error) {
@@ -278,7 +278,7 @@ function validateSendCommand(command: SendChannelMessageCommandV1): void {
 }
 
 /** 复用 Core 撤回合同校验，并将失败统一映射为 Channel 操作错误。 */
-function validateRetractCommand(command: RetractChannelMessageCommandV1): void {
+function validateRetractCommand(command: RetractChannelMessageCommand): void {
   try {
     assertValidRetractChannelMessageCommand(command);
   } catch (error) {

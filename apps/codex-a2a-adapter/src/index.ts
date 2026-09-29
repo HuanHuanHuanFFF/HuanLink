@@ -18,6 +18,7 @@ export {
 } from "./codex-task-executor.js";
 export {
   startCodexAdapterRuntime,
+  startConfiguredCodexAdapterRuntime,
   type RunningCodexAdapterRuntime,
   type StartCodexAdapterRuntimeOptions,
 } from "./runtime.js";

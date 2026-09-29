@@ -30,6 +30,56 @@ import { ThrowingRuntimeLogger } from "./support/throwing-runtime-logger.js";
 
 const delegatedTask = "add one focused validation and test it";
 
+test("passes explicit project and execution overrides as structured input", async () => {
+  const invoke = vi.fn<AgentCallInvoker["invoke"]>(async () => ({
+    status: "accepted",
+    taskId: "task-1",
+    state: "submitted",
+  }));
+  const tool = createCodexAgentCallTool({ invoker: { invoke } });
+  const args = JSON.stringify({
+    task: delegatedTask,
+    projectId: "demo",
+    modelId: "model-b",
+    reasoningEffort: "low",
+  });
+  await tool.invoke(
+    new RunContext<OpenAiAgentsRunContext>({
+      runId: "run-1",
+      sessionId: "session-1",
+      trigger: "user",
+    }),
+    args,
+    toolCallDetails("call-1", args),
+  );
+  expect(invoke).toHaveBeenCalledWith(
+    expect.objectContaining({
+      inputData: {
+        type: "huanlink.codex-task.v1",
+        projectId: "demo",
+        modelId: "model-b",
+        reasoningEffort: "low",
+      },
+    }),
+  );
+});
+
+function toolCallDetails(
+  callId: string,
+  argumentsJson: string,
+  signal?: AbortSignal,
+) {
+  return {
+    toolCall: {
+      type: "function_call" as const,
+      callId,
+      name: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
+      arguments: argumentsJson,
+    },
+    ...(signal === undefined ? {} : { signal }),
+  };
+}
+
 function assistantMessage(text: string): ModelResponse["output"][number] {
   return {
     id: "msg-agent-call-tool",
@@ -62,6 +112,7 @@ class ToolCallingThenReplyModel implements Model {
             callId: "tool-call-01",
             name: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
             arguments: JSON.stringify({
+              projectId: "huanlink",
               task: delegatedTask,
               ...(this.executionMode === undefined
                 ? {}
@@ -108,9 +159,7 @@ const scenarios: Scenario[] = [
     expectedMode: "async",
     invocationResult: {
       status: "accepted",
-      executionMode: "async",
-      agentCallId: "agent-call-tool-async",
-      taskId: "a2a-task-tool-async",
+      taskId: "huanlink-task-tool-async",
       state: "submitted",
     },
   },
@@ -121,15 +170,310 @@ const scenarios: Scenario[] = [
     invocationResult: {
       status: "result",
       executionMode: "blocking",
-      agentCallId: "agent-call-tool-blocking",
-      taskId: "a2a-task-tool-blocking",
       state: "completed",
       artifacts: [{ id: "artifact-blocking", text: "blocking-mode result" }],
-    },
+      agentCallId: "must-not-leak",
+      taskId: "must-not-leak",
+      a2aTaskId: "must-not-leak",
+    } as unknown as AgentCallInvocationResult,
+  },
+  {
+    name: "returns a stable interruption when blocking needs more input",
+    requestedMode: "blocking",
+    expectedMode: "blocking",
+    invocationResult: {
+      status: "blocking-interrupted",
+      executionMode: "blocking",
+      state: "input-required",
+      questions: [
+        {
+          id: "scope",
+          header: "Scope",
+          question: "Which scope should Codex use?",
+          isOther: false,
+          isSecret: false,
+          options: null,
+        },
+      ],
+      agentCallId: "must-not-leak",
+      taskId: "must-not-leak",
+      a2aTaskId: "must-not-leak",
+    } as unknown as AgentCallInvocationResult,
   },
 ];
 
 describe("createCodexAgentCallTool", () => {
+  test("does not submit an async task without the SDK Tool Call ID", async () => {
+    const invoke = vi.fn<AgentCallInvoker["invoke"]>(async () => ({
+      status: "accepted",
+      taskId: "must-not-be-created",
+      state: "submitted",
+    }));
+    const tool = createCodexAgentCallTool({ invoker: { invoke } });
+    const context = new RunContext<OpenAiAgentsRunContext>({
+      runId: "run-tool-missing-call-id",
+      sessionId: "session-tool-missing-call-id",
+      trigger: "user",
+    });
+
+    const output = await tool.invoke(
+      context,
+      JSON.stringify({
+        projectId: "huanlink",
+        task: delegatedTask,
+        executionMode: "async",
+      }),
+    );
+
+    expect(invoke).not.toHaveBeenCalled();
+    expect(String(output)).toContain("SDK Tool Call ID");
+  });
+
+  test("returns only the HuanLink task receipt for an async submission", async () => {
+    const invoke = vi.fn(async () => ({
+      status: "accepted" as const,
+      taskId: "huanlink-task-async",
+      state: "submitted" as const,
+      agentCallId: "must-not-leak",
+      a2aTaskId: "must-not-leak",
+      executionMode: "async",
+    }));
+    const logger = new RecordingRuntimeLogger();
+    const tool = createCodexAgentCallTool({
+      invoker: { invoke } as AgentCallInvoker,
+      logger,
+    });
+    const context = new RunContext<OpenAiAgentsRunContext>({
+      runId: "run-tool-public-receipt",
+      sessionId: "session-tool-public-receipt",
+      trigger: "user",
+    });
+
+    const output = await tool.invoke(
+      context,
+      JSON.stringify({
+        projectId: "huanlink",
+        task: delegatedTask,
+        executionMode: "async",
+      }),
+      toolCallDetails(
+        "tool-call-public-receipt",
+        JSON.stringify({
+          projectId: "huanlink",
+          task: delegatedTask,
+          executionMode: "async",
+        }),
+      ),
+    );
+
+    expect(JSON.parse(String(output))).toEqual({
+      status: "accepted",
+      taskId: "huanlink-task-async",
+      state: "submitted",
+    });
+    expect(invoke).toHaveBeenCalledWith({
+      runId: "run-tool-public-receipt",
+      sessionId: "session-tool-public-receipt",
+      contextId: "session-tool-public-receipt",
+      skillId: "codex-code-task",
+      toolName: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
+      input: delegatedTask,
+      inputData: { type: "huanlink.codex-task.v1", projectId: "huanlink" },
+      executionMode: "async",
+      sourceToolCallId: "tool-call-public-receipt",
+    });
+    expect(logger.entries.at(-1)?.fields).toEqual({
+      runId: "run-tool-public-receipt",
+      sessionId: "session-tool-public-receipt",
+      toolName: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
+      status: "accepted",
+      taskId: "huanlink-task-async",
+      state: "submitted",
+    });
+  });
+
+  test("preserves the accepted Task persistence warning in the public async receipt", async () => {
+    const invoke = vi.fn<AgentCallInvoker["invoke"]>(
+      async () =>
+        ({
+          status: "accepted",
+          taskId: "huanlink-task-persistence-warning",
+          state: "unknown",
+          retrySafe: false,
+          persistenceWarning: "task-state-not-persisted",
+          agentCallId: "must-not-leak",
+          a2aTaskId: "must-not-leak",
+        }) as unknown as AgentCallInvocationResult,
+    );
+    const logger = new RecordingRuntimeLogger();
+    const tool = createCodexAgentCallTool({ invoker: { invoke }, logger });
+    const context = new RunContext<OpenAiAgentsRunContext>({
+      runId: "run-tool-persistence-warning",
+      sessionId: "session-tool-persistence-warning",
+      trigger: "user",
+    });
+    const argumentsJson = JSON.stringify({
+      projectId: "huanlink",
+      task: delegatedTask,
+      executionMode: "async",
+    });
+
+    const output = await tool.invoke(
+      context,
+      argumentsJson,
+      toolCallDetails("tool-call-persistence-warning", argumentsJson),
+    );
+
+    expect(JSON.parse(String(output))).toEqual({
+      status: "accepted",
+      taskId: "huanlink-task-persistence-warning",
+      state: "unknown",
+      retrySafe: false,
+      persistenceWarning: "task-state-not-persisted",
+    });
+    expect(logger.entries.at(-1)?.fields).toEqual({
+      runId: "run-tool-persistence-warning",
+      sessionId: "session-tool-persistence-warning",
+      toolName: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
+      status: "accepted",
+      taskId: "huanlink-task-persistence-warning",
+      state: "unknown",
+      retrySafe: false,
+      persistenceWarning: "task-state-not-persisted",
+    });
+  });
+
+  test("returns a queryable HuanLink task when blocking dispatch becomes uncertain", async () => {
+    const invoke = vi.fn<AgentCallInvoker["invoke"]>(async () => ({
+      status: "blocking-uncertain",
+      executionMode: "blocking",
+      taskId: "huanlink-task-blocking-uncertain",
+      state: "unknown",
+      retrySafe: false,
+    }));
+    const logger = new RecordingRuntimeLogger();
+    const tool = createCodexAgentCallTool({ invoker: { invoke }, logger });
+    const context = new RunContext<OpenAiAgentsRunContext>({
+      runId: "run-tool-blocking-uncertain",
+      sessionId: "session-tool-blocking-uncertain",
+      trigger: "user",
+    });
+    const argumentsJson = JSON.stringify({
+      projectId: "huanlink",
+      task: delegatedTask,
+      executionMode: "blocking",
+    });
+
+    const output = await tool.invoke(
+      context,
+      argumentsJson,
+      toolCallDetails("tool-call-blocking-uncertain", argumentsJson),
+    );
+
+    expect(JSON.parse(String(output))).toEqual({
+      status: "blocking-uncertain",
+      executionMode: "blocking",
+      taskId: "huanlink-task-blocking-uncertain",
+      state: "unknown",
+      retrySafe: false,
+    });
+    expect(invoke).toHaveBeenCalledWith({
+      runId: "run-tool-blocking-uncertain",
+      sessionId: "session-tool-blocking-uncertain",
+      contextId: "session-tool-blocking-uncertain",
+      skillId: "codex-code-task",
+      toolName: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
+      input: delegatedTask,
+      inputData: { type: "huanlink.codex-task.v1", projectId: "huanlink" },
+      executionMode: "blocking",
+      sourceToolCallId: "tool-call-blocking-uncertain",
+    });
+    expect(logger.entries.at(-1)?.fields).toEqual({
+      runId: "run-tool-blocking-uncertain",
+      sessionId: "session-tool-blocking-uncertain",
+      toolName: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
+      status: "blocking-uncertain",
+      executionMode: "blocking",
+      state: "unknown",
+    });
+  });
+
+  test("returns a structured task limit error as a normal Tool Result", async () => {
+    const limitResult = {
+      status: "error" as const,
+      error: "task-limit-reached" as const,
+      maxActiveTasksPerSession: 2,
+    };
+    const invoke = vi.fn<AgentCallInvoker["invoke"]>(
+      async () => limitResult as unknown as AgentCallInvocationResult,
+    );
+    const logger = new RecordingRuntimeLogger();
+    const tool = createCodexAgentCallTool({ invoker: { invoke }, logger });
+    const context = new RunContext<OpenAiAgentsRunContext>({
+      runId: "run-tool-limit",
+      sessionId: "session-tool-limit",
+      trigger: "user",
+    });
+    const argumentsJson = JSON.stringify({
+      projectId: "huanlink",
+      task: delegatedTask,
+      executionMode: "async",
+    });
+
+    const output = await tool.invoke(
+      context,
+      argumentsJson,
+      toolCallDetails("tool-call-limit", argumentsJson),
+    );
+
+    expect(JSON.parse(String(output))).toEqual(limitResult);
+    expect(logger.entries.at(-1)?.fields).toEqual({
+      runId: "run-tool-limit",
+      sessionId: "session-tool-limit",
+      toolName: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
+      status: "error",
+      error: "task-limit-reached",
+      maxActiveTasksPerSession: 2,
+    });
+  });
+
+  test("returns a pre-accept rejection as a normal Tool Result", async () => {
+    const rejectedResult = {
+      status: "error" as const,
+      error: "task-preaccept-rejected" as const,
+    };
+    const invoke = vi.fn<AgentCallInvoker["invoke"]>(
+      async () => rejectedResult as unknown as AgentCallInvocationResult,
+    );
+    const logger = new RecordingRuntimeLogger();
+    const tool = createCodexAgentCallTool({ invoker: { invoke }, logger });
+    const context = new RunContext<OpenAiAgentsRunContext>({
+      runId: "run-tool-preaccept-rejected",
+      sessionId: "session-tool-preaccept-rejected",
+      trigger: "user",
+    });
+    const argumentsJson = JSON.stringify({
+      projectId: "huanlink",
+      task: delegatedTask,
+      executionMode: "async",
+    });
+
+    const output = await tool.invoke(
+      context,
+      argumentsJson,
+      toolCallDetails("tool-call-preaccept-rejected", argumentsJson),
+    );
+
+    expect(JSON.parse(String(output))).toEqual(rejectedResult);
+    expect(logger.entries.at(-1)?.fields).toEqual({
+      runId: "run-tool-preaccept-rejected",
+      sessionId: "session-tool-preaccept-rejected",
+      toolName: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
+      status: "error",
+      error: "task-preaccept-rejected",
+    });
+  });
+
   test.each(scenarios)("$name", async (scenario) => {
     const invoke = vi.fn<AgentCallInvoker["invoke"]>(
       async () => scenario.invocationResult,
@@ -167,18 +511,23 @@ describe("createCodexAgentCallTool", () => {
       sessionId: "session-tool-01",
       contextId: "session-tool-01",
       skillId: "codex-code-task",
+      toolName: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
       input: delegatedTask,
+      inputData: { type: "huanlink.codex-task.v1", projectId: "huanlink" },
       executionMode: scenario.expectedMode,
+      sourceToolCallId: "tool-call-01",
       signal: abortController.signal,
     });
     expect(model.requests).toHaveLength(2);
     const continuationInput = JSON.stringify(model.requests[1]?.input);
     expect(continuationInput).toContain(
-      `\\\"executionMode\\\":\\\"${scenario.expectedMode}\\\"`,
-    );
-    expect(continuationInput).toContain(
       `\\\"status\\\":\\\"${scenario.invocationResult.status}\\\"`,
     );
+    expect(continuationInput).not.toContain("agentCallId");
+    expect(continuationInput).not.toContain("a2aTaskId");
+    if (scenario.invocationResult.status !== "accepted") {
+      expect(continuationInput).not.toContain("taskId");
+    }
     expect(logger.entries).toEqual([
       {
         level: "info",
@@ -192,30 +541,44 @@ describe("createCodexAgentCallTool", () => {
         },
       },
       {
-        level: "debug",
-        message: "main_agent.tool.started",
-        fields: {
-          runId: "run-tool-01",
-          sessionId: "session-tool-01",
-          toolName: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
-          executionMode: scenario.expectedMode,
-          inputLength: delegatedTask.length,
-          task: delegatedTask,
-        },
-      },
-      {
         level: "info",
         message: "main_agent.tool.completed",
-        fields: {
-          runId: "run-tool-01",
-          sessionId: "session-tool-01",
-          toolName: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
-          status: scenario.invocationResult.status,
-          executionMode: scenario.invocationResult.executionMode,
-          agentCallId: scenario.invocationResult.agentCallId,
-          a2aTaskId: scenario.invocationResult.taskId,
-          state: scenario.invocationResult.state,
-        },
+        fields:
+          scenario.invocationResult.status === "accepted"
+            ? {
+                runId: "run-tool-01",
+                sessionId: "session-tool-01",
+                toolName: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
+                status: "accepted",
+                taskId: scenario.invocationResult.taskId,
+                state: scenario.invocationResult.state,
+              }
+            : scenario.invocationResult.status === "error"
+              ? scenario.invocationResult.error === "task-limit-reached"
+                ? {
+                    runId: "run-tool-01",
+                    sessionId: "session-tool-01",
+                    toolName: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
+                    status: "error",
+                    error: "task-limit-reached",
+                    maxActiveTasksPerSession:
+                      scenario.invocationResult.maxActiveTasksPerSession,
+                  }
+                : {
+                    runId: "run-tool-01",
+                    sessionId: "session-tool-01",
+                    toolName: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
+                    status: "error",
+                    error: "task-preaccept-rejected",
+                  }
+              : {
+                  runId: "run-tool-01",
+                  sessionId: "session-tool-01",
+                  toolName: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
+                  status: scenario.invocationResult.status,
+                  executionMode: "blocking",
+                  state: scenario.invocationResult.state,
+                },
       },
     ]);
   });
@@ -234,14 +597,6 @@ describe("createCodexAgentCallTool", () => {
         }),
     },
     {
-      name: "started debug logging",
-      createLogger: () =>
-        new ThrowingRuntimeLogger({
-          throwWhen: ({ level, message }) =>
-            level === "debug" && message === "main_agent.tool.started",
-        }),
-    },
-    {
       name: "completed info logging",
       createLogger: () =>
         new ThrowingRuntimeLogger({
@@ -254,9 +609,7 @@ describe("createCodexAgentCallTool", () => {
     async ({ createLogger }) => {
       const invocationResult: AgentCallInvocationResult = {
         status: "accepted",
-        executionMode: "async",
-        agentCallId: "agent-call-log-failure-safe",
-        taskId: "a2a-task-log-failure-safe",
+        taskId: "huanlink-task-log-failure-safe",
         state: "submitted",
       };
       const invoke = vi.fn<AgentCallInvoker["invoke"]>(
@@ -274,7 +627,19 @@ describe("createCodexAgentCallTool", () => {
 
       const output = await tool.invoke(
         context,
-        JSON.stringify({ task: delegatedTask, executionMode: "async" }),
+        JSON.stringify({
+          projectId: "huanlink",
+          task: delegatedTask,
+          executionMode: "async",
+        }),
+        toolCallDetails(
+          "tool-call-logger-failure",
+          JSON.stringify({
+            projectId: "huanlink",
+            task: delegatedTask,
+            executionMode: "async",
+          }),
+        ),
       );
 
       expect(output).toBe(JSON.stringify(invocationResult));
@@ -306,7 +671,19 @@ describe("createCodexAgentCallTool", () => {
 
     const output = await tool.invoke(
       context,
-      JSON.stringify({ task: delegatedTask, executionMode: "async" }),
+      JSON.stringify({
+        projectId: "huanlink",
+        task: delegatedTask,
+        executionMode: "async",
+      }),
+      toolCallDetails(
+        "tool-call-business-failure",
+        JSON.stringify({
+          projectId: "huanlink",
+          task: delegatedTask,
+          executionMode: "async",
+        }),
+      ),
     );
 
     expect(String(output)).toContain(originalMessage);
@@ -355,8 +732,20 @@ describe("createCodexAgentCallTool", () => {
     await expect(
       tool.invoke(
         context,
-        JSON.stringify({ task: delegatedTask, executionMode: "async" }),
-        { signal: timeoutController.signal },
+        JSON.stringify({
+          projectId: "huanlink",
+          task: delegatedTask,
+          executionMode: "async",
+        }),
+        toolCallDetails(
+          "tool-call-original-error",
+          JSON.stringify({
+            projectId: "huanlink",
+            task: delegatedTask,
+            executionMode: "async",
+          }),
+          timeoutController.signal,
+        ),
       ),
     ).rejects.toBe(businessFailure);
     expect(invoke).toHaveBeenCalledTimes(1);
@@ -367,8 +756,6 @@ describe("createCodexAgentCallTool", () => {
     async (legacyMode) => {
       const invoke = vi.fn<AgentCallInvoker["invoke"]>(async () => ({
         status: "accepted",
-        executionMode: "async",
-        agentCallId: "legacy-mode-should-not-be-invoked",
         taskId: "legacy-mode-should-not-be-submitted",
         state: "submitted",
       }));
@@ -407,9 +794,7 @@ describe("createCodexAgentCallTool", () => {
       invoker: {
         invoke: vi.fn(async () => ({
           status: "accepted" as const,
-          executionMode: "async" as const,
-          agentCallId: "unused-agent-call",
-          taskId: "unused-a2a-task",
+          taskId: "unused-huanlink-task",
           state: "submitted" as const,
         })),
       },
@@ -435,11 +820,9 @@ describe("createCodexAgentCallTool", () => {
   });
 
   test("forces terminal re-entry submissions to stay asynchronous", async () => {
-    const invoke = vi.fn<AgentCallInvoker["invoke"]>(async (request) => ({
+    const invoke = vi.fn<AgentCallInvoker["invoke"]>(async () => ({
       status: "accepted" as const,
-      executionMode: request.executionMode,
-      agentCallId: "terminal-follow-up-agent-call",
-      taskId: "terminal-follow-up-a2a-task",
+      taskId: "terminal-follow-up-huanlink-task",
       state: "submitted" as const,
     }));
     const tool = createCodexAgentCallTool({ invoker: { invoke } });
@@ -452,9 +835,18 @@ describe("createCodexAgentCallTool", () => {
     await tool.invoke(
       context,
       JSON.stringify({
+        projectId: "huanlink",
         task: "run the already authorized follow-up",
         executionMode: "blocking",
       }),
+      toolCallDetails(
+        "tool-call-terminal-follow-up",
+        JSON.stringify({
+          projectId: "huanlink",
+          task: "run the already authorized follow-up",
+          executionMode: "blocking",
+        }),
+      ),
     );
 
     expect(invoke).toHaveBeenCalledWith(
