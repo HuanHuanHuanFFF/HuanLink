@@ -4,6 +4,10 @@
 >
 > **定位边界：** HuanLink 是面向本地单用户的异构 Agent 协作与 A2A 外层编排项目。QQ 与 Codex 是第一个真实验证场景，不是项目的最终产品边界。
 
+> **进度同步（2026-09-30）：** P0/P0.5 已由 [D13](./D13-server-runtime-production-loop-plan.md) 实施：正式 Runtime、Conversation/Task SQLite 接线及真实 QQ/A2A/Codex 闭环已有记录，B06 也已按后续确认的定向审查范围收口。当前最明确的后续需求是每次派单指定执行参数与目标项目，具体方案尚待独立 Adapter 计划确定。
+>
+> 本文第 2 节保留 2026-08-08 的历史基线，第 5～6 节的候选方案也不是当前待执行清单；并发上限、Task 持久化及验收口径等以较新的 D13 为准。P1～P3 的其余模块、近期 Jev 权限判断和受控多 Agent 会话讨论均未因本次同步获得实施授权，不需要为推进下一模块先补齐所有候选基础设施。
+
 ## 1. 方向变化
 
 后续开发不再以“先补齐完整基础设施”为默认顺序，而采用以下优先级：
@@ -24,7 +28,9 @@
 -> 可用于简历与面试的准确结论
 ```
 
-## 2. 当前事实基线
+## 2. 路线提出时的事实基线（2026-08-08）
+
+本节用于追溯当时为何提出 P0/P0.5；其中“当前”“尚未”等表述均指 2026-08-08，不代表当前分支仍缺少正式接线。最新事实与剩余边界见 D13 第 2、11 节。
 
 ### 2.1 已有真实证据
 
@@ -62,15 +68,15 @@ QQ / OneBot
 
 ### 2.3 可直接复用的组件
 
-| 能力 | 当前证据 | 当前缺口 |
-|---|---|---|
-| Channel Runtime | 正式入口、名单过滤、route 保序、Channel-only QQ smoke | 没有下游编排接线 |
-| Conversation Store | In-memory 已有；SQLite 合同、migration、事务和重开测试已完成 | 正式 Server 未构造、未管理生命周期 |
-| MainAgent / AgentCall | `phase3-runtime.ts` 已组装 MainAgent、AgentCall、A2A Transport、Task 查询/续跑和终态 re-entry | 正式 `main.ts` 未创建或调用该 Runtime |
-| Current-session `reply` | Tool 合同、可信 route、单次发送和自身消息关联已有测试 | 正式 Runtime 未注入 Store 和 Channel Adapter |
-| A2A / Codex Adapter | Agent Card、Task、订阅、查询、取消、Artifact、真实 Codex app-server 执行已有代码和历史证据 | 当前正式 Channel 入口未连接；Adapter 仍有 Demo 配置边界 |
-| 本地配置 | MainAgent、Channel 和 A2A Agent 的静态配置、引用和密钥环境变量合同已存在 | MainAgent 密钥与 Agent 配置尚未用于正式 Runtime 接线 |
-| 可观测性 | Server/Adapter JSONL 与关联 ID 已存在 | 没有面向用户的当前任务视图，当前新链路也没有完整事件证据 |
+| 能力                    | 当前证据                                                                                      | 当前缺口                                                 |
+| ----------------------- | --------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
+| Channel Runtime         | 正式入口、名单过滤、route 保序、Channel-only QQ smoke                                         | 没有下游编排接线                                         |
+| Conversation Store      | In-memory 已有；SQLite 合同、migration、事务和重开测试已完成                                  | 正式 Server 未构造、未管理生命周期                       |
+| MainAgent / AgentCall   | `phase3-runtime.ts` 已组装 MainAgent、AgentCall、A2A Transport、Task 查询/续跑和终态 re-entry | 正式 `main.ts` 未创建或调用该 Runtime                    |
+| Current-session `reply` | Tool 合同、可信 route、单次发送和自身消息关联已有测试                                         | 正式 Runtime 未注入 Store 和 Channel Adapter             |
+| A2A / Codex Adapter     | Agent Card、Task、订阅、查询、取消、Artifact、真实 Codex app-server 执行已有代码和历史证据    | 当前正式 Channel 入口未连接；Adapter 仍有 Demo 配置边界  |
+| 本地配置                | MainAgent、Channel 和 A2A Agent 的静态配置、引用和密钥环境变量合同已存在                      | MainAgent 密钥与 Agent 配置尚未用于正式 Runtime 接线     |
+| 可观测性                | Server/Adapter JSONL 与关联 ID 已存在                                                         | 没有面向用户的当前任务视图，当前新链路也没有完整事件证据 |
 
 [`D12-sqlite-conversation-store-implementation-plan.md`](./D12-sqlite-conversation-store-implementation-plan.md) 只证明 Core Store 已完成。它不证明服务重启后能恢复 Agent Run、A2A Task 或出站投递。
 
@@ -89,16 +95,16 @@ QQ / OneBot
 
 ## 4. 候选优先级总览
 
-| 优先级 | 候选结果 | 主要价值 | 进入条件 |
-|---|---|---|---|
-| P0 | 当前正式架构的最小 QQ → MainAgent → A2A → Codex → `reply` 闭环 | 恢复基本功能，形成所有后续模块的演示底座 | 选为当前模块并建立聚焦 `Dxx` |
-| P0.5 | SQLite Conversation Store 接入正式 Server 生命周期 | 复用已完成投入，形成可解释的会话持久化与去重证据 | 与 P0 相邻接线，不扩大为 Agent/A2A 自动恢复 |
-| P1 | 异步任务体验、AgentCall/A2A 历史与本地项目/Agent 配置 | 从技术 Demo 变成可查询、可手动对账、可重复使用的本地产品能力 | P0 有新鲜真实证据，且 P0.5 的正式 SQLite 接线与生命周期已完成 |
-| P2 | 第二个真实 A2A Agent 与能力路由 | 直接强化“异构 Agent 协作”差异化 | 配置和单 Agent 闭环稳定；用户选择第二 Agent |
-| P2 | 聚焦的权限审批回流 | 展示 Agent 安全、授权绑定和同任务恢复 | 单任务 `input-required` 闭环稳定；单独确认安全边界 |
-| P3 | 任务观测台 / 任务时间线 | 提升演示效果和诊断能力，串起多类 ID、状态与 Artifact | 先定义最小读模型，不先建设完整前端平台 |
-| P3 | 多 Agent 实现—审查协作流 | 展示多 Agent 分工、结果聚合和外层编排 | 至少两个真实 Agent 或两个可清楚区分的执行角色 |
-| 按需 | 队列、恢复、轮转、备份、Broker 等基础设施 | 解决已经出现的可靠性或容量问题 | 有真实故障、指标或产品承诺作为触发证据 |
+| 优先级 | 候选结果                                                       | 主要价值                                                     | 进入条件                                                      |
+| ------ | -------------------------------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------- |
+| P0     | 当前正式架构的最小 QQ → MainAgent → A2A → Codex → `reply` 闭环 | 恢复基本功能，形成所有后续模块的演示底座                     | 选为当前模块并建立聚焦 `Dxx`                                  |
+| P0.5   | SQLite Conversation Store 接入正式 Server 生命周期             | 复用已完成投入，形成可解释的会话持久化与去重证据             | 与 P0 相邻接线，不扩大为 Agent/A2A 自动恢复                   |
+| P1     | 异步任务体验、AgentCall/A2A 历史与本地项目/Agent 配置          | 从技术 Demo 变成可查询、可手动对账、可重复使用的本地产品能力 | P0 有新鲜真实证据，且 P0.5 的正式 SQLite 接线与生命周期已完成 |
+| P2     | 第二个真实 A2A Agent 与能力路由                                | 直接强化“异构 Agent 协作”差异化                              | 配置和单 Agent 闭环稳定；用户选择第二 Agent                   |
+| P2     | 聚焦的权限审批回流                                             | 展示 Agent 安全、授权绑定和同任务恢复                        | 单任务 `input-required` 闭环稳定；单独确认安全边界            |
+| P3     | 任务观测台 / 任务时间线                                        | 提升演示效果和诊断能力，串起多类 ID、状态与 Artifact         | 先定义最小读模型，不先建设完整前端平台                        |
+| P3     | 多 Agent 实现—审查协作流                                       | 展示多 Agent 分工、结果聚合和外层编排                        | 至少两个真实 Agent 或两个可清楚区分的执行角色                 |
+| 按需   | 队列、恢复、轮转、备份、Broker 等基础设施                      | 解决已经出现的可靠性或容量问题                               | 有真实故障、指标或产品承诺作为触发证据                        |
 
 同一优先级不是并行实施授权。用户每次只选择一个当前模块，再为它建立 Dxx 和小批次。
 
@@ -306,16 +312,16 @@ MainAgent 确认目标
 
 下列事项保留为技术债和触发式候选，不自动进入当前计划：
 
-| 能力 | 重新排期的触发条件 |
-|---|---|
-| 有界内存队列 | 真实连续消息导致不可接受的积压、重复唤醒或不可观测等待 |
-| 持久入站队列 | 产品明确要求重启后继续处理已接收但未消费消息 |
-| 自动恢复 Agent Task | 产品明确要求启动时自动找回、继续和回流后台任务；P1 的历史查询与手动对账不触发该范围 |
-| 可靠出站投递 | 需要 intent/attempt/确认/不确定状态与受控重试 |
-| 日志轮转 | 单文件增长已影响日常运行，或发布前需要固定保留策略 |
-| SQLite backup/checkpoint/清理 | 数据开始具备不可替代价值，或 WAL/容量出现实际问题 |
-| 外部 Broker | 出现多进程、多主机、独立 Worker 或实测单机瓶颈 |
-| exactly-once | 有清晰业务定义和可验证的外部副作用边界 |
+| 能力                          | 重新排期的触发条件                                                                  |
+| ----------------------------- | ----------------------------------------------------------------------------------- |
+| 有界内存队列                  | 真实连续消息导致不可接受的积压、重复唤醒或不可观测等待                              |
+| 持久入站队列                  | 产品明确要求重启后继续处理已接收但未消费消息                                        |
+| 自动恢复 Agent Task           | 产品明确要求启动时自动找回、继续和回流后台任务；P1 的历史查询与手动对账不触发该范围 |
+| 可靠出站投递                  | 需要 intent/attempt/确认/不确定状态与受控重试                                       |
+| 日志轮转                      | 单文件增长已影响日常运行，或发布前需要固定保留策略                                  |
+| SQLite backup/checkpoint/清理 | 数据开始具备不可替代价值，或 WAL/容量出现实际问题                                   |
+| 外部 Broker                   | 出现多进程、多主机、独立 Worker 或实测单机瓶颈                                      |
+| exactly-once                  | 有清晰业务定义和可验证的外部副作用边界                                              |
 
 ## 11. 每个模块的成果包
 

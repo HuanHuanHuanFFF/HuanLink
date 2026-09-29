@@ -1,8 +1,12 @@
 # HuanLink Server Runtime 正式闭环实施计划
 
-> **状态：已确认（2026-08-09）。** 本计划用于激活
+> **状态同步（2026-09-30）：B01～B05 已实现；B06 已按后续确认的定向审查范围完成本轮收口。** 本计划于 2026-08-09 确认，用于激活
 > [`31-huanlink-autumn-recruiting-value-first-candidate-roadmap.md`](./31-huanlink-autumn-recruiting-value-first-candidate-roadmap.md)
-> 中的 P0 与相邻 P0.5。本文完成不代表代码、正式入口或真实 QQ 闭环已经完成。
+> 中的 P0 与相邻 P0.5。正式 Runtime、SQLite 接线和真实 QQ/A2A/Codex 闭环已有实现与验收记录；证据范围及最终审查调整见第 11 节，不宣称本次重跑了全仓测试或真实 smoke。
+>
+> 当前核对基线为 `dev/v1.0-runtime-integration` 的 `2a4dc0a`，远端同名分支也指向该提交。下一项已确认需求是派单执行参数与目标项目选择，具体方案仍待独立 Adapter 计划确定；本次状态同步不启动新批次，也不授权提交、推送、PR 或合并。
+>
+> 下文各批次的修改、验收设计和带日期的实施结果保留历史语境。前批的“尚未接线”等限制可能已由后批解决；当前事实以第 2 节和第 11 节收口记录为准。
 
 ## 1. 目标结果
 
@@ -28,17 +32,17 @@
 
 P0 完成后应证明当前正式入口能够处理一次真实请求，而不是只证明各局部组件存在。P0.5 紧随 P0 完成 SQLite 生产接线，但不把 Conversation 持久化扩大为 Agent Run、A2A Task 或出站投递的自动恢复。
 
-## 2. 文档关系与当前事实
+## 2. 文档关系与当前事实（2026-09-30）
 
-- 本计划经确认后，是 Server Runtime 正式闭环模块的当前 `Dxx`；其活动 `Bxx` 高于普通编号候选路线和历史阶段计划。
-- [`D11-channel-contract-v1-implementation-plan.md`](./D11-channel-contract-v1-implementation-plan.md) 已完成 Channel Contract、OneBot Adapter、Channel Runtime、名单热重载和正式 Channel-only 入口；Channel 不写 Session、不去重、不决定 Agent 触发。
-- [`D12-sqlite-conversation-store-implementation-plan.md`](./D12-sqlite-conversation-store-implementation-plan.md) 已完成 Core `ConversationSessionStore`、In-memory/SQLite 实现、migration、事务和文件重开测试；正式 Server 尚未创建或关闭 SQLite Store。
-- `apps/server/src/main.ts` 当前只记录统一下游事件，并明确记录 `message_queue_deferred`；正式入口没有创建 Phase3 Runtime 或 Conversation Store。
-- `apps/server/src/phase3-runtime.ts` 已组合 MainAgent、AgentCall、A2A Transport、状态查询、`input-required` 续跑和终态 re-entry，但没有连接正式 Channel 入口。
-- `reply`、`onebot_standard` 和开关控制的 `onebot_privileged` 已是经过测试的可组合 Tool；其中 Store 依赖仍使用 In-memory 具体类型。
-- 当前没有 Session 上下文投影器；`OpenAiAgentsRuntime` 只接收一次文本输入，不能把“Store 中存在历史”写成“模型已经获得历史”。
-- 当前 Conversation Store 记录 Channel 消息以及部分 Channel Tool Call/Result，但尚未统一记录 MainAgent 的 `submit`、`status` 和 `continue` Tool 历史。
-- 当前 Codex Adapter 的 JSON loader 已存在，但该进程的 `main.ts` 仍使用遗留环境变量和硬编码分支边界。本计划不把完整多项目 Adapter 配置迁移隐式塞入 Server Runtime；真实 smoke 必须显式使用受控工作区，若现有 Adapter 入口阻塞验收，应停下建立独立 Adapter 计划。
+- 本计划仍是 Server Runtime 正式闭环模块的事实与边界入口。B01～B05 的实现已落地，B06 的真实验收、后续独立审查和提交情况见第 11 节；尚未激活下一项 Adapter 开发批次。
+- [`D11-channel-contract-v1-implementation-plan.md`](./D11-channel-contract-v1-implementation-plan.md) 的 Channel Contract、OneBot Adapter、名单与 route 保序继续使用；Channel 不写 Session、不去重、不决定 Agent 触发，这些职责由下游 Coordinator 承担。
+- 正式 `apps/server/src/main.ts` 已通过配置化总 Runtime 接入 Channel、SessionIngressCoordinator、MainAgent、AgentCall/A2A 和 re-entry，不再是 Channel-only 日志出口。
+- [`D12-sqlite-conversation-store-implementation-plan.md`](./D12-sqlite-conversation-store-implementation-plan.md) 的 Conversation Store 与 B05-A 的 Task Store 已在 B05-B 接入同一生产 SQLite owner；固定路径为 `.huanlink/data/huanlink.sqlite`，由 Server 管理创建与关闭。生产入口使用 SQLite，In-memory 保留给测试和显式隔离场景。
+- Context Window、确定性 Projector、统一 Tool Call/Result 历史以及按来源复合键和游标取回原始 Tool Call 已实现；自动检测 token 上限、生成摘要与推进压缩 checkpoint 尚未实现。
+- AgentCall 已接入通用 AsyncToolTask，使用统一 HuanLink `taskId`，A2A 与普通异步 Tool 分池限额默认为 2 和 3；普通非 A2A 异步 Tool 目前只有 Fake 验证接缝，没有新增真实生产接入。
+- `reply`、`onebot_standard` 和开关控制的 `onebot_privileged` 已注入正式 Runtime，并依赖 Conversation Store 合同；特权 Tool 仍是默认关闭的显式无保护开关，不代表已实现权限审批。
+- Session 与 Task 事实已持久化；重启后的非终态 Task 变为 `unknown / reconciliation-required` 并保留名额。这不是恢复执行、手动远端对账、自动 watcher 或可靠回流。
+- Codex Adapter 的 JSON loader 已存在，但 `main.ts` 仍使用环境变量和固定 `spike/demo-v0` 分支；`turn/start` 仍固定 `effort: "high"`。稳定项目选择、每次派单执行参数和 Adapter 配置迁移是已记录的后续需求，不因本轮收口而视为完成。
 
 ## 3. 已确认的产品与运行语义
 
@@ -249,11 +253,11 @@ B02 完成测试与压力审查后报告；不得顺手实现队列、watermark 
 
 如果保持完整 Tool 配对需要改变 OpenAI Agents SDK Session 模型、提前实现压缩/checkpoint，或引入未确认的上下文截断策略，停止并向用户报告，不在 B03 暗中扩张。
 
-### 已完成事实与修正入口
+### B03 完成时的事实与后续修正
 
 - 提交 `df31f16` 与 `8b4564e` 已完成 Context Window、Projector、统一 Tool 历史、`sourceToolCallId`、同 Session 调度和最新上下文读取；这些能力继续保留。
-- 当前运行代码仍把 HuanLink Task 等同于 AgentCall，提交回执中的本地 `agentCallId`、远端 `taskId` 与状态查询结果命名不一致；普通延迟 Tool 也没有统一任务注册入口。
-- 该缺口不回滚 B03 已完成能力，统一放入 B04 的协议无关 Task 改造；B04 完成前不得声称普通异步 Tool 已支持统一 `taskId`、状态查询或终态回流。
+- B03 完成时，运行代码仍把 HuanLink Task 等同于 AgentCall，提交回执中的本地 `agentCallId`、远端 `taskId` 与状态查询结果命名不一致；普通延迟 Tool 也没有统一任务注册入口。
+- 上述缺口已由后续 B04 的协议无关 Task 改造解决，不回滚 B03 已完成能力。通用合同与 Fake 非 A2A 接缝不等于普通异步 Tool 已全部生产接入。
 
 ## 9. B04：通用异步 Tool Task 与 A2A/reply 正式组合
 
@@ -345,13 +349,13 @@ B04 只建立进程内通用 Task。Task SQLite 表与重开语义按 B05-A 实�
 
 #### 验收
 
-| 场景 | 重开或返回后的公开状态 | 名额与自动行为 |
-| --- | --- | --- |
-| 已持久化终态 | 保持原 `taskId`、终态与公开结果；私有 A2A 引用不外泄 | 不占名额，不产生 re-entry |
-| 已持久化非终态 | `unknown / reconciliation-required` | 恢复到原所属名额池；不恢复 watcher、不 re-entry、不重派、不对账 |
-| 恢复活动数高于新配置上限 | 所有旧 Task 仍可查询，Runtime 正常启动 | 保留实际占位并拒绝该池新 Task，直到活动数低于上限；另一池不受影响 |
-| 纯 `dispatch-uncertain` 且无 A2A `taskId` | HuanLink Task 为 `unknown`，私有远端 ID 为空 | 继续占 A2A 名额；不承诺 `GetTask` 可用 |
-| 远端已 `accepted`，本地持久化失败 | `{ status: "accepted", taskId, state: "unknown", retrySafe: false, persistenceWarning }` | 本进程继续占位并记录脱敏严重错误；不自动重试，不伪称重启可恢复 |
+| 场景                                      | 重开或返回后的公开状态                                                                   | 名额与自动行为                                                    |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| 已持久化终态                              | 保持原 `taskId`、终态与公开结果；私有 A2A 引用不外泄                                     | 不占名额，不产生 re-entry                                         |
+| 已持久化非终态                            | `unknown / reconciliation-required`                                                      | 恢复到原所属名额池；不恢复 watcher、不 re-entry、不重派、不对账   |
+| 恢复活动数高于新配置上限                  | 所有旧 Task 仍可查询，Runtime 正常启动                                                   | 保留实际占位并拒绝该池新 Task，直到活动数低于上限；另一池不受影响 |
+| 纯 `dispatch-uncertain` 且无 A2A `taskId` | HuanLink Task 为 `unknown`，私有远端 ID 为空                                             | 继续占 A2A 名额；不承诺 `GetTask` 可用                            |
+| 远端已 `accepted`，本地持久化失败         | `{ status: "accepted", taskId, state: "unknown", retrySafe: false, persistenceWarning }` | 本进程继续占位并记录脱敏严重错误；不自动重试，不伪称重启可恢复    |
 
 - migration、创建、每次状态变化、终态释放、重复终态和冲突更新都有事务与关闭重开测试；数据库失败不得只更新内存而伪造持久化成功。
 - 覆盖 A2A 与普通异步 Tool 两个名额池的恢复、配置降额超限恢复、跨 Session 隔离，以及其中一个池超限不阻塞另一个池。
@@ -400,7 +404,9 @@ B05-A 必须先完成 Task Store、迁移、重开投影和名额重建，并单
 
 ## 11. B06：整体回归、压力审查与真实验收
 
-### 自动化验收
+### 自动化验收设计（原始计划）
+
+下列条目保留最初的验收设计。最终两处修复已有包级回归和真实联调证据；用户随后确认先做一名独立 Reviewer 的定向压力审查，不机械重复全仓测试。实际执行与收口结论见本节末尾，不能将原始清单写成全部重新执行过的记录。
 
 1. Fake Channel -> Store -> MainAgent -> Fake A2A -> `reply` -> self-message association 组合测试。
 2. trigger、自身消息、duplicate、associated、冲突事实和关闭 Abort 回归。
@@ -427,11 +433,11 @@ B05-A 必须先完成 Task Store、迁移、重开投影和名额重建，并单
 
 ### B06 现场验证记录（2026-09-05，Asia/Shanghai）
 
-本轮真实联调通过：QQ 入站、MainAgent 显式回复、真实 A2A/Codex 异步执行、SQLite 任务与工具历史、终态回流回复，以及新消息的自身回流关联均取得现场证据。此结论限于以下已测场景，不代表 B06 的最终全仓回归与压力审查已经完成。
+本轮真实联调通过：QQ 入站、MainAgent 显式回复、真实 A2A/Codex 异步执行、SQLite 任务与工具历史、终态回流回复，以及新消息的自身回流关联均取得现场证据。以下保留 2026-09-05 的已测场景；后续独立审查和实际收口范围另见本节末尾。
 
 #### 环境与修改范围
 
-- 主工作区为 `dev/v1.0-runtime-integration`，测试基线提交为 `7ed5ec1`，叠加本节记录的未提交修复；Node 为 `24.15.0`。本轮全仓 build 成功，B05-B 当时的 `dist` 文件锁未再次阻断构建。
+- 主工作区为 `dev/v1.0-runtime-integration`，测试基线提交为 `7ed5ec1`，叠加当时未提交、后续归入 `2a4dc0a` 的两处修复；Node 为 `24.15.0`。本轮全仓 build 成功，B05-B 当时的 `dist` 文件锁未再次阻断构建。
 - MainAgent 使用 `deepseek-v4-flash`；Codex Adapter 连接已登录的 `codex app-server 0.145.0`，执行模型为 `gpt-5.4-mini`，任务显式使用 `high`。API Key 和 OneBot Token 保留在 Git 忽略的 `.env`，本记录不保存秘密值。
 - QQ 使用指定测试群的 allowlist，私聊 allowlist 为空，特权操作关闭。具体连接和名单以 `.huanlink/config/server/channels/onebot11.json` 为准。
 - Codex 只在独立工作区 `D:/CodingProject/HuanLink-B06-Smoke` 执行，使用现有 `spike/demo-v0` 分支，未改动主工作区的业务源码。Adapter 的旧入口仍硬编码该分支并通过环境变量接收工作区；这次真实测试不代表 Adapter JSON 入口迁移已经完成。
@@ -447,15 +453,15 @@ B05-A 必须先完成 Task Store、迁移、重开投影和名额重建，并单
 
 下表供本地日志与数据库交叉核验；A2A、Codex 标识仅是工程验收关联信息，不改变模型查询使用 HuanLink task ID 的合同。
 
-| 证据 | 标识 |
-| --- | --- |
-| 成功 HuanLink Task | `f508f4c9-0b57-4fc5-876b-bbf6029dc019` |
-| 来源 MainAgent Run | `a4260189-e6f3-4097-8c4d-629905398c70` |
-| 终态回流 Run | `65364001-7407-4c65-bd05-2531aa8ee42c` |
-| 私有 A2A Task | `51650ecc-698a-4b69-8fde-51e1ea5badac` |
-| Codex thread / turn | `01a07222-d503-7440-baf0-b7f4b9ebb77f` / `01a07222-e9cd-7283-b064-7876f110d95f` |
-| 受理 / 完成 QQ messageId | `1293288138` / `94412742` |
-| 自身消息补验 Run / messageId | `54b8bcf2-a42a-4f3a-ae2c-f15c2843b7b9` / `948225445` |
+| 证据                         | 标识                                                                            |
+| ---------------------------- | ------------------------------------------------------------------------------- |
+| 成功 HuanLink Task           | `f508f4c9-0b57-4fc5-876b-bbf6029dc019`                                          |
+| 来源 MainAgent Run           | `a4260189-e6f3-4097-8c4d-629905398c70`                                          |
+| 终态回流 Run                 | `65364001-7407-4c65-bd05-2531aa8ee42c`                                          |
+| 私有 A2A Task                | `51650ecc-698a-4b69-8fde-51e1ea5badac`                                          |
+| Codex thread / turn          | `01a07222-d503-7440-baf0-b7f4b9ebb77f` / `01a07222-e9cd-7283-b064-7876f110d95f` |
+| 受理 / 完成 QQ messageId     | `1293288138` / `94412742`                                                       |
+| 自身消息补验 Run / messageId | `54b8bcf2-a42a-4f3a-ae2c-f15c2843b7b9` / `948225445`                            |
 
 本地证据入口为 `.huanlink/logs/server.jsonl`、`.huanlink/logs/codex-a2a-adapter.jsonl`、`.huanlink/data/huanlink.sqlite` 和 smoke 工作区 diff；运行产物不随本文提交。
 
@@ -466,13 +472,30 @@ B05-A 必须先完成 Task Store、迁移、重开投影和名额重建，并单
 - **OneBot 连接与自身上报：** 服务器防火墙未开放时 WebSocket 握手断开；用户开放后认证与测试群查询成功。平台未开启自身消息上报时，发送成功但关联保持 pending；开启后通过新回复补验，不据此推断历史消息会自动补报。
 - **本地测试进程停止：** 一次补验时 Server 与 Adapter 进程均已不存在，新消息未进入系统；日志没有正常关闭记录，具体退出原因未确定。已改用隐藏后台进程重新启动并核验 `server.ready`，后续补验成功。该处理不是服务守护、自动拉起或丢失消息补偿能力。
 
-#### 测试后待办与收口边界
+#### 后续独立审查与收口（2026-09-30 补录）
 
-- 用户已确认在 B06 测试后统一设计并实现“每次派单显式指定执行参数”，包括推理强度与明确的目标项目选择；本轮只修复 Adapter 默认 `high`，不提前扩展 MainAgent/AgentCall/A2A 调用合同。
-- 项目选择方案应围绕稳定 `projectId` 与 Adapter 管理的工作区、分支映射展开，Codex 专属执行规则仍留在 Adapter。每次派单字段、默认值优先级、模型与强度能力校验、A2A 承载方式及其他执行选项尚待后续方案确定。
-- B06 收口前仍须对最终工作树完成本节自动化验收要求的全仓 format/build/test/typecheck/diff 检查，以及至少两路独立压力审查；本轮包级回归和前批审查不代替最终状态的这两项验收。
-- 本次没有执行真实长任务并发压力、运行中关闭/重启、崩溃恢复或完整敏感载荷审计；已有自动化证据与现场证据应分别说明，不推断未测试能力。
-- 当前代码、文档及 QQ 配置修改尚未提交或推送；smoke 工作区的测试改动单独保留，不混入主分支。记录整理不授权提交、推送、PR 或合并。
+- 2026-09-05 已按用户授权分别提交并推送 `2b918b9`（B06 验收记录）与 `2a4dc0a`（空参数 Schema、Codex 推理强度修复）。2026-09-30 核对时，本地 HEAD 与远端同名分支均为 `2a4dc0a`，没有后续业务代码提交。
+- 用户提出不必重复全仓测试后，会话确认复用上述两处修复已有的 Server/Adapter 包级测试、类型、构建、格式检查与真实联调证据；仅在后续审查发现新风险或产生新修改时补对应验证。这是本轮最终验收范围的调整，不是声称重新完成了一轮全仓回归。
+- 用户随后要求一名独立只读压力 Reviewer。2026-09-06 的会话审查结论为：未发现可证实的 P0/P1/P2 或验收阻塞；核对范围包括两处修复的实际调用路径、现场日志与 SQLite 中的终态、Tool 历史配对、受理/完成回复及自身消息关联。该轮未新增代码，也未重复跑全仓测试；不是新增两路全仓审计。
+- 依据已记录的实现、真实 smoke 与上述后续审查，B06 已完成本轮收口。历史测试与审查结果保留各自时间和范围；2026-09-30 只同步文档，不把历史证据描述为本次新执行结果。
+- 真实长任务并发压力、运行中关闭/重启、崩溃恢复与完整敏感载荷审计未在这轮现场验收中完成。临时 SQLite 与关闭链已有自动化测试，但不能替代这些未执行的真实场景；任务自动恢复仍不在 D13 范围内。
+- QQ 配置、`.env` 与隔离 smoke 工作区修改未混入上述提交。当前用户自有的 QQ 配置修改及三份 32/33 号研究文档继续保留；本次文档同步不提交、推送或修改这些文件。
+
+#### 已确认后续需求与未激活候选
+
+**最明确的后续需求是每次派单指定执行参数与目标项目。** 用户已确认要做；目前仅完成 Adapter 默认 `high` 的修复，尚未完成正式 JSON 入口迁移与新的派单合同。具体字段、模型覆盖与默认值优先级、模型/强度能力校验、稳定 `projectId` 到工作区/分支的映射、跨项目上下文隔离和同工作区并发策略，应在独立 Adapter 计划中确认。Codex 专属规则仍由 Adapter 持有，不写入 MainAgent 或 Core 配置；本次同步不启动实施。
+
+其余未实现能力分开记录，不能作为 D13 尚未完成的隐含要求：
+
+| 后续能力                                        | 已有基础与当前边界                                                                                            | 计划状态                                          |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| 历史列表与手动 A2A 对账                         | Server 已持久化 Task 并可查询本地状态；尚无完整手动 `GetTask` 刷新闭环，Adapter Task Store 仍在内存中         | 31 号候选路线，未激活独立批次                     |
+| 自动上下文压缩                                  | 已有窗口、游标与原始 Tool Call 精确查询；未实现 token 上限检测、摘要生成和 checkpoint 推进                    | 明确后移                                          |
+| 普通非 A2A 异步 Tool                            | 通用 Task 合同、限额、持久化与 Fake 测试接缝已有；尚无新增生产 Tool 接入                                      | 明确后移，需选择具体消费者                        |
+| 权限审批、Jev、第二个异构 Agent 与受控会话协作  | 已有 A2A Task、`input-required` 续接和进程内 Codex thread 映射；不等于权限执行、上下文同步或完整多 Agent 协作 | 近期讨论/候选方向，具体方案与实施未确认           |
+| 自动恢复、可靠投递、门禁/消息聚合队列及日志轮转 | 当前只保留已确认的持久事实、顺序与未知状态边界                                                                | D13 范围外，不作为上述 Adapter 改造的默认前置条件 |
+
+32/33 号研究材料用于讨论与取舍，不自动提高其建议的优先级，也不覆盖已确认的 D13 边界。
 
 ## 12. 提交、推送与模块门
 
@@ -485,7 +508,7 @@ B05-A 必须先完成 Task Store、迁移、重开投影和名额重建，并单
 
 ## 13. 完成定义
 
-只有同时满足以下条件，才可报告 D13 完成：
+以下为 D13 的完成边界；验证口径以第 11 节记录的实际执行及会话确认调整为准，不将原始验收设计等同于已执行证据：
 
 - 正式 `main.ts` 不再是 Channel-only 日志出口，而是装配完整 Server Runtime；
 - Channel 仍保持纯平台接入、名单和顺序边界；Session/Agent 决策只存在于下游 Coordinator；
@@ -496,6 +519,6 @@ B05-A 必须先完成 Task Store、迁移、重开投影和名额重建，并单
 - 模型上下文包含可追溯 Channel 消息和结构化配对的 Tool Call/Result，且没有冒充完整 SDK Session；
 - 正式入口使用 SQLite，关闭重开后 Conversation 事实仍可读；
 - AsyncToolTask 与 AgentCall 私有 A2A 引用按 B05-A 持久化；终态可重开查询，非终态重开为 `unknown / reconciliation-required` 并继续占用正确名额池，且没有被描述为自动恢复；
-- 全仓验证与压力审查无未解决 P0/P1/P2；
+- 已记录相应批次回归、真实联调与最终独立审查的范围和结果，最终定向审查未发现可证实的 P0/P1/P2；不宣称提交后重新跑过全仓回归或新增两路全仓审计；
 - 用户授权后的真实 QQ/Codex smoke 留下可串联的新鲜证据；
 - 明确报告仍不具备消息门禁 Agent、队列、任务自动恢复、可靠投递、多 Agent 路由和 exactly-once。
