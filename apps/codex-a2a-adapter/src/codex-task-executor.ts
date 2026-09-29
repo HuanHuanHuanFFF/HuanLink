@@ -74,6 +74,7 @@ export class CodexTaskExecutor implements AgentExecutor {
   private readonly logger: RuntimeLogger;
   private readonly dispatchPolicy: CodexDispatchPolicy;
   private readonly activeWorkspaces = new Map<string, InFlightExecution>();
+  private readonly continuationAdmissions = new Set<string>();
   private readonly pendingAdmissions = new Map<
     string,
     { token: symbol; messageId: string }
@@ -231,7 +232,7 @@ export class CodexTaskExecutor implements AgentExecutor {
     }
   }
 
-  validateMessage(message: Message): void | (() => void) {
+  async validateMessage(message: Message): Promise<void | (() => void)> {
     if (!message.taskId) {
       const dispatch = this.dispatchPolicy.resolve(message);
       const key = canonicalWorkspaceKey(dispatch.project.workspace);
@@ -261,6 +262,49 @@ export class CodexTaskExecutor implements AgentExecutor {
     ) {
       throw new RequestMalformedError(
         "HUANLINK_PREACCEPT_REJECTED: Task continuation cannot change Codex execution options",
+      );
+    }
+    const execution = this.executions.get(message.taskId);
+    if (!execution) return;
+    if (
+      this.continuationAdmissions.has(message.taskId) ||
+      !execution.pendingInput ||
+      execution.terminal
+    ) {
+      throw new RequestMalformedError(
+        "HUANLINK_PREACCEPT_REJECTED: Task is not awaiting a new answer",
+      );
+    }
+    this.continuationAdmissions.add(message.taskId);
+    try {
+      await this.validateExecutionWorkspace(execution);
+      if (execution.terminal || !execution.pendingInput)
+        throw new Error("Task is no longer paused");
+      return () => {
+        this.continuationAdmissions.delete(message.taskId);
+      };
+    } catch {
+      this.continuationAdmissions.delete(message.taskId);
+      throw new RequestMalformedError(
+        "HUANLINK_PREACCEPT_REJECTED: Paused task workspace or state changed; restore the configured branch before continuing",
+      );
+    }
+  }
+
+  private async validateExecutionWorkspace(
+    execution: InFlightExecution,
+  ): Promise<void> {
+    try {
+      if (!execution.project) throw new Error("Missing task project");
+      const validated = await this.validateWorkspace(
+        execution.project.workspace,
+        execution.project.branch,
+      );
+      if (canonicalWorkspaceKey(validated.workspace) !== execution.workspaceKey)
+        throw new Error("Workspace changed");
+    } catch {
+      throw new Error(
+        "Configured workspace or branch changed; restore it before continuing",
       );
     }
   }
@@ -407,7 +451,9 @@ export class CodexTaskExecutor implements AgentExecutor {
     try {
       answers = extractAnswers(requestContext);
       validateAnswerIds(pending.questions, answers);
+      await this.validateExecutionWorkspace(execution);
     } catch (error) {
+      if (execution.terminal || execution.pendingInput !== pending) return;
       publishInputRequiredUpdate(
         execution,
         eventBus,
@@ -418,6 +464,8 @@ export class CodexTaskExecutor implements AgentExecutor {
       await execution.terminalPromise;
       return;
     }
+
+    if (execution.terminal || execution.pendingInput !== pending) return;
 
     execution.pendingInput = undefined;
     this.writeLog("info", "adapter.task.input_submitted", {

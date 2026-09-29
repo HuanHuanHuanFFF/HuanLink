@@ -349,6 +349,104 @@ afterEach(async () => {
 });
 
 describe("CodexTaskExecutor", () => {
+  it("releases an unused admission when the SDK rejects the request before execution", async () => {
+    const runtime = new ControlledCodexRuntime();
+    const { client } = await startClient(runtime);
+    const malformed = createSendRequest("work", true);
+    malformed.message!.messageId = "";
+    await expect(client.sendMessage(malformed)).rejects.toThrow();
+    const task = requireTask(
+      await client.sendMessage(createSendRequest("valid", true)),
+    );
+    await expect.poll(() => runtime.startTurnCalls.length).toBe(1);
+    runtime.emitClose(new Error("test cleanup"));
+    await waitForTaskState(client, task.id, TaskState.TASK_STATE_FAILED);
+  });
+
+  it("preserves paused work if the final continuation check fails after admission", async () => {
+    const runtime = new ControlledCodexRuntime();
+    scheduleInputRequest(runtime);
+    let validations = 0;
+    let failAt = -1;
+    const { client } = await startClient(runtime, {
+      validateWorkspace: async () => {
+        validations++;
+        if (validations === failAt) throw new Error("Changed after admission");
+        return {
+          branch: "spike/demo-v0",
+          workspace: "D:/CodingProject/HuanLink",
+        };
+      },
+    });
+    const task = requireTask(
+      await client.sendMessage(createSendRequest("work", true)),
+    );
+    await waitForTaskState(
+      client,
+      task.id,
+      TaskState.TASK_STATE_INPUT_REQUIRED,
+    );
+    failAt = validations + 2;
+    const paused = requireTask(
+      await client.sendMessage(
+        createContinuationRequest(task, { scope: ["Adapter only"] }),
+      ),
+    );
+    expect(paused.status?.state).toBe(TaskState.TASK_STATE_INPUT_REQUIRED);
+    expect(runtime.serverResponses).toEqual([]);
+    await expect(
+      client.sendMessage(createSendRequest("no free slot", true)),
+    ).rejects.toThrow("workspace is busy");
+    await client.sendMessage(
+      createContinuationRequest(task, { scope: ["Adapter only"] }),
+    );
+    expect(runtime.serverResponses).toHaveLength(1);
+    expect(runtime.startTurnCalls).toHaveLength(1);
+    runtime.emitClose(new Error("test cleanup"));
+  });
+
+  it("keeps a paused task unanswered when its branch changes and allows continuation after restoration", async () => {
+    const runtime = new ControlledCodexRuntime();
+    scheduleInputRequest(runtime);
+    let changed = false;
+    const { client } = await startClient(runtime, {
+      validateWorkspace: async () => {
+        if (changed) throw new Error("Branch changed while paused");
+        return {
+          branch: "spike/demo-v0",
+          workspace: "D:/CodingProject/HuanLink",
+        };
+      },
+    });
+    const task = requireTask(
+      await client.sendMessage(createSendRequest("work", true)),
+    );
+    await waitForTaskState(
+      client,
+      task.id,
+      TaskState.TASK_STATE_INPUT_REQUIRED,
+    );
+    changed = true;
+    await expect(
+      client.sendMessage(
+        createContinuationRequest(task, { scope: ["Adapter only"] }),
+      ),
+    ).rejects.toThrow();
+    expect(runtime.serverResponses).toEqual([]);
+    await waitForTaskState(
+      client,
+      task.id,
+      TaskState.TASK_STATE_INPUT_REQUIRED,
+    );
+    changed = false;
+    await client.sendMessage(
+      createContinuationRequest(task, { scope: ["Adapter only"] }),
+    );
+    expect(runtime.serverResponses).toHaveLength(1);
+    expect(runtime.startTurnCalls).toHaveLength(1);
+    runtime.emitClose(new Error("test cleanup"));
+  });
+
   it("does not start a turn if the branch changes while thread creation is pending", async () => {
     const runtime = new ControlledCodexRuntime();
     let release!: () => void;

@@ -21,7 +21,9 @@ import express, { type RequestHandler, type Response } from "express";
 import { createAgentCard } from "./agent-card.js";
 
 export interface StartAdapterServerOptions {
-  validateMessage?: (message: Message) => void | (() => void);
+  validateMessage?: (
+    message: Message,
+  ) => void | (() => void) | Promise<void | (() => void)>;
   executor: AgentExecutor;
   heartbeatIntervalMs?: number;
   host?: string;
@@ -60,7 +62,7 @@ export async function startAdapterServer(
         context: ServerCallContext,
       ) {
         const release = params.message
-          ? options.validateMessage?.(params.message)
+          ? await options.validateMessage?.(params.message)
           : undefined;
         try {
           return await super.sendMessage(params, context);
@@ -73,7 +75,7 @@ export async function startAdapterServer(
         context: ServerCallContext,
       ) {
         const release = params.message
-          ? options.validateMessage?.(params.message)
+          ? await options.validateMessage?.(params.message)
           : undefined;
         try {
           yield* super.sendMessageStream(params, context);
