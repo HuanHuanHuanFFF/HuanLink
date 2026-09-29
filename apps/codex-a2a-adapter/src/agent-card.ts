@@ -21,17 +21,17 @@ export function createAgentCard(origin: string): AgentCardValue {
       streaming: true,
       pushNotifications: false,
     },
-    defaultInputModes: ["text/plain"],
+    defaultInputModes: ["text/plain", "application/json"],
     defaultOutputModes: ["text/plain"],
     skills: [
       {
         id: "codex-code-task",
         name: "Codex code task",
         description:
-          "Runs a real coding turn in the configured HuanLink workspace.",
+          "Runs a coding turn in a registered project. Requires task text plus a huanlink.codex-task.v1 data part with projectId; modelId and reasoningEffort are optional overrides.",
         tags: ["a2a", "codex", "coding"],
         examples: ["Add a focused validation rule and run its tests"],
-        inputModes: ["text/plain"],
+        inputModes: ["text/plain", "application/json"],
         outputModes: ["text/plain"],
       },
     ],
