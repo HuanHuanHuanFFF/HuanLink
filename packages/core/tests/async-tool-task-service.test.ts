@@ -348,6 +348,82 @@ describe("AsyncToolTaskService", () => {
     expect(terminal).toHaveBeenCalledTimes(1);
   });
 
+  test.each(["sourceRunId", "sourceToolCallId", "toolName"] as const)(
+    "rejects changed %s when retaining a new accepted payload",
+    (field) => {
+      const service = new AsyncToolTaskService({
+        maxActiveTasksPerSession: 1,
+        taskKinds: [fakeKind],
+        createTaskId: () => "task-1",
+      });
+      service.reserve(reserveRequest());
+      expect(() =>
+        service.retainPersistenceUncertain({
+          ...reserveRequest(),
+          [field]: "other",
+          taskId: "task-1",
+          state: "unknown",
+          payload: { label: "new result" },
+        }),
+      ).toThrow(/conflicts/);
+      expect(service.get("session-a", "task-1")?.state).toBe("submitting");
+    },
+  );
+
+  test("deduplicates the same source after its accepted payload has evolved", () => {
+    const service = new AsyncToolTaskService({
+      maxActiveTasksPerSession: 1,
+      taskKinds: [fakeKind],
+      createTaskId: () => "task-1",
+    });
+    service.reserve(reserveRequest());
+    service.accept("session-a", "task-1", {
+      state: "working",
+      payload: { label: "result" },
+    });
+    expect(service.reserve(reserveRequest())).toMatchObject({
+      status: "duplicate",
+      task: { taskId: "task-1", payload: { label: "result" } },
+    });
+    expect(() =>
+      service.reserve(reserveRequest({ toolName: "other-tool" })),
+    ).toThrow(/conflicts/);
+  });
+
+  test("does not hide a known adoption identity conflict behind an unavailable secondary read", () => {
+    const store = new InMemoryAsyncToolTaskStore();
+    const service = new AsyncToolTaskService({
+      store,
+      maxActiveTasksPerSession: 2,
+      taskKinds: [fakeKind],
+      createTaskId: () => "existing",
+    });
+    service.reserve(reserveRequest());
+    const quota = service.taskQuotaService.acquire("session-a", "async-tool");
+    if (quota.status !== "acquired") throw new Error("Expected lease");
+    vi.spyOn(store, "get").mockImplementation(() => {
+      throw new Error("secondary read unavailable");
+    });
+    expect(() =>
+      service.adoptAcceptedTask({
+        ...reserveRequest(),
+        taskId: "different",
+        state: "unknown",
+        quotaLease: quota.lease,
+      }),
+    ).toThrow(/conflicts/);
+    expect(service.isPersistenceUncertain("session-a", "different")).toBe(
+      false,
+    );
+    quota.lease.release();
+    const available = service.taskQuotaService.acquire(
+      "session-a",
+      "async-tool",
+    );
+    expect(available.status).toBe("acquired");
+    if (available.status === "acquired") available.lease.release();
+  });
+
   test("exposes the shared Task quota service for blocking callers", () => {
     const quotaService = new SessionTaskQuotaService({
       limits: { a2a: 2, "async-tool": 3 },

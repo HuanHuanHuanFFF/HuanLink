@@ -18,6 +18,7 @@ import {
   acceptedTask,
   deferred,
   rejectUnexpectedContinuation,
+  scopeQuestion,
   task,
 } from "./agent-call-test-helpers.js";
 
@@ -112,6 +113,39 @@ class FailingSnapshotStore extends InMemoryAsyncToolTaskStore {
       throw new Error("injected snapshot persistence failure");
     }
     return super.replace(expected, next, options);
+  }
+}
+
+class UnreadableAfterAdoptionFailureStore extends InMemoryAsyncToolTaskStore {
+  private failInsert = true;
+  private unreadable = false;
+  recover(): void {
+    this.unreadable = false;
+  }
+  override insert(
+    task: AsyncToolTask,
+    options?: AsyncToolTaskStoreInsertOptions,
+  ): AsyncToolTaskStoreInsertResult {
+    if (this.failInsert) {
+      this.failInsert = false;
+      this.unreadable = true;
+      throw new Error("injected adoption persistence failure");
+    }
+    return super.insert(task, options);
+  }
+  override get(sessionId: string, taskId: string): AsyncToolTask | undefined {
+    if (this.unreadable)
+      throw new Error("Store unreadable after adoption failure");
+    return super.get(sessionId, taskId);
+  }
+  override getBySource(
+    sessionId: string,
+    runId: string,
+    callId: string,
+  ): AsyncToolTask | undefined {
+    if (this.unreadable)
+      throw new Error("Store unreadable after adoption failure");
+    return super.getBySource(sessionId, runId, callId);
   }
 }
 
@@ -666,6 +700,125 @@ test("returns a persistence warning without resubmitting when remote acceptance 
   expect(JSON.stringify(errorLog.mock.calls)).not.toContain("a2a-task-01");
 
   await service.close();
+});
+
+test.each(["working", "input-required"] as const)(
+  "retains the initial %s payload when acceptance persistence fails",
+  async (state) => {
+    const store = new FailingAcceptanceStore();
+    const taskService = new AsyncToolTaskService({
+      store,
+      maxActiveTasksPerSession: 1,
+      taskKinds: [AGENT_CALL_TASK_KIND_DEFINITION],
+    });
+    const snapshot = task(state, {
+      artifacts: [{ id: "initial", text: "already produced" }],
+      ...(state === "input-required" ? { questions: [scopeQuestion()] } : {}),
+    });
+    const service = new AgentCallService({
+      taskService,
+      transport: {
+        discoverCapability: async (id) => ({ id, name: id }),
+        submitTask: async () => ({ outcome: "accepted", snapshot }),
+        async *watchTask(_id, { signal }) {
+          await new Promise<void>((resolve) => {
+            if (signal.aborted) resolve();
+            else
+              signal.addEventListener("abort", () => resolve(), { once: true });
+          });
+        },
+        continueTask: rejectUnexpectedContinuation,
+        cancelTask: async () => task("canceled"),
+      },
+    });
+    try {
+      const receipt = await service.invoke({
+        sessionId: "session-initial",
+        runId: "run-1",
+        sourceToolCallId: "call-1",
+        toolName: "submit_codex_agent_call",
+        executionMode: "async",
+        skillId: "codex-code-task",
+        input: "work",
+      });
+      expect(receipt).toMatchObject({
+        status: "accepted",
+        state: "unknown",
+        retrySafe: false,
+        persistenceWarning: "task-state-not-persisted",
+      });
+      if (receipt.status !== "accepted") throw new Error("Expected acceptance");
+      expect(
+        taskService.getStatus("session-initial", receipt.taskId),
+      ).toMatchObject({
+        state: "unknown",
+        payload: {
+          artifacts: snapshot.artifacts,
+          ...(state === "input-required"
+            ? { questions: [scopeQuestion()] }
+            : {}),
+        },
+      });
+    } finally {
+      await service.close();
+    }
+  },
+);
+
+test("persists and notifies an initial completion after a one-shot acceptance failure", async () => {
+  const store = new OneShotFailingAcceptanceStore();
+  const taskService = new AsyncToolTaskService({
+    store,
+    maxActiveTasksPerSession: 1,
+    taskKinds: [AGENT_CALL_TASK_KIND_DEFINITION],
+  });
+  const terminal = vi.fn();
+  taskService.onTerminal(terminal);
+  const submitTask = vi.fn(async () => acceptedTask("completed"));
+  const watchTask = vi.fn(async function* () {});
+  const service = new AgentCallService({
+    taskService,
+    transport: {
+      discoverCapability: async (id) => ({ id, name: id }),
+      submitTask,
+      watchTask,
+      continueTask: rejectUnexpectedContinuation,
+      cancelTask: async () => task("canceled"),
+    },
+  });
+  try {
+    const receipt = await service.invoke({
+      sessionId: "session-initial-terminal",
+      runId: "run-1",
+      sourceToolCallId: "call-1",
+      toolName: "submit_codex_agent_call",
+      executionMode: "async",
+      skillId: "codex-code-task",
+      input: "work",
+    });
+    expect(receipt).toMatchObject({ status: "accepted", retrySafe: false });
+    if (receipt.status !== "accepted") throw new Error("Expected acceptance");
+    await service.waitForIdle();
+    expect(
+      taskService.getStatus("session-initial-terminal", receipt.taskId),
+    ).toMatchObject({
+      state: "completed",
+    });
+    expect(store.get("session-initial-terminal", receipt.taskId)?.state).toBe(
+      "completed",
+    );
+    expect(terminal).toHaveBeenCalledTimes(1);
+    expect(submitTask).toHaveBeenCalledTimes(1);
+    expect(watchTask).not.toHaveBeenCalled();
+    const quota = taskService.taskQuotaService.acquire(
+      "session-initial-terminal",
+      "a2a",
+    );
+    expect(quota.status).toBe("acquired");
+    if (quota.status === "acquired") quota.lease.release();
+  } finally {
+    await service.close();
+  }
 });
 
 test("persists a later terminal snapshot after a one-shot acceptance failure", async () => {
@@ -1509,6 +1662,142 @@ test("treats an unexpected transport throw after entering submit as uncertain", 
 
   await service.close();
 });
+
+test("retains an uncertain blocking dispatch and its quota when adoption cannot be persisted", async () => {
+  const quotaService = new SessionTaskQuotaService({
+    limits: { a2a: 1, "async-tool": 3 },
+  });
+  const store = new UnreadableAfterAdoptionFailureStore();
+  const taskService = new AsyncToolTaskService({
+    store,
+    quotaService,
+    taskKinds: [AGENT_CALL_TASK_KIND_DEFINITION],
+  });
+  const submitTask = vi.fn(async () => ({
+    outcome: "dispatch-uncertain" as const,
+    error: new Error("response lost"),
+  }));
+  const service = new AgentCallService({
+    taskService,
+    quotaService,
+    createId: () => "uncertain-blocking",
+    transport: {
+      discoverCapability: async (id) => ({ id, name: id }),
+      submitTask,
+      async *watchTask() {},
+      continueTask: rejectUnexpectedContinuation,
+      cancelTask: async () => task("canceled"),
+    },
+  });
+  const errors = vi.fn();
+  service.onBackgroundError(errors);
+  const request = {
+    sessionId: "session-1",
+    runId: "run-1",
+    sourceToolCallId: "call-1",
+    toolName: "submit_codex_agent_call",
+    executionMode: "blocking" as const,
+    skillId: "codex-code-task",
+    input: "send once",
+  };
+  try {
+    const receipt = {
+      status: "blocking-uncertain",
+      executionMode: "blocking",
+      taskId: "uncertain-blocking",
+      state: "unknown",
+      retrySafe: false,
+    };
+    await expect(service.invoke(request)).resolves.toEqual(receipt);
+    await expect(service.invoke(request)).resolves.toEqual(receipt);
+    expect(submitTask).toHaveBeenCalledTimes(1);
+    expect(
+      taskService.getStatus("session-1", "uncertain-blocking"),
+    ).toMatchObject({
+      status: "found",
+      state: "unknown",
+    });
+    expect(
+      taskService.isPersistenceUncertain("session-1", "uncertain-blocking"),
+    ).toBe(true);
+    expect(quotaService.acquire("session-1", "a2a")).toMatchObject({
+      status: "limit-reached",
+    });
+    expect(errors).toHaveBeenCalled();
+    store.recover();
+    taskService.updateAccepted("session-1", "uncertain-blocking", {
+      state: "completed",
+    });
+    expect(store.getPrivateReference("uncertain-blocking")).toMatchObject({
+      namespace: "agent-call/a2a",
+      metadata: { messageId: "uncertain-blocking", skillId: "codex-code-task" },
+    });
+    const restored = quotaService.acquire("session-1", "a2a");
+    expect(restored.status).toBe("acquired");
+    if (restored.status === "acquired") restored.lease.release();
+  } finally {
+    await service.close();
+  }
+});
+
+test.each(["get", "getBySource"] as const)(
+  "retains an uncertain blocking dispatch when adoption's first %s read fails",
+  async (read) => {
+    const store = new InMemoryAsyncToolTaskStore();
+    const taskService = new AsyncToolTaskService({
+      store,
+      maxActiveTasksPerSession: 1,
+      taskKinds: [AGENT_CALL_TASK_KIND_DEFINITION],
+    });
+    const submitTask = vi.fn(async () => {
+      vi.spyOn(store, read).mockImplementation(() => {
+        throw new Error("Store read unavailable");
+      });
+      return {
+        outcome: "dispatch-uncertain" as const,
+        error: new Error("response lost"),
+      };
+    });
+    const service = new AgentCallService({
+      taskService,
+      createId: () => "uncertain-read",
+      transport: {
+        discoverCapability: async (id) => ({ id, name: id }),
+        submitTask,
+        async *watchTask() {},
+        continueTask: rejectUnexpectedContinuation,
+        cancelTask: async () => task("canceled"),
+      },
+    });
+    const request = {
+      sessionId: "session-1",
+      runId: "run-1",
+      sourceToolCallId: "call-1",
+      toolName: "submit_codex_agent_call",
+      executionMode: "blocking" as const,
+      skillId: "codex-code-task",
+      input: "send once",
+    };
+    try {
+      const receipt = {
+        status: "blocking-uncertain",
+        taskId: "uncertain-read",
+        retrySafe: false,
+      };
+      await expect(service.invoke(request)).resolves.toMatchObject(receipt);
+      await expect(service.invoke(request)).resolves.toMatchObject(receipt);
+      expect(submitTask).toHaveBeenCalledOnce();
+      expect(
+        taskService.getStatus("session-1", "uncertain-read"),
+      ).toMatchObject({ state: "unknown" });
+      expect(
+        taskService.taskQuotaService.acquire("session-1", "a2a").status,
+      ).toBe("limit-reached");
+    } finally {
+      await service.close();
+    }
+  },
+);
 
 test("upgrades only an uncertain blocking dispatch to a queryable unknown Task", async () => {
   const quotaService = new SessionTaskQuotaService({

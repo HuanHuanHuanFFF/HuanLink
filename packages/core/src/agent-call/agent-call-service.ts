@@ -112,14 +112,6 @@ class AgentCallAcceptedBookkeepingFailure extends Error {
   }
 }
 
-class AgentCallTaskStatePersistenceFailure extends Error {
-  constructor(readonly originalError: unknown) {
-    super("Accepted AgentCall Task state could not be persisted", {
-      cause: originalError,
-    });
-  }
-}
-
 export class AgentCallService
   implements
     AgentCallSubmitter,
@@ -282,8 +274,14 @@ export class AgentCallService
           });
           agentCallId = adoption.task.taskId;
         } catch (adoptionError) {
-          quota.lease.release();
-          throw adoptionError;
+          if (!(adoptionError instanceof AsyncToolTaskPersistenceError)) {
+            quota.lease.release();
+            throw adoptionError;
+          }
+          this.reportPersistenceFailure(
+            adoptionError.originalError,
+            agentCallId,
+          );
         }
         this.reportBackgroundError(error.originalError, agentCallId);
         return blockingUncertainResult(agentCallId);
@@ -305,11 +303,17 @@ export class AgentCallService
             ),
           });
           agentCallId = adoption.task.taskId;
-          await this.recoverAcceptedSubmission(agentCallId, error.accepted);
         } catch (adoptionError) {
-          quota.lease.release();
-          throw adoptionError;
+          if (!(adoptionError instanceof AsyncToolTaskPersistenceError)) {
+            quota.lease.release();
+            throw adoptionError;
+          }
+          this.reportPersistenceFailure(
+            adoptionError.originalError,
+            agentCallId,
+          );
         }
+        await this.recoverAcceptedSubmission(agentCallId, error.accepted);
         this.reportBackgroundError(error.originalError, agentCallId);
         return blockingUncertainResult(agentCallId);
       }
@@ -443,6 +447,7 @@ export class AgentCallService
     reservedTask: AsyncToolTask,
   ): Promise<AgentCallAsyncInvocationResult> {
     const agentCallId = reservedTask.taskId;
+    let persistenceUncertain = false;
     try {
       const submission = await this.performSubmit(request, agentCallId, () => {
         this.testHooks?.beforeAsyncTaskAcceptance?.();
@@ -462,43 +467,28 @@ export class AgentCallService
               privateReference: this.privateReferenceForAcceptedRecord(record),
             },
           );
-          this.taskBackedAgentCallIds.add(agentCallId);
         } catch (error) {
-          throw new AgentCallTaskStatePersistenceFailure(error);
+          if (!(error instanceof AsyncToolTaskPersistenceError)) throw error;
+          // Establish the fallback synchronously, before the registered initial
+          // outcome watcher or an immediate continuation can process a snapshot.
+          this.taskService.retainPersistenceUncertain({
+            taskId: agentCallId,
+            sessionId: request.sessionId,
+            sourceRunId: request.runId,
+            sourceToolCallId: request.sourceToolCallId,
+            toolName: request.toolName,
+            kind: AGENT_CALL_TASK_KIND,
+            payload: agentCallTaskPayload(record),
+            state: "unknown",
+            knownTask: reservedTask,
+            privateReference: this.privateReferenceForAcceptedRecord(record),
+          });
+          persistenceUncertain = true;
+          this.reportPersistenceFailure(error.originalError, agentCallId);
         }
-      });
-      return {
-        status: "accepted",
-        taskId: submission.agentCallId,
-        state: submission.state,
-      };
-    } catch (error) {
-      let task: AsyncToolTask | undefined;
-      if (
-        error instanceof AgentCallAcceptedBookkeepingFailure &&
-        error.originalError instanceof AgentCallTaskStatePersistenceFailure
-      ) {
-        const record = error.accepted.record;
-        task = this.taskService.retainPersistenceUncertain({
-          taskId: agentCallId,
-          sessionId: request.sessionId,
-          sourceRunId: request.runId,
-          sourceToolCallId: request.sourceToolCallId,
-          toolName: request.toolName,
-          kind: AGENT_CALL_TASK_KIND,
-          payload: agentCallTaskPayload(record),
-          state: "unknown",
-          knownTask: reservedTask,
-          privateReference: this.privateReferenceForAcceptedRecord(record),
-        });
         this.taskBackedAgentCallIds.add(agentCallId);
-        this.reportPersistenceFailure(
-          error.originalError.originalError,
-          agentCallId,
-        );
-        if (!this.activeWatchers.has(agentCallId)) {
-          this.startWatcher(agentCallId, error.accepted.snapshot);
-        }
+      });
+      if (persistenceUncertain) {
         return {
           status: "accepted",
           taskId: agentCallId,
@@ -507,6 +497,13 @@ export class AgentCallService
           persistenceWarning: "task-state-not-persisted",
         };
       }
+      return {
+        status: "accepted",
+        taskId: submission.agentCallId,
+        state: submission.state,
+      };
+    } catch (error) {
+      let task: AsyncToolTask | undefined;
       task = this.taskService.get(request.sessionId, agentCallId);
       if (error instanceof AgentCallPreacceptFailure) {
         if (task?.state !== "submitting") {
