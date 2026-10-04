@@ -17,6 +17,20 @@ describe("SimpleLruMap", () => {
     expect(cache.size).toBe(2);
   });
 
+  test("updates an existing key and refreshes its LRU position", () => {
+    const cache = new SimpleLruMap<string, number>(2);
+
+    cache.set("a", 1);
+    cache.set("b", 2);
+    cache.set("a", 3);
+    cache.set("c", 4);
+
+    expect(cache.get("a")).toBe(3);
+    expect(cache.has("b")).toBe(false);
+    expect(cache.has("c")).toBe(true);
+    expect(cache.size).toBe(2);
+  });
+
   test("rejects invalid max sizes", () => {
     expect(() => new SimpleLruMap<string, number>(0)).toThrow(
       /maxSize must be a positive integer/
