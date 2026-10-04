@@ -190,9 +190,21 @@ export function createHuanLinkServerRuntime(
   let startOperation: Promise<void> | undefined;
   let closeOperation: Promise<void> | undefined;
   let cleanupOperation: Promise<Error[]> | undefined;
+  let executionCloseOperation: Promise<Error[]> | undefined;
 
-  const performCleanupDependencies = (): Promise<Error[]> =>
-    closeBestEffort([options.channels, options.phase3, options.storeOwner]);
+  const stopExecutionLayers = (): Promise<Error[]> => {
+    // Both close calls start synchronously: a slow Channel handshake must not
+    // delay Phase3's admission gate and cancellation of queued/active turns.
+    executionCloseOperation ??= Promise.all([
+      closeBestEffort([options.channels]),
+      closeBestEffort([options.phase3]),
+    ]).then((failures) => failures.flat());
+    return executionCloseOperation;
+  };
+  const performCleanupDependencies = async (): Promise<Error[]> => {
+    const failures = await stopExecutionLayers();
+    return [...failures, ...(await closeBestEffort([options.storeOwner]))];
+  };
   const cleanupDependencies = (): Promise<Error[]> => {
     cleanupOperation ??= performCleanupDependencies();
     return cleanupOperation;
@@ -249,6 +261,9 @@ export function createHuanLinkServerRuntime(
     }
     if (state === "starting") {
       state = "closing";
+      // Stop execution now, but keep the Store open until startup/preflight
+      // work has settled and joins the shared cleanup path.
+      void stopExecutionLayers();
       const activeStart = startOperation!;
       closeOperation = activeStart
         .catch(() => undefined)

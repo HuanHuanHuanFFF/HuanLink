@@ -343,81 +343,124 @@ describe("HuanLinkServerRuntime", () => {
     await runtime.close();
   });
 
-  test("persists queued ingress and drains active turns before closing the Store", async () => {
-    const sessionStore = new InMemoryConversationSessionStore();
-    const adapter = new RuntimeIngressAdapter();
-    let activeSignal: AbortSignal | undefined;
-    const releaseTurn = deferred();
-    const storeClose = vi.fn();
-    const failures = vi.fn();
-    const run = vi.fn(
-      async (
-        _agent: unknown,
-        projectedInput: string,
-        options?: { signal?: AbortSignal },
-      ) => {
-        if (!projectedInput.includes('"content":"first"')) {
-          return { finalOutput: "other route completed" };
-        }
-        activeSignal = options?.signal;
-        await releaseTurn.promise;
-        return { finalOutput: "late result" };
-      },
-    );
-    const runtime = await assembleHuanLinkServerRuntime({
-      taskService: testTaskService(),
-      createStore: () => ({
-        sessionStore,
-        storeOwner: { close: storeClose },
-      }),
-      createPhase3: (input) =>
-        createPhase3HuanLinkRuntime({
-          ...input,
-          codexA2aOrigin: "http://127.0.0.1:1",
-          transport: unusedTransport(),
-          runner: { run },
-          onBackgroundError: failures,
+  test.each([
+    ["immediate", "fresh"],
+    ["delayed", "fresh"],
+    ["delayed", "reentry"],
+  ] as const)(
+    "stops queued turns immediately with %s Adapter close (%s)",
+    async (closeMode, queuedKind) => {
+      const sessionStore = new InMemoryConversationSessionStore();
+      const taskService = testTaskService();
+      const adapter = new RuntimeIngressAdapter();
+      const releaseAdapter = deferred();
+      if (closeMode === "delayed") {
+        vi.spyOn(adapter, "close").mockImplementation(
+          () => releaseAdapter.promise,
+        );
+      }
+      let activeSignal: AbortSignal | undefined;
+      const releaseTurn = deferred();
+      const storeClose = vi.fn();
+      const failures = vi.fn();
+      const run = vi.fn(
+        async (
+          _agent: unknown,
+          projectedInput: string,
+          options?: { signal?: AbortSignal },
+        ) => {
+          if (!projectedInput.includes('"content":"first"')) {
+            return { finalOutput: "other route completed" };
+          }
+          activeSignal = options?.signal;
+          await releaseTurn.promise;
+          return { finalOutput: "late result" };
+        },
+      );
+      const runtime = await assembleHuanLinkServerRuntime({
+        taskService,
+        createStore: () => ({
+          sessionStore,
+          storeOwner: { close: storeClose },
         }),
-      createChannels: ({ onChannelMessage }) =>
-        createChannelRuntime({
-          channels: [
-            {
-              adapter,
-              inboundPolicy: {
-                groups: { mode: "denylist", ids: [] },
-                directs: { mode: "denylist", ids: [] },
+        createPhase3: (input) =>
+          createPhase3HuanLinkRuntime({
+            ...input,
+            codexA2aOrigin: "http://127.0.0.1:1",
+            transport: unusedTransport(),
+            runner: { run },
+            onBackgroundError: failures,
+          }),
+        createChannels: ({ onChannelMessage }) =>
+          createChannelRuntime({
+            channels: [
+              {
+                adapter,
+                inboundPolicy: {
+                  groups: { mode: "denylist", ids: [] },
+                  directs: { mode: "denylist", ids: [] },
+                },
               },
-            },
-          ],
-          onMessage: onChannelMessage,
-        }),
-    });
-    await runtime.start();
+            ],
+            onMessage: onChannelMessage,
+          }),
+      });
+      await runtime.start();
 
-    adapter.emit(ingressMention("first", "10001"));
-    await vi.waitFor(() => expect(run).toHaveBeenCalledOnce());
-    adapter.emit(ingressMention("queued-same-route", "10001"));
-    adapter.emit(ingressMention("other-route", "20002"));
+      adapter.emit(ingressMention("first", "10001"));
+      await vi.waitFor(() => expect(run).toHaveBeenCalledOnce());
+      if (queuedKind === "fresh") {
+        adapter.emit(ingressMention("queued-same-route", "10001"));
+      } else {
+        const sessionId = "channel:qq-main:group:10001";
+        sessionStore.appendAgentToolCall(sessionId, {
+          runId: "source-run",
+          toolCallId: "source-call",
+          toolName: "submit_codex_agent_call",
+          arguments: {},
+        });
+        const reservation = taskService.reserve({
+          sessionId,
+          sourceRunId: "source-run",
+          sourceToolCallId: "source-call",
+          kind: "agent-call",
+          toolName: "submit_codex_agent_call",
+          payload: { artifacts: [] },
+        });
+        if (reservation.status !== "reserved")
+          throw new Error("Expected reservation");
+        taskService.accept(sessionId, reservation.task.taskId, {
+          state: "completed",
+        });
+      }
+      adapter.emit(ingressMention("other-route", "20002"));
 
-    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(2));
-    const closing = runtime.close();
-    try {
-      await vi.waitFor(() => expect(activeSignal?.aborted).toBe(true));
-      expect(storeClose).not.toHaveBeenCalled();
-    } finally {
-      releaseTurn.resolve();
-      await closing;
-    }
-    expect(storeClose).toHaveBeenCalledOnce();
-    expect(run).toHaveBeenCalledTimes(2);
-    expect(failures).not.toHaveBeenCalled();
-    expect(
-      sessionStore.getSession("channel:qq-main:group:10001")?.timeline,
-    ).toHaveLength(2);
-    expect(
-      sessionStore.getSession("channel:qq-main:group:20002")?.timeline,
-    ).toHaveLength(1);
-  });
+      await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(2));
+      const closing = runtime.close();
+      try {
+        expect(runtime.state).toBe("closing");
+        expect(activeSignal?.aborted).toBe(true);
+        expect(storeClose).not.toHaveBeenCalled();
+        releaseTurn.resolve();
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(run).toHaveBeenCalledTimes(2);
+        if (closeMode === "delayed") expect(storeClose).not.toHaveBeenCalled();
+      } finally {
+        releaseTurn.resolve();
+        releaseAdapter.resolve();
+        await closing;
+      }
+      expect(storeClose).toHaveBeenCalledOnce();
+      expect(run).toHaveBeenCalledTimes(2);
+      expect(failures).not.toHaveBeenCalled();
+      expect(
+        sessionStore.getSession("channel:qq-main:group:10001")?.timeline,
+      ).toHaveLength(2);
+      expect(
+        sessionStore.getSession("channel:qq-main:group:20002")?.timeline,
+      ).toHaveLength(1);
+    },
+  );
 
   test("closes acquired construction resources in reverse order when a later factory fails", async () => {
     const events: string[] = [];
@@ -558,7 +601,7 @@ describe("HuanLinkServerRuntime", () => {
     expect(fakes.runtime.state).toBe("failed");
   });
 
-  test("shares one concurrent close operation and closes resources once in reverse order", async () => {
+  test("shares one close operation, signals both execution layers, and closes the Store last", async () => {
     const channelCloseEntered = deferred();
     const allowChannelClose = deferred();
     const fakes = createFakes({
@@ -575,6 +618,8 @@ describe("HuanLinkServerRuntime", () => {
 
     expect(secondClose).toBe(firstClose);
     expect(fakes.runtime.state).toBe("closing");
+    expect(fakes.phase3.close).toHaveBeenCalledOnce();
+    expect(fakes.storeOwner.close).not.toHaveBeenCalled();
     allowChannelClose.resolve();
     await firstClose;
     await expect(fakes.runtime.close()).resolves.toBeUndefined();
@@ -613,6 +658,9 @@ describe("HuanLinkServerRuntime", () => {
     } satisfies Partial<HuanLinkServerRuntimeStateError>);
     const closing = fakes.runtime.close();
     expect(fakes.runtime.state).toBe("closing");
+    expect(fakes.channels.close).toHaveBeenCalledOnce();
+    expect(fakes.phase3.close).toHaveBeenCalledOnce();
+    expect(fakes.storeOwner.close).not.toHaveBeenCalled();
     allowPreflight.resolve();
     await expect(starting).rejects.toMatchObject({
       name: "HuanLinkServerRuntimeStateError",

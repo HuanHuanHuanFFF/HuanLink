@@ -10,6 +10,7 @@ import {
   ConversationSessionStoreToolHistoryRecorder,
   InMemoryConversationSessionStore,
   InMemoryAsyncToolTaskStore,
+  NoopRuntimeLogger,
   type AsyncToolTask,
   type AsyncToolTaskStoreReplaceOptions,
   type AgentCallTransport,
@@ -139,12 +140,16 @@ describe("Phase 3 Task re-entry", () => {
     }
   });
 
-  test.each(["projection", "runner", "observer"])(
+  test.each(["projection", "runner", "observer", "async-observer"])(
     "reports an enqueued turn's %s failure without blocking the next turn",
     async (failureAt) => {
       const errors = vi.fn(() => {
         if (failureAt === "observer") throw new Error("observer unavailable");
+        if (failureAt === "async-observer")
+          return Promise.reject(new Error("async observer unavailable"));
       });
+      const logger = new NoopRuntimeLogger();
+      const logError = vi.spyOn(logger, "error");
       const run = vi.fn(async () => {
         if (run.mock.calls.length === 1 && failureAt !== "projection") {
           throw new Error("model unavailable");
@@ -167,6 +172,7 @@ describe("Phase 3 Task re-entry", () => {
           return "latest";
         },
         onBackgroundError: errors,
+        logger,
       });
       try {
         runtime.enqueueMainAgent({ runId: "first", sessionId: "session-1" });
@@ -175,12 +181,71 @@ describe("Phase 3 Task re-entry", () => {
         await vi.waitFor(() =>
           expect(run).toHaveBeenCalledTimes(failureAt === "projection" ? 1 : 2),
         );
+        if (failureAt.endsWith("observer")) {
+          await vi.waitFor(() =>
+            expect(logError).toHaveBeenCalledWith(
+              "main_agent.background_listener.failed",
+              { errorType: "Error" },
+            ),
+          );
+        }
       } finally {
         await runtime.close();
       }
       expect(() =>
         runtime.enqueueMainAgent({ runId: "closed", sessionId: "session-1" }),
       ).toThrow(/closed/);
+    },
+  );
+
+  test.each(["sync", "async"])(
+    "contains a %s observer failure while reporting a failed task re-entry",
+    async (mode) => {
+      const tasks = new AsyncToolTaskService({
+        maxActiveTasksPerSession: 1,
+        taskKinds: [delayedToolKind],
+      });
+      const logger = new NoopRuntimeLogger();
+      const logError = vi.spyOn(logger, "error");
+      const observer = vi.fn(() => {
+        if (mode === "sync") throw new Error("observer failed");
+        return Promise.reject(new Error("observer failed asynchronously"));
+      });
+      const runtime = createPhase3HuanLinkRuntime({
+        codexA2aOrigin: "http://127.0.0.1:1",
+        transport: unusedTransport(),
+        taskService: tasks,
+        sessionStore: new InMemoryConversationSessionStore(),
+        onBackgroundError: observer,
+        logger,
+      });
+      try {
+        const reservation = tasks.reserve({
+          sessionId: "session-missing-source",
+          sourceRunId: "run-missing",
+          sourceToolCallId: "call-missing",
+          kind: delayedToolKind.kind,
+          toolName: "delayed_tool",
+          payload: {},
+        });
+        if (reservation.status !== "reserved")
+          throw new Error("Expected reservation");
+        tasks.accept("session-missing-source", reservation.task.taskId, {
+          state: "completed",
+        });
+        await vi.waitFor(() =>
+          expect(logError).toHaveBeenCalledWith(
+            "main_agent.background_listener.failed",
+            { errorType: "Error" },
+          ),
+        );
+        expect(observer).toHaveBeenCalledOnce();
+        expect(
+          tasks.getStatus("session-missing-source", reservation.task.taskId),
+        ).toMatchObject({ state: "completed" });
+      } finally {
+        await runtime.close();
+      }
     },
   );
 

@@ -144,9 +144,29 @@ export function createPhase3HuanLinkRuntime(
         errorType: runtimeErrorType(error),
       });
     });
+  const reportObserverFailure = (error: unknown): void => {
+    logger.error("main_agent.background_listener.failed", {
+      errorType: runtimeErrorType(error),
+    });
+  };
+  // Diagnostic observers are best-effort, not part of the execution result.
+  // Cover both a synchronous throw and a rejected observer Promise.
+  const reportBackgroundError: AgentCallBackgroundErrorListener = (
+    error,
+    record,
+  ) => {
+    try {
+      void Promise.resolve(onBackgroundError(error, record)).catch(
+        reportObserverFailure,
+      );
+    } catch (observerError) {
+      reportObserverFailure(observerError);
+    }
+  };
 
-  const unsubscribeBackgroundError =
-    agentCalls.onBackgroundError(onBackgroundError);
+  const unsubscribeBackgroundError = agentCalls.onBackgroundError(
+    reportBackgroundError,
+  );
   let closed = false;
   let closeOperation: Promise<void> | undefined;
   const activeFreshTurns = new Map<
@@ -341,7 +361,7 @@ export function createPhase3HuanLinkRuntime(
         if (closed && controller.signal.aborted) {
           return;
         }
-        onBackgroundError(normalizeRuntimeError(error), undefined);
+        reportBackgroundError(normalizeRuntimeError(error), undefined);
       })
       .finally(() => activeReentries.delete(controller));
     activeReentries.set(controller, operation);
@@ -430,13 +450,7 @@ export function createPhase3HuanLinkRuntime(
           runId: input.runId,
           errorType: runtimeErrorType(error),
         });
-        try {
-          onBackgroundError(normalizeRuntimeError(error), undefined);
-        } catch (observerError) {
-          logger.error("main_agent.background_listener.failed", {
-            errorType: runtimeErrorType(observerError),
-          });
-        }
+        reportBackgroundError(normalizeRuntimeError(error), undefined);
       });
     },
     close() {
