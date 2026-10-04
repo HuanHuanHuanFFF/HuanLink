@@ -89,3 +89,15 @@ Jev、权限审批、自动 worktree、自动 Git 操作、任务等待队列、
 本轮 Core 330、Server 236、OpenAI Agents 60、A2A Client 25 项通过，共 651 项通过；Server 另有 1 项既有 Windows 符号链接权限条件跳过。全仓类型检查与构建通过。两名独立只读压力 Reviewer 最终复审均无可证实的 P0–P2 阻塞，且各自重跑 Core 330、Server 236 + 1 跳过。首轮复审指出的“受理后首次读取失败”已独立复现并修复；另补“初始 input-required + 首次受理写失败 + 恢复后恰一次 Phase3 回流”贯通测试。
 
 仍不承诺跨重启保留未持久化事实或恢复运行；不增加自动重派/对账，不修改用户 QQ 配置，不触发真实 QQ/Codex 任务。上述证据不等同于生产 SQLite 磁盘满实验或新一轮真实 smoke。
+
+## PR #9 后续修复：错误观察器与关闭准入（2026-10-05）
+
+[新增两项 P2](https://github.com/HuanHuanHuanFFF/HuanLink/pull/9#issuecomment-5982428190) 在 `ae10f61` 上经隔离进程/内存 Runtime 组合确认：异步错误观察器拒绝导致 Node 24 退出码 1；Adapter 关闭等待期间第二个已排队 turn 在 `closing` 状态下启动。此前回归只覆盖同步观察器抛错和无关闭延迟的 Adapter。
+
+代码修复提交：`8f491e0`。
+
+- Phase3 统一错误通知边界覆盖 fresh turn、Task re-entry 与 AgentCall：同步抛错和 Promise 拒绝都被接住，只记录异常类型，不产生未处理拒绝、不改写任务事实、不自动重试。错误观察器仍是 best-effort 诊断通知，不作为业务执行或关闭排空的依赖。
+- Server 在关闭开始时同步调用 Channel 与 Phase3 的关闭入口，立即停止准入并发出取消信号；并行等待两层真实执行结束，最后关闭 Store。启动中关闭同样立即停止执行层，但 Store 保留到 preflight/start 工作结束。清理仍尽力完成全部依赖并保留稳定的错误聚合顺序。
+- 保留入站及时保存、同 Session 串行、回流读取最新上下文、合作式取消和 Store 最后关闭；没有增加队列、恢复机制或硬超时。D13 的当前关闭边界已同步，历史实施结果保留时间限定。
+
+本轮改动仅影响 Server：241 项测试通过，1 项既有 Windows 符号链接权限条件跳过；Server 类型检查与构建通过。新增/加强回归覆盖异步观察器失败、回流错误观察器同步/异步失败、延迟 Adapter 关闭时 fresh/re-entry 不启动，以及启动关闭与共享排空。原 Node 24 隔离复现修复后退出码为 0。两路独立压力审查均无可证实的 P0–P2 阻塞，其中一名独立重跑 Server 241 + 1 跳过。未操作真实 QQ/Codex，也未修改用户配置。
