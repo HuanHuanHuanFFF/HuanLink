@@ -1098,7 +1098,7 @@ export class AgentCallService
         `Remote task ${taskId} continued in unexpected state ${continued.state}`,
       );
     }
-    await this.applySnapshot(agentCallId, continued);
+    await this.applySnapshot(agentCallId, continued, internalSignal);
     if (this.closed) {
       this.recordsByAgentCallId.set(agentCallId, latestRecord);
       await this.rejectContinuationDuringShutdown(agentCallId, taskId);
@@ -1298,7 +1298,12 @@ export class AgentCallService
   private async applySnapshot(
     agentCallId: AgentCallId,
     snapshot: AgentCallTaskSnapshot,
+    retrySignal?: AbortSignal,
   ): Promise<void> {
+    const signal =
+      retrySignal === undefined
+        ? this.persistenceRetryAbort.signal
+        : AbortSignal.any([this.persistenceRetryAbort.signal, retrySignal]);
     const observed = {
       ...snapshot,
       artifacts: cloneArtifacts(snapshot.artifacts),
@@ -1318,9 +1323,9 @@ export class AgentCallService
           this.reportBackgroundError(error.originalError, agentCallId);
           reported = true;
         }
-        if (this.closed) throw error;
-        await waitForPersistenceRetry(this.persistenceRetryAbort.signal);
-        if (this.closed) throw error;
+        if (signal.aborted) throw error;
+        await waitForPersistenceRetry(signal);
+        if (signal.aborted) throw error;
       }
     }
   }

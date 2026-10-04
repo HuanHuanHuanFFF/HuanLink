@@ -370,6 +370,74 @@ test("does not roll back or repeat a persisted terminal when its notification li
   }
 });
 
+test("allows remote cancellation while continuation persistence is waiting for Store recovery", async () => {
+  const store = new FailingSnapshotStore("working");
+  store.failuresRemaining = Infinity;
+  const taskService = new AsyncToolTaskService({
+    store,
+    maxActiveTasksPerSession: 1,
+    taskKinds: [AGENT_CALL_TASK_KIND_DEFINITION],
+  });
+  const writeFailed = deferred();
+  const cancelTask = vi.fn(async () => task("canceled"));
+  const service = new AgentCallService({
+    taskService,
+    transport: {
+      discoverCapability: async (id) => ({ id, name: id }),
+      submitTask: async () => acceptedTask("submitted"),
+      async *watchTask() {
+        yield task("input-required", {
+          questions: [
+            {
+              id: "scope",
+              header: "Scope",
+              question: "Which scope?",
+              isOther: false,
+              isSecret: false,
+              options: null,
+            },
+          ],
+        });
+      },
+      continueTask: async () => task("working"),
+      cancelTask,
+    },
+  });
+  service.onBackgroundError(() => writeFailed.resolve());
+  try {
+    const receipt = await service.invoke({
+      sessionId: "session-cancel-write",
+      runId: "run-1",
+      sourceToolCallId: "call-1",
+      toolName: "submit_codex_agent_call",
+      executionMode: "async",
+      skillId: "codex-code-task",
+      input: "ask",
+    });
+    if (receipt.status !== "accepted") throw new Error("Expected acceptance");
+    await service.waitForIdle();
+    const continuation = service
+      .continueTask({
+        sessionId: "session-cancel-write",
+        taskId: receipt.taskId,
+        answers: { scope: ["Core only"] },
+      })
+      .catch((error) => error);
+    await writeFailed.promise;
+    const canceling = service.cancel(receipt.taskId);
+    await expect
+      .poll(() => cancelTask.mock.calls.length, { timeout: 250 })
+      .toBe(1);
+    await canceling;
+    await continuation;
+    expect(
+      taskService.getStatus("session-cancel-write", receipt.taskId),
+    ).toMatchObject({ state: "canceled" });
+  } finally {
+    await service.close();
+  }
+});
+
 test("rejects split quota owners before any AgentCall can run", () => {
   const taskService = new AsyncToolTaskService({
     quotaService: new SessionTaskQuotaService({
