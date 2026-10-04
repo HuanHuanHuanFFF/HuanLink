@@ -126,6 +126,7 @@ P0 不实现消息聚合队列，也不实现门禁 Agent。当前策略为：
 - P0 不实现自动上下文压缩、摘要 checkpoint、token 预算策略或长期记忆。若当前窗口超出模型限制，必须明确报错，不能暗中截断并破坏 Tool 配对。
 - fresh turn、`input-required` 续跑和 terminal re-entry 必须共用同一个按 Session 串行的 Agent turn 调度边界；Phase3 不得让 re-entry 绕过该边界直接并发调用 MainAgent。
 - 同 Session 的输入必须在真正取得调度槽位后再读取最新上下文窗口；排队时不得预先捕获一份随后变旧的投影。不同 Session 仍可并行。
+- 入站写入不能被正在运行的 MainAgent 阻塞。Coordinator 完成 Store 写入后通过 `enqueueMainAgent` 同步登记 turn 并返回；Phase3 持有执行 Promise、错误监督和关闭排空。普通补充消息同样及时保存，后续回流读取实际执行时的最新窗口。
 
 ## 4. 本计划负责与不负责
 
@@ -207,7 +208,7 @@ B01 完成测试与压力审查后报告文件范围和实际结果，等待用�
 - 新建唯一入站 Coordinator；把 Channel Runtime 的有序事件出口接到该对象，不修改 Channel 合同。
 - 实现 `appendChannelMessage` 结果、自身消息和当前 trigger 策略。
 - 将 Channel 入站 `AbortSignal` 传递给 MainAgent 调度；关闭后不得开始新 turn。
-- 普通消息只写 Store；非自身 `mention | command` 成功写入后调用可注入的 MainAgent runner。
+- 普通消息只写 Store；非自身 `mention | command` 成功写入后通过可注入的 `enqueueMainAgent` 登记 turn，不等待整轮执行完成。
 - 只定义可替换调度边界，不实现队列和门禁 Agent。
 
 ### 验收
@@ -216,6 +217,8 @@ B01 完成测试与压力审查后报告文件范围和实际结果，等待用�
 - 同一 route 继承 Channel Runtime 顺序；不同 route 不被全局锁串行化。
 - Store 写入失败时不启动 MainAgent；MainAgent 失败不回滚已观察到的平台消息事实。
 - 关闭期间不产生新的 MainAgent turn，已开始操作按 AbortSignal 协作取消。
+
+2026-10-05 用户确认的后置修正：替代 B02 原先“Coordinator 等待整轮 MainAgent、后续消息留在 Channel”的简化方案。Channel 只保持入站事实写入/登记顺序，Session Scheduler 保持执行串行；不新增消息聚合、门禁或任务恢复队列。运行失败仍保留消息事实并由 Phase3 报错，关闭继续等待真实运行结束后再闭库。
 
 ### 停点
 
