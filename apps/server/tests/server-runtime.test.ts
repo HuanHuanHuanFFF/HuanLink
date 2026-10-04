@@ -1,22 +1,22 @@
 import type {
-  ChannelAdapterV1,
-  ChannelDescriptorV1,
-  ChannelMessageListenerV1,
-  DeliveryReceiptV1,
-  InboundChannelMessageV1,
-  RetractChannelMessageCommandV1,
-  SendChannelMessageCommandV1,
+  ChannelAdapter,
+  ChannelDescriptor,
+  ChannelMessageListener,
+  DeliveryReceipt,
+  InboundChannelMessage,
+  RetractChannelMessageCommand,
+  SendChannelMessageCommand,
 } from "@huanlink/core";
 import { describe, expect, test, vi } from "vitest";
 
 import type { ServerChannelRuntimeConfig } from "../src/local-user-config.js";
 import { createServerRuntime } from "../src/server-runtime.js";
 
-class FakeChannelAdapter implements ChannelAdapterV1 {
-  readonly descriptor: ChannelDescriptorV1;
+class FakeChannelAdapter implements ChannelAdapter {
+  readonly descriptor: ChannelDescriptor;
   readonly start = vi.fn(async () => undefined);
   readonly close = vi.fn(async () => undefined);
-  private readonly listeners = new Set<ChannelMessageListenerV1>();
+  private readonly listeners = new Set<ChannelMessageListener>();
 
   constructor(channelId: string) {
     this.descriptor = {
@@ -42,20 +42,18 @@ class FakeChannelAdapter implements ChannelAdapterV1 {
     };
   }
 
-  onMessage(listener: ChannelMessageListenerV1): () => void {
+  onMessage(listener: ChannelMessageListener): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
 
-  async send(
-    _command: SendChannelMessageCommandV1,
-  ): Promise<DeliveryReceiptV1> {
+  async send(_command: SendChannelMessageCommand): Promise<DeliveryReceipt> {
     return { channelId: this.descriptor.channelId, messageId: "sent" };
   }
 
-  async retract(_command: RetractChannelMessageCommandV1): Promise<void> {}
+  async retract(_command: RetractChannelMessageCommand): Promise<void> {}
 
-  emit(message: InboundChannelMessageV1): void {
+  emit(message: InboundChannelMessage): void {
     for (const listener of this.listeners) {
       void listener(message);
     }
@@ -63,7 +61,7 @@ class FakeChannelAdapter implements ChannelAdapterV1 {
 }
 
 describe("ServerRuntime", () => {
-  test("builds every configured V1 Channel and forwards self events without Agent decisions", async () => {
+  test("builds every configured Channel and forwards self events without Agent decisions", async () => {
     const config = serverConfig();
     const adapters = new Map<string, FakeChannelAdapter>();
     const closeOrder: string[] = [];
@@ -323,7 +321,7 @@ function inbound(input: {
   messageId: string;
   isSelf: boolean;
   conversationId?: string;
-}): InboundChannelMessageV1 {
+}): InboundChannelMessage {
   return {
     messageId: input.messageId,
     route: {

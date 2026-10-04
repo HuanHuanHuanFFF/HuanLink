@@ -2,10 +2,10 @@ import { watch } from "node:fs";
 
 import {
   NoopRuntimeLogger,
-  type ChannelAdapterV1,
+  type ChannelAdapter,
   type RuntimeLogger,
 } from "@huanlink/core";
-import { createForwardWebSocketOneBot11ChannelAdapterV1 } from "@huanlink/integration-onebot11";
+import { createForwardWebSocketOneBot11ChannelAdapter } from "@huanlink/integration-onebot11";
 
 import {
   createChannelAccessPolicyReloader,
@@ -25,7 +25,7 @@ type ServerChannelConfig = ServerChannelRuntimeConfig["channels"][number];
 export type ServerChannelAdapterFactory = (
   config: ServerChannelConfig,
   logger: RuntimeLogger,
-) => ChannelAdapterV1;
+) => ChannelAdapter;
 
 export type CreateServerRuntimeOptions = {
   readonly config: ServerChannelRuntimeConfig;
@@ -42,7 +42,7 @@ export type CreateServerRuntimeOptions = {
 /**
  * 正式 Server Channel 组合根。
  *
- * 本层只装配 V1 Adapter、Channel Runtime、名单热重载和统一事件出口；
+ * 本层只装配 Channel Adapter、Channel Runtime、名单热重载和统一事件出口；
  * 不保存 Session，不选择 Agent，也不判断一条消息是否应触发 Agent。
  */
 export interface ServerRuntime {
@@ -102,10 +102,10 @@ export function createServerRuntime(
 function createConfiguredChannelAdapter(
   config: ServerChannelConfig,
   logger: RuntimeLogger,
-): ChannelAdapterV1 {
+): ChannelAdapter {
   switch (config.type) {
     case "onebot11-forward-websocket":
-      return createForwardWebSocketOneBot11ChannelAdapterV1({
+      return createForwardWebSocketOneBot11ChannelAdapter({
         channelId: config.channelId,
         url: config.url,
         ...(config.accessToken === undefined

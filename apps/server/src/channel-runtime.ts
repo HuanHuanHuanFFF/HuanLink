@@ -4,9 +4,9 @@ import {
   ChannelOperationError,
   NoopRuntimeLogger,
   channelSessionIdFor,
-  type ChannelAdapterV1,
-  type ChannelConversationRouteV1,
-  type InboundChannelMessageV1,
+  type ChannelAdapter,
+  type ChannelConversationRoute,
+  type InboundChannelMessage,
   type RuntimeLogFields,
   type RuntimeLogger,
   type SessionId,
@@ -20,13 +20,13 @@ import {
 import { createBestEffortRuntimeLogger } from "./best-effort-runtime-logger.js";
 
 export type ChannelRuntimeRegistration = {
-  readonly adapter: ChannelAdapterV1;
+  readonly adapter: ChannelAdapter;
   readonly inboundPolicy: ChannelInboundAccessPolicy;
 };
 
 export type ChannelRuntimeMessage = {
   readonly sessionId: SessionId;
-  readonly message: InboundChannelMessageV1;
+  readonly message: InboundChannelMessage;
   readonly signal: AbortSignal;
 };
 
@@ -49,8 +49,8 @@ export type CreateChannelRuntimeOptions = {
 export interface ChannelRuntime {
   start(): Promise<void>;
   close(): Promise<void>;
-  resolveAdapter(channelId: string): ChannelAdapterV1 | undefined;
-  isRouteAllowed(route: ChannelConversationRouteV1): boolean;
+  resolveAdapter(channelId: string): ChannelAdapter | undefined;
+  isRouteAllowed(route: ChannelConversationRoute): boolean;
   /** 原子替换一个 Channel 的接收名单；校验失败时继续使用旧策略。 */
   replaceAccessPolicy(
     channelId: string,
@@ -61,9 +61,9 @@ export interface ChannelRuntime {
     policies: ReadonlyMap<string, ChannelInboundAccessPolicy>,
   ): void;
   /** 使用 Core 的规范规则生成目标外部会话 ID。 */
-  sessionIdForRoute(route: ChannelConversationRouteV1): SessionId;
+  sessionIdForRoute(route: ChannelConversationRoute): SessionId;
   runOutbound<T>(
-    route: ChannelConversationRouteV1,
+    route: ChannelConversationRoute,
     operation: () => Promise<T>,
   ): Promise<T>;
   /**
@@ -74,9 +74,9 @@ export interface ChannelRuntime {
 }
 
 type RegisteredChannel = {
-  readonly adapter: ChannelAdapterV1;
+  readonly adapter: ChannelAdapter;
   inboundPolicy: ChannelInboundAccessPolicy;
-  readonly orderedAdapter: ChannelAdapterV1;
+  readonly orderedAdapter: ChannelAdapter;
 };
 
 /**
@@ -246,7 +246,7 @@ export function createChannelRuntime(
 
   async function receive(
     registration: ChannelRuntimeRegistration,
-    message: InboundChannelMessageV1,
+    message: InboundChannelMessage,
   ): Promise<void> {
     const expectedChannelId = registration.adapter.descriptor.channelId;
     const fields = messageLogFields(message);
@@ -293,7 +293,7 @@ export function createChannelRuntime(
 
   function scheduleForward(
     sessionId: SessionId,
-    message: InboundChannelMessageV1,
+    message: InboundChannelMessage,
     fields: RuntimeLogFields,
   ): void {
     const controller = new AbortController();
@@ -391,7 +391,7 @@ export function createChannelRuntime(
   }
 
   function runOutbound<T>(
-    route: ChannelConversationRouteV1,
+    route: ChannelConversationRoute,
     operation: () => Promise<T>,
   ): Promise<T> {
     const registration = registrations.get(route.channelId);
@@ -514,9 +514,9 @@ export function createChannelRuntime(
 }
 
 function orderedAdapter(
-  adapter: ChannelAdapterV1,
+  adapter: ChannelAdapter,
   runOutbound: ChannelRuntime["runOutbound"],
-): ChannelAdapterV1 {
+): ChannelAdapter {
   return {
     descriptor: adapter.descriptor,
     start: () => adapter.start(),
@@ -557,7 +557,7 @@ function orderedAdapter(
 
 function isRegisteredRouteAllowed(
   registration: ChannelRuntimeRegistration,
-  route: ChannelConversationRouteV1,
+  route: ChannelConversationRoute,
 ): boolean {
   const capabilities = registration.adapter.descriptor.capabilities;
   return (
@@ -567,7 +567,7 @@ function isRegisteredRouteAllowed(
   );
 }
 
-function messageLogFields(message: InboundChannelMessageV1): RuntimeLogFields {
+function messageLogFields(message: InboundChannelMessage): RuntimeLogFields {
   return {
     channelId: message.route.channelId,
     conversationKind: message.route.conversationKind,

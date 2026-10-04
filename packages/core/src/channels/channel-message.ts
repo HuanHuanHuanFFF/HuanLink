@@ -1,7 +1,7 @@
-import type { ChannelConversationRouteV1 } from "./channel-instance-v1.js";
+import type { ChannelConversationRoute } from "./channel-instance.js";
 
 /** 附件内容的公共类别。 */
-export type ChannelAttachmentKindV1 = "image" | "audio" | "video" | "file";
+export type ChannelAttachmentKind = "image" | "audio" | "video" | "file";
 
 /**
  * 平台内的发送者身份；它不代表 HuanLink 权限或跨平台用户身份。
@@ -10,7 +10,7 @@ export type ChannelAttachmentKindV1 = "image" | "audio" | "video" | "file";
  * 可用名称时回退为 `id`，不能因此丢弃消息。`displayName` 是当前会话内的
  * 可选显示名称，例如 OneBot 群名片 `sender.card`，不与 username 重复填充。
  */
-export type ChannelSenderIdentityV1 = {
+export type ChannelSenderIdentity = {
   /** 平台内稳定 ID，例如 OneBot `user_id`。 */
   readonly id: string;
   /** 平台账户基础名称，例如 OneBot `sender.nickname`。 */
@@ -22,7 +22,7 @@ export type ChannelSenderIdentityV1 = {
 };
 
 /** Server 主动发给 Channel 的文本内容。 */
-export type ChannelOutboundTextPartV1 = {
+export type ChannelOutboundTextPart = {
   readonly type: "text";
   readonly text: string;
 };
@@ -31,7 +31,7 @@ export type ChannelOutboundTextPartV1 = {
  * Server 主动发给 Channel 的平台用户、Bot 或全体成员提及。
  * `targetId` 使用平台用户 ID；保留值 `all` 表示全体成员。
  */
-export type ChannelOutboundMentionPartV1 = {
+export type ChannelOutboundMentionPart = {
   readonly type: "mention";
   readonly targetId: string;
   readonly displayName?: string;
@@ -43,9 +43,9 @@ export type ChannelOutboundMentionPartV1 = {
  * `attachmentLink` 不接受本地路径、Base64 或原始字节，也不要求
  * Adapter 下载附件。
  */
-export type ChannelOutboundAttachmentLinkPartV1 = {
+export type ChannelOutboundAttachmentLinkPart = {
   readonly type: "attachmentLink";
-  readonly kind: ChannelAttachmentKindV1;
+  readonly kind: ChannelAttachmentKind;
   readonly url: string;
   readonly name?: string;
   readonly mimeType?: string;
@@ -57,35 +57,35 @@ export type ChannelOutboundAttachmentLinkPartV1 = {
  * `path` 是 HuanLink/Adapter 所在机器可读取的绝对路径。合同不读取或复制
  * 文件；Adapter 在实际发送时负责检查文件并映射为平台上传操作。
  */
-export type ChannelOutboundAttachmentLocalPathPartV1 = {
+export type ChannelOutboundAttachmentLocalPathPart = {
   readonly type: "attachmentLocalPath";
-  readonly kind: ChannelAttachmentKindV1;
+  readonly kind: ChannelAttachmentKind;
   readonly path: string;
   readonly name?: string;
   readonly mimeType?: string;
 };
 
 /** 出站消息由这些 Part 按数组顺序组成。 */
-export type ChannelOutboundMessagePartV1 =
-  | ChannelOutboundTextPartV1
-  | ChannelOutboundMentionPartV1
-  | ChannelOutboundAttachmentLinkPartV1
-  | ChannelOutboundAttachmentLocalPathPartV1;
+export type ChannelOutboundMessagePart =
+  | ChannelOutboundTextPart
+  | ChannelOutboundMentionPart
+  | ChannelOutboundAttachmentLinkPart
+  | ChannelOutboundAttachmentLocalPathPart;
 
 /** Adapter 已规范化的触发事实，而不是权限或授权。 */
-export type ChannelTriggerV1 = {
+export type ChannelTrigger = {
   readonly kind: "mention" | "command";
 };
 
 /** 入站内容完整保留时允许的 UTF-8 字节数。 */
-export const CHANNEL_INBOUND_CONTENT_MAX_BYTES_V1 = 8 * 1024;
+export const CHANNEL_INBOUND_CONTENT_MAX_BYTES = 8 * 1024;
 
 /** 入站内容超限时转发到 session 的固定占位文本。 */
-export const CHANNEL_INBOUND_CONTENT_TOO_LARGE_PLACEHOLDER_V1 =
+export const CHANNEL_INBOUND_CONTENT_TOO_LARGE_PLACEHOLDER =
   "[HuanLink: inbound content omitted because it exceeds 8192 bytes]";
 
 /** 原始入站内容因超过合同上限而未进入 session。 */
-export type ChannelContentOmittedV1 = {
+export type ChannelContentOmitted = {
   readonly reason: "too_large";
   readonly originalSizeBytes: number;
 };
@@ -96,15 +96,15 @@ export type ChannelContentOmittedV1 = {
  * `content` 是 Adapter 生成的平台格式字符串，Core 不解析或清理其内容。
  * OneBot Adapter 使用 `onebot11.cq` 并保留完整 CQ 字符串。
  */
-export type InboundChannelMessageV1 = {
+export type InboundChannelMessage = {
   readonly messageId: string;
-  readonly route: ChannelConversationRouteV1;
-  readonly sender: ChannelSenderIdentityV1;
+  readonly route: ChannelConversationRoute;
+  readonly sender: ChannelSenderIdentity;
   /** Adapter 规范化后的 UTC ISO-8601 时间，例如 `2026-07-22T00:00:00.000Z`。 */
   readonly receivedAt: string;
   readonly content: string;
   readonly contentFormat: string;
-  readonly contentOmitted?: ChannelContentOmittedV1;
+  readonly contentOmitted?: ChannelContentOmitted;
   readonly replyToMessageId?: string;
-  readonly trigger?: ChannelTriggerV1;
+  readonly trigger?: ChannelTrigger;
 };

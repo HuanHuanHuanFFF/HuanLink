@@ -16,6 +16,8 @@ import {
 import {
   loadServerChannelRuntimeConfig,
   loadServerLocalUserConfig,
+  loadHuanLinkServerStaticConfig,
+  resolveServerMainAgentRuntimeConfig,
 } from "../src/local-user-config.js";
 
 const API_KEY = "main-agent-secret";
@@ -136,6 +138,223 @@ describe("loadServerLocalUserConfig", () => {
       },
     });
     expect(config.mainAgent).not.toHaveProperty("apiKey");
+  });
+
+  test("loads the Runtime static configuration through the sole orchestration reference without resolving the MainAgent API key", async () => {
+    const configRoot = fileURLToPath(
+      new URL("../../../.huanlink/config/", import.meta.url),
+    );
+
+    const config = await loadHuanLinkServerStaticConfig({
+      configRoot,
+      env: {},
+    });
+
+    expect(config).toMatchObject({
+      mainAgent: {
+        provider: "deepseek",
+        apiKeyEnv: "DEEPSEEK_API_KEY",
+      },
+      agents: [{ agentId: "codex-local", transport: "a2a", enabled: true }],
+      orchestration: {
+        defaultAgentId: "codex-local",
+        a2aTaskPolicy: { maxActiveTasksPerSession: 2 },
+        asyncToolTaskPolicy: { maxActiveTasksPerSession: 3 },
+      },
+      sources: {
+        orchestration: "server/orchestration.json",
+      },
+    });
+    expect(config.mainAgent).not.toHaveProperty("apiKey");
+    expect(config.channels[0]).not.toHaveProperty("accessToken");
+  });
+
+  test("resolves the MainAgent key only from an already validated static snapshot", async () => {
+    await writeValidServerConfig(tempRoot);
+    const staticConfig = await loadHuanLinkServerStaticConfig({
+      configRoot: tempRoot,
+    });
+
+    expect(
+      resolveServerMainAgentRuntimeConfig(staticConfig, {
+        DEEPSEEK_API_KEY: "runtime-only-key",
+      }),
+    ).toEqual({
+      provider: "deepseek",
+      modelId: "deepseek-v4-flash",
+      baseURL: "https://api.deepseek.com/beta",
+      apiKey: "runtime-only-key",
+    });
+  });
+
+  test("reports the declared MainAgent source when late key resolution fails", async () => {
+    await writeValidServerConfig(tempRoot);
+    const staticConfig = await loadHuanLinkServerStaticConfig({
+      configRoot: tempRoot,
+    });
+
+    expect(() => resolveServerMainAgentRuntimeConfig(staticConfig, {})).toThrow(
+      /server\/main-agent\.json.*apiKeyEnv/,
+    );
+  });
+
+  test.each([
+    [
+      "a missing MainAgent reference",
+      async () => {
+        await writeJson(path.join(tempRoot, "config.json"), {
+          version: 1,
+          server: {
+            orchestration: "./server/orchestration.json",
+            channels: ["./server/channels/onebot11.json"],
+            agents: ["./server/agents/codex-local.json"],
+          },
+        });
+      },
+      /config\.json.*mainAgent/,
+    ],
+    [
+      "a missing orchestration reference",
+      async () => {
+        await writeJson(path.join(tempRoot, "config.json"), {
+          version: 1,
+          server: {
+            mainAgent: "./server/main-agent.json",
+            channels: ["./server/channels/onebot11.json"],
+            agents: ["./server/agents/codex-local.json"],
+          },
+        });
+      },
+      /config\.json.*orchestration/,
+    ],
+    [
+      "a default Agent that does not exist",
+      async () => {
+        await writeJson(path.join(tempRoot, "server", "orchestration.json"), {
+          ...orchestration,
+          defaultAgentId: "missing-agent",
+        });
+      },
+      /server\/orchestration\.json.*defaultAgentId/,
+    ],
+    [
+      "a disabled default Agent",
+      async () => {
+        await writeJson(
+          path.join(tempRoot, "server", "agents", "codex-local.json"),
+          {
+            ...a2aAgent,
+            enabled: false,
+          },
+        );
+      },
+      /server\/orchestration\.json.*defaultAgentId/,
+    ],
+    [
+      "a non-A2A default Agent",
+      async () => {
+        await writeJson(
+          path.join(tempRoot, "server", "agents", "codex-local.json"),
+          {
+            ...a2aAgent,
+            transport: "manual",
+          },
+        );
+      },
+      /server\/agents\/codex-local\.json.*transport/,
+    ],
+  ])(
+    "rejects Runtime static configuration with %s",
+    async (_name, change, expected) => {
+      await writeValidServerConfig(tempRoot);
+      await change();
+
+      await expect(
+        loadHuanLinkServerStaticConfig({ configRoot: tempRoot }),
+      ).rejects.toThrow(expected);
+    },
+  );
+
+  test.each([
+    [
+      "an invalid MainAgent apiKeyEnv name",
+      "server/main-agent.json",
+      { ...mainAgent, apiKeyEnv: "BAD-NAME" },
+      /apiKeyEnv/,
+    ],
+    [
+      "an invalid Agent origin",
+      "server/agents/codex-local.json",
+      { ...a2aAgent, origin: "https://a2a.example.test" },
+      /origin/,
+    ],
+    [
+      "an empty Agent skillId",
+      "server/agents/codex-local.json",
+      { ...a2aAgent, skillId: "   " },
+      /skillId/,
+    ],
+    [
+      "an Agent apiKeyEnv field",
+      "server/agents/codex-local.json",
+      { ...a2aAgent, apiKeyEnv: "CODEX_API_KEY" },
+      /root/,
+    ],
+  ])(
+    "rejects Runtime static configuration with %s",
+    async (_name, relativePath, value, expected) => {
+      await writeValidServerConfig(tempRoot);
+      await writeJson(path.join(tempRoot, relativePath), value);
+
+      await expect(
+        loadHuanLinkServerStaticConfig({ configRoot: tempRoot }),
+      ).rejects.toThrow(expected);
+    },
+  );
+
+  test.each([
+    ["a2aTaskPolicy", undefined],
+    ["a2aTaskPolicy", 0],
+    ["a2aTaskPolicy", 1.5],
+    ["a2aTaskPolicy", Number.MAX_SAFE_INTEGER + 1],
+    ["asyncToolTaskPolicy", undefined],
+    ["asyncToolTaskPolicy", 0],
+    ["asyncToolTaskPolicy", 1.5],
+    ["asyncToolTaskPolicy", Number.MAX_SAFE_INTEGER + 1],
+  ])(
+    "requires %s.maxActiveTasksPerSession to be a safe positive integer (%s)",
+    async (policyName, maxActiveTasksPerSession) => {
+      await writeValidServerConfig(tempRoot);
+      const policy =
+        maxActiveTasksPerSession === undefined
+          ? {}
+          : { maxActiveTasksPerSession };
+      await writeJson(path.join(tempRoot, "server", "orchestration.json"), {
+        ...orchestration,
+        [policyName]: policy,
+      });
+
+      await expect(
+        loadHuanLinkServerStaticConfig({ configRoot: tempRoot }),
+      ).rejects.toThrow(
+        /server\/orchestration\.json.*maxActiveTasksPerSession/,
+      );
+    },
+  );
+
+  test("rejects the removed agentCallPolicy alias", async () => {
+    await writeValidServerConfig(tempRoot);
+    await writeJson(path.join(tempRoot, "server", "orchestration.json"), {
+      version: 1,
+      defaultAgentId: "codex-local",
+      a2aTaskPolicy: { maxActiveTasksPerSession: 2 },
+      agentCallPolicy: { maxActiveTasksPerSession: 2 },
+      asyncToolTaskPolicy: { maxActiveTasksPerSession: 3 },
+    });
+
+    await expect(
+      loadHuanLinkServerStaticConfig({ configRoot: tempRoot }),
+    ).rejects.toThrow(/server\/orchestration\.json.*root/);
   });
 
   test("loads a Channel-only Server configuration without MainAgent or external Agents", async () => {
@@ -1019,6 +1238,17 @@ const a2aAgent = {
   enabled: true,
 };
 
+const orchestration = {
+  version: 1,
+  defaultAgentId: "codex-local",
+  a2aTaskPolicy: {
+    maxActiveTasksPerSession: 2,
+  },
+  asyncToolTaskPolicy: {
+    maxActiveTasksPerSession: 3,
+  },
+};
+
 type ServerConfigEntry = {
   mainAgent: string;
   channels: string[];
@@ -1038,12 +1268,18 @@ async function writeValidServerConfig(
   input: {
     channels?: Array<[string, object]>;
     agents?: Array<[string, object]>;
+    orchestration?: object;
     config?: object;
   } = {},
 ): Promise<void> {
   const channels = input.channels ?? [["onebot11.json", oneBotChannel]];
   const agents = input.agents ?? [["codex-local.json", a2aAgent]];
+  const orchestrationConfig = input.orchestration ?? orchestration;
   await writeJson(path.join(root, "server", "main-agent.json"), mainAgent);
+  await writeJson(
+    path.join(root, "server", "orchestration.json"),
+    orchestrationConfig,
+  );
   for (const [name, value] of channels) {
     await writeJson(path.join(root, "server", "channels", name), value);
   }
@@ -1056,6 +1292,7 @@ async function writeValidServerConfig(
       version: 1,
       server: {
         mainAgent: "./server/main-agent.json",
+        orchestration: "./server/orchestration.json",
         channels: channels.map(([name]) => `./server/channels/${name}`),
         agents: agents.map(([name]) => `./server/agents/${name}`),
       },

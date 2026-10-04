@@ -83,12 +83,12 @@ describe("JsonlEventLog", () => {
     ).toEqual([first, second]);
   });
 
-  test("reads schema 3.0 Channel events with the V1 message contract", async () => {
+  test("reads schema 3.0 Channel events with the current message contract", async () => {
     const eventLog = new JsonlEventLog({ baseDir });
     const event = await eventLog.append({
       type: "channel.message.received",
-      runId: "run_channel_v1",
-      sessionId: "session_channel_v1",
+      runId: "run_channel",
+      sessionId: "session_channel",
       data: {
         message: {
           messageId: "message_01",
@@ -110,7 +110,7 @@ describe("JsonlEventLog", () => {
       },
     });
 
-    await expect(eventLog.readRunEvents("run_channel_v1")).resolves.toEqual([
+    await expect(eventLog.readRunEvents("run_channel")).resolves.toEqual([
       event,
     ]);
   });

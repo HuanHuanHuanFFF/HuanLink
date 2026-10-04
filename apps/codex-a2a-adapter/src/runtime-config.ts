@@ -10,7 +10,7 @@ const LOG_LEVELS = new Set<RuntimeLogLevel>(["debug", "info", "warn", "error"]);
 
 const NON_EMPTY_STRING = z.string().trim().min(1);
 const STABLE_ID = NON_EMPTY_STRING.regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/);
-const RELATIVE_WORKSPACE = z
+const CONFIGURED_WORKSPACE = z
   .string()
   .min(1)
   .refine((value) => value === value.trim() && isRelativeWorkspace(value));
@@ -31,6 +31,7 @@ const PROJECT_FIELD_NAMES = new Set([
   "workspace",
   "branch",
   "defaultModelId",
+  "defaultReasoningEffort",
 ]);
 
 const adapterRuntimeSchema = z
@@ -65,9 +66,10 @@ const projectSchema = z
   .object({
     version: z.literal(1),
     projectId: STABLE_ID,
-    workspace: RELATIVE_WORKSPACE,
+    workspace: CONFIGURED_WORKSPACE,
     branch: NON_EMPTY_STRING,
     defaultModelId: NON_EMPTY_STRING,
+    defaultReasoningEffort: NON_EMPTY_STRING,
   })
   .strict();
 
@@ -325,6 +327,15 @@ function ensureUniqueReferences(
 }
 
 function isRelativeWorkspace(value: string): boolean {
+  if (
+    (posix.isAbsolute(value) || /^[A-Za-z]:\//.test(value)) &&
+    !value.includes("\\")
+  ) {
+    return (
+      !value.includes("\0") &&
+      !value.split("/").some((segment) => segment === "." || segment === "..")
+    );
+  }
   if (value === ".") {
     return true;
   }

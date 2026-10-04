@@ -2,9 +2,12 @@ import { describe, expect, test, vi } from "vitest";
 
 import {
   InMemoryConversationSessionStore,
-  type ChannelAdapterV1,
-  type ChannelConversationRouteV1,
-  type InboundChannelMessageV1,
+  SqliteConversationSessionStore,
+  type ChannelAdapter,
+  type ChannelConversationRoute,
+  type ConversationSessionStore,
+  type InboundChannelMessage,
+  type SessionToolHistoryRecorder,
 } from "@huanlink/core";
 import type { OpenAiAgentsRunContext } from "@huanlink/integration-openai-agents";
 import type { OneBot11Operations } from "@huanlink/integration-onebot11";
@@ -25,8 +28,8 @@ const SOURCE_SESSION_ID = "session:qq-main:group:10001";
 
 function inboundMessage(
   messageId: string,
-  overrides: Partial<InboundChannelMessageV1> = {},
-): InboundChannelMessageV1 {
+  overrides: Partial<InboundChannelMessage> = {},
+): InboundChannelMessage {
   return {
     messageId,
     route: {
@@ -68,7 +71,7 @@ function toolCall(name: string, callId: string, argumentsJson: string) {
 function route(
   conversationKind: "group" | "direct",
   conversationId: string,
-): ChannelConversationRouteV1 {
+): ChannelConversationRoute {
   return { channelId: "qq-main", conversationKind, conversationId };
 }
 
@@ -86,6 +89,10 @@ function operationsFixture() {
   const getForwardMessage = vi.fn(async () => ({
     messages: [{ content: "forwarded" }],
   }));
+  const getLoginInfo = vi.fn(async () => ({
+    user_id: "10000",
+    nickname: "HuanLink",
+  }));
   const sendLike = vi.fn(async () => ({ ok: true }));
   const setGroupBan = vi.fn(async () => ({ ok: true }));
   return {
@@ -95,6 +102,7 @@ function operationsFixture() {
         sendPrivateMessage,
         getMessage,
         getForwardMessage,
+        getLoginInfo,
         sendLike,
       },
       privileged: { setGroupBan },
@@ -103,6 +111,7 @@ function operationsFixture() {
     sendPrivateMessage,
     getMessage,
     getForwardMessage,
+    getLoginInfo,
     sendLike,
     setGroupBan,
   };
@@ -110,6 +119,8 @@ function operationsFixture() {
 
 function createFixture(
   input: {
+    sessions?: ConversationSessionStore;
+    historyRecorder?: SessionToolHistoryRecorder;
     unsafePrivilegedChannelIds?: readonly string[];
     operationChannelIds?: readonly string[];
     runtime?: Pick<
@@ -118,7 +129,7 @@ function createFixture(
     >;
   } = {},
 ) {
-  const sessions = new InMemoryConversationSessionStore();
+  const sessions = input.sessions ?? new InMemoryConversationSessionStore();
   sessions.appendChannelMessage(SOURCE_SESSION_ID, inboundMessage("101"));
   const operationFixture = operationsFixture();
   const operationChannelIds = input.operationChannelIds ?? ["qq-main"];
@@ -138,7 +149,7 @@ function createFixture(
   };
   const logger = new RecordingRuntimeLogger();
   const runOutbound = async <T>(
-    candidate: ChannelConversationRouteV1,
+    candidate: ChannelConversationRoute,
     operation: () => Promise<T>,
   ): Promise<T> => {
     outboundSpy(candidate);
@@ -146,6 +157,9 @@ function createFixture(
   };
   const tools = createOneBot11OperationTools({
     sessions,
+    ...(input.historyRecorder === undefined
+      ? {}
+      : { historyRecorder: input.historyRecorder }),
     resolveOperations,
     isRouteAllowed:
       input.runtime?.isRouteAllowed ??
@@ -182,7 +196,7 @@ function createTestChannelRuntime(input: {
   groups: { mode: "allowlist" | "denylist"; ids: string[] };
   directs: { mode: "allowlist" | "denylist"; ids: string[] };
 }): ChannelRuntime {
-  const adapter: ChannelAdapterV1 = {
+  const adapter: ChannelAdapter = {
     descriptor: {
       channelId: "qq-main",
       platform: "onebot11",
@@ -216,6 +230,85 @@ function createTestChannelRuntime(input: {
 }
 
 describe("OneBot 11 operation Tools", () => {
+  test("publishes no-parameter operations without empty object schemas", () => {
+    const { tools } = createFixture({
+      unsafePrivilegedChannelIds: ["qq-main"],
+    });
+
+    expect(containsEmptyObjectSchema(tools.standard.parameters)).toBe(false);
+    expect(tools.privileged).toBeDefined();
+    expect(containsEmptyObjectSchema(tools.privileged!.parameters)).toBe(false);
+    expect(
+      findOperationVariant(tools.standard.parameters, "getLoginInfo"),
+    ).toMatchObject({
+      type: "object",
+      required: ["operation"],
+    });
+    expect(
+      findOperationVariant(tools.standard.parameters, "getLoginInfo"),
+    ).not.toHaveProperty("properties.params");
+  });
+
+  test("dispatches a no-parameter standard operation without a params object", async () => {
+    const { getLoginInfo, tools } = createFixture();
+    const input = {
+      channelId: "qq-main",
+      request: { operation: "getLoginInfo" },
+    };
+    const argumentsJson = JSON.stringify(input);
+
+    const output = await tools.standard.invoke(context(), argumentsJson, {
+      toolCall: toolCall(
+        ONEBOT11_STANDARD_TOOL_NAME,
+        "call-get-login-info",
+        argumentsJson,
+      ),
+    });
+
+    expect(JSON.parse(String(output))).toEqual({
+      user_id: "10000",
+      nickname: "HuanLink",
+    });
+    expect(getLoginInfo).toHaveBeenCalledOnce();
+  });
+
+  test("accepts a SQLite Conversation Store through the public Store contract", async () => {
+    const sessions = new SqliteConversationSessionStore(":memory:");
+    try {
+      const { tools } = createFixture({ sessions });
+      const input = {
+        channelId: "qq-main",
+        request: {
+          operation: "sendGroupMessage" as const,
+          params: {
+            groupId: "20002",
+            parts: [{ type: "text" as const, text: "persisted message" }],
+          },
+        },
+      };
+      const argumentsJson = JSON.stringify(input);
+
+      const output = await tools.standard.invoke(context(), argumentsJson, {
+        toolCall: toolCall(
+          ONEBOT11_STANDARD_TOOL_NAME,
+          "call-sqlite-onebot",
+          argumentsJson,
+        ),
+      });
+
+      expect(JSON.parse(String(output))).toEqual({ message_id: 7001 });
+      expect(sessions.getSession(SOURCE_SESSION_ID)?.timeline).toContainEqual({
+        type: "agent_tool_result",
+        runId: "run-onebot-tools",
+        toolCallId: "call-sqlite-onebot",
+        toolName: ONEBOT11_STANDARD_TOOL_NAME,
+        output: { message_id: 7001 },
+      });
+    } finally {
+      sessions.close();
+    }
+  });
+
   test("exposes the standard Tool only to external Channel sessions and keeps privileged operations disabled by default", async () => {
     const { tools } = createFixture();
     const agent = new Agent<OpenAiAgentsRunContext>({
@@ -235,9 +328,20 @@ describe("OneBot 11 operation Tools", () => {
   });
 
   test("exposes explicitly enabled privileged operations without claiming approval protection", async () => {
-    const { logger, tools } = createFixture({
+    const { logger, sessions, tools } = createFixture({
       unsafePrivilegedChannelIds: ["qq-main"],
     });
+    const disabledSessionId = "session:qq-secondary:group:10001";
+    sessions.appendChannelMessage(
+      disabledSessionId,
+      inboundMessage("102", {
+        route: {
+          channelId: "qq-secondary",
+          conversationKind: "group",
+          conversationId: "10001",
+        },
+      }),
+    );
     const agent = new Agent<OpenAiAgentsRunContext>({
       name: "OneBot privileged Tool availability test",
       instructions: "Test privileged tool availability.",
@@ -248,6 +352,12 @@ describe("OneBot 11 operation Tools", () => {
     await expect(
       tools.privileged?.isEnabled(context("internal-session"), agent),
     ).resolves.toBe(false);
+    await expect(
+      tools.privileged?.isEnabled(context(disabledSessionId), agent),
+    ).resolves.toBe(false);
+    await expect(tools.privileged?.isEnabled(context(), agent)).resolves.toBe(
+      true,
+    );
     await expect(
       tools.privileged?.needsApproval(
         context(),
@@ -325,6 +435,138 @@ describe("OneBot 11 operation Tools", () => {
         }),
       }),
     );
+  });
+
+  test("does not dispatch OneBot when recording the SDK Tool Call fails", async () => {
+    const historyRecorder: SessionToolHistoryRecorder = {
+      recordToolCall: () => {
+        throw new Error("history call secret");
+      },
+      recordToolResult: () => undefined,
+    };
+    const { logger, sendGroupMessage, tools } = createFixture({
+      historyRecorder,
+    });
+    const argumentsJson = JSON.stringify({
+      channelId: "qq-main",
+      request: {
+        operation: "sendGroupMessage",
+        params: {
+          groupId: "20002",
+          parts: [{ type: "text", text: "OneBot secret content" }],
+        },
+      },
+    });
+
+    await expect(
+      tools.standard.invoke(context(), argumentsJson, {
+        toolCall: toolCall(
+          ONEBOT11_STANDARD_TOOL_NAME,
+          "call-onebot-history-write-failure",
+          argumentsJson,
+        ),
+      }),
+    ).rejects.toThrow("Tool history Call recording failed");
+
+    expect(sendGroupMessage).not.toHaveBeenCalled();
+    expect(logger.entries).toContainEqual({
+      level: "error",
+      message: "main_agent.tool.history.write_failed",
+      fields: {
+        runId: "run-onebot-tools",
+        sessionId: SOURCE_SESSION_ID,
+        toolCallId: "call-onebot-history-write-failure",
+        toolName: ONEBOT11_STANDARD_TOOL_NAME,
+        historyStage: "call",
+        errorType: "Error",
+      },
+    });
+    expect(JSON.stringify(logger.entries)).not.toContain("secret");
+  });
+
+  test("keeps schema-invalid OneBot JSON arguments raw in Tool history", async () => {
+    const { sendGroupMessage, sessions, tools } = createFixture();
+    const argumentsJson = JSON.stringify({
+      channelId: "qq-main",
+      request: {
+        operation: "sendGroupMessage",
+        params: { groupId: "20002", parts: [] },
+      },
+    });
+
+    const output = await tools.standard.invoke(context(), argumentsJson, {
+      toolCall: toolCall(
+        ONEBOT11_STANDARD_TOOL_NAME,
+        "call-onebot-schema-invalid",
+        argumentsJson,
+      ),
+    });
+
+    expect(JSON.parse(String(output))).toMatchObject({
+      status: "error",
+      tool: ONEBOT11_STANDARD_TOOL_NAME,
+    });
+    expect(sendGroupMessage).not.toHaveBeenCalled();
+    expect(sessions.getSession(SOURCE_SESSION_ID)?.timeline.at(-2)).toEqual({
+      type: "agent_tool_call",
+      runId: "run-onebot-tools",
+      toolCallId: "call-onebot-schema-invalid",
+      toolName: ONEBOT11_STANDARD_TOOL_NAME,
+      rawArguments: argumentsJson,
+    });
+  });
+
+  test("keeps raw OneBot response data when recording its Tool Result fails", async () => {
+    let sessionStore: ConversationSessionStore | undefined;
+    const historyRecorder: SessionToolHistoryRecorder = {
+      recordToolCall: (sessionId, call) =>
+        sessionStore!.appendAgentToolCall(sessionId, call),
+      recordToolResult: () => {
+        throw new Error("history result secret");
+      },
+    };
+    const fixture = createFixture({
+      historyRecorder,
+    });
+    sessionStore = fixture.sessions;
+    const { logger, sendGroupMessage, tools } = fixture;
+    const argumentsJson = JSON.stringify({
+      channelId: "qq-main",
+      request: {
+        operation: "sendGroupMessage",
+        params: {
+          groupId: "20002",
+          parts: [{ type: "text", text: "OneBot secret content" }],
+        },
+      },
+    });
+
+    const output = await tools.standard.invoke(context(), argumentsJson, {
+      toolCall: toolCall(
+        ONEBOT11_STANDARD_TOOL_NAME,
+        "call-onebot-history-result-failure",
+        argumentsJson,
+      ),
+    });
+
+    expect(JSON.parse(String(output))).toEqual({
+      message_id: 7001,
+      historyWarning: "Tool result history was not persisted.",
+    });
+    expect(sendGroupMessage).toHaveBeenCalledOnce();
+    expect(logger.entries).toContainEqual({
+      level: "error",
+      message: "main_agent.tool.history.write_failed",
+      fields: {
+        runId: "run-onebot-tools",
+        sessionId: SOURCE_SESSION_ID,
+        toolCallId: "call-onebot-history-result-failure",
+        toolName: ONEBOT11_STANDARD_TOOL_NAME,
+        historyStage: "result",
+        errorType: "Error",
+      },
+    });
+    expect(JSON.stringify(logger.entries)).not.toContain("secret");
   });
 
   test("rejects a disallowed explicit target before any protocol call", async () => {
@@ -699,3 +941,64 @@ describe("OneBot 11 operation Tools", () => {
     ]);
   });
 });
+
+function containsEmptyObjectSchema(schema: unknown): boolean {
+  if (Array.isArray(schema)) {
+    return schema.some(containsEmptyObjectSchema);
+  }
+  if (schema === null || typeof schema !== "object") {
+    return false;
+  }
+
+  const record = schema as Record<string, unknown>;
+  const properties = record.properties;
+  if (
+    record.type === "object" &&
+    (properties === undefined ||
+      properties === null ||
+      typeof properties !== "object" ||
+      Object.keys(properties).length === 0)
+  ) {
+    return true;
+  }
+  return Object.values(record).some(containsEmptyObjectSchema);
+}
+
+function findOperationVariant(
+  schema: unknown,
+  operation: string,
+): Record<string, unknown> | undefined {
+  if (Array.isArray(schema)) {
+    for (const item of schema) {
+      const match = findOperationVariant(item, operation);
+      if (match !== undefined) {
+        return match;
+      }
+    }
+    return undefined;
+  }
+  if (schema === null || typeof schema !== "object") {
+    return undefined;
+  }
+
+  const record = schema as Record<string, unknown>;
+  const properties = record.properties;
+  if (properties !== null && typeof properties === "object") {
+    const operationSchema = (properties as Record<string, unknown>).operation;
+    if (
+      operationSchema !== null &&
+      typeof operationSchema === "object" &&
+      (operationSchema as Record<string, unknown>).const === operation
+    ) {
+      return record;
+    }
+  }
+
+  for (const value of Object.values(record)) {
+    const match = findOperationVariant(value, operation);
+    if (match !== undefined) {
+      return match;
+    }
+  }
+  return undefined;
+}

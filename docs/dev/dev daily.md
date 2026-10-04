@@ -201,3 +201,12 @@ codex那边当前的A2A是默认当成用户的身份,如果主控agent通过A2A
 
 ## 8.6
 搭建了基于huan-dev的skill式工作流为了减轻review,审核压力,但需求确认上依旧需要
+## 8.8
+PR 7 channel模块开发完成,合并
+PR 8 Prettier全量格式化代码
+## 调整开发计划,优先做对秋招更有用的东西
+
+## 8.9
+更新仓库agents.md
+进入D13阶段,目标为重新梳理完成外部channel→runtime→A2A→外部agent,同时做完基础的核心数据持久化
+完成了B01,新增总runtime,配置冻结

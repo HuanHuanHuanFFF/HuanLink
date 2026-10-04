@@ -2,13 +2,13 @@ import { describe, expect, test } from "vitest";
 
 import {
   InMemoryConversationSessionStore,
-  type InboundChannelMessageV1,
+  type InboundChannelMessage,
 } from "../src/index.js";
 
 function inboundMessage(
   messageId: string,
-  overrides: Partial<InboundChannelMessageV1> = {},
-): InboundChannelMessageV1 {
+  overrides: Partial<InboundChannelMessage> = {},
+): InboundChannelMessage {
   return {
     messageId,
     route: {

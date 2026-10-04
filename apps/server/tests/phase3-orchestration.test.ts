@@ -15,13 +15,18 @@ import {
   SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
   type OpenAiAgentsRunner,
 } from "@huanlink/integration-openai-agents";
-import type {
-  AgentCallBackgroundErrorListener,
-  AgentCallInvocationResult,
-  AgentCallReceipt,
-  AgentCallTaskState,
-  AgentCallTransport,
-  AgentCallTransportContinueRequest,
+import {
+  AGENT_CALL_TASK_KIND_DEFINITION,
+  AsyncToolTaskService,
+  ConversationSessionStoreToolHistoryRecorder,
+  InMemoryConversationSessionStore,
+  type AgentCallBackgroundErrorListener,
+  type AgentCallInvocationResult,
+  type AgentCallReceipt,
+  type AgentCallTaskState,
+  type AgentCallTransport,
+  type AgentCallTransportContinueRequest,
+  type SessionToolHistoryRecorder,
 } from "@huanlink/core";
 
 import {
@@ -33,7 +38,8 @@ import {
   ControlledTaskExecutor,
 } from "../../codex-a2a-adapter/tests/support/controlled-task-executor.js";
 import {
-  createPhase3HuanLinkRuntime,
+  createPhase3HuanLinkRuntime as createRawPhase3HuanLinkRuntime,
+  type CreatePhase3HuanLinkRuntimeOptions,
   type Phase3HuanLinkRuntime,
   type Phase3ReentryResult,
 } from "../src/index.js";
@@ -41,6 +47,11 @@ import { RecordingRuntimeLogger } from "./support/recording-runtime-logger.js";
 
 const servers: RunningAdapterServer[] = [];
 const runtimes: Phase3HuanLinkRuntime[] = [];
+const runtimeSessionStores = new WeakMap<
+  Phase3HuanLinkRuntime,
+  InMemoryConversationSessionStore
+>();
+let messageSequence = 0;
 const rejectUnexpectedContinuation: AgentCallTransport["continueTask"] =
   async () => {
     throw new Error("Unexpected task continuation in this test");
@@ -160,6 +171,7 @@ class DelegateThenSummarizeModel implements Model {
             callId: "phase3-tool-call",
             name: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
             arguments: JSON.stringify({
+              projectId: "huanlink",
               task: "make a controlled Phase 3 code change",
             }),
           },
@@ -202,6 +214,7 @@ class BlockingThenReplyModel implements Model {
             callId: "phase3-blocking-tool-call",
             name: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
             arguments: JSON.stringify({
+              projectId: "huanlink",
               task: "make a controlled Phase 3 code change",
               executionMode: "blocking",
             }),
@@ -236,7 +249,10 @@ class SubmitThenQueryStatusModel implements Model {
             type: "function_call",
             callId: "phase3-submit-before-status",
             name: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
-            arguments: JSON.stringify({ task: "start one status-test task" }),
+            arguments: JSON.stringify({
+              projectId: "huanlink",
+              task: "start one status-test task",
+            }),
           },
         ],
       };
@@ -256,7 +272,7 @@ class SubmitThenQueryStatusModel implements Model {
             type: "function_call",
             callId: "phase3-status-query",
             name: GET_TASK_STATUS_TOOL_NAME,
-            arguments: JSON.stringify({ taskId: accepted.agentCallId }),
+            arguments: JSON.stringify({ taskId: accepted.taskId }),
           },
         ],
       };
@@ -288,7 +304,10 @@ class DelegateContinueThenSummarizeModel implements Model {
             type: "function_call",
             callId: "phase3-submit-before-input",
             name: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
-            arguments: JSON.stringify({ task: "start one resumable task" }),
+            arguments: JSON.stringify({
+              projectId: "huanlink",
+              task: "start one resumable task",
+            }),
           },
         ],
       };
@@ -309,7 +328,7 @@ class DelegateContinueThenSummarizeModel implements Model {
             callId: "phase3-continue-input-required",
             name: CONTINUE_TASK_TOOL_NAME,
             arguments: JSON.stringify({
-              taskId: accepted.agentCallId,
+              taskId: accepted.taskId,
               answers: [{ questionId: "approach", answers: ["Safe"] }],
             }),
           },
@@ -348,7 +367,10 @@ class DelegateFollowUpAfterTerminalModel implements Model {
             type: "function_call",
             callId: "phase3-sequence-first",
             name: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
-            arguments: JSON.stringify({ task: "run the first sequence step" }),
+            arguments: JSON.stringify({
+              projectId: "huanlink",
+              task: "run the first sequence step",
+            }),
           },
         ],
       };
@@ -368,6 +390,7 @@ class DelegateFollowUpAfterTerminalModel implements Model {
             callId: "phase3-sequence-follow-up",
             name: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
             arguments: JSON.stringify({
+              projectId: "huanlink",
               task: "run the pre-authorized second sequence step",
             }),
           },
@@ -413,10 +436,13 @@ function terminalTransport(state: AgentCallTaskState): AgentCallTransport {
       name: "Codex code task",
     }),
     submitTask: async () => ({
-      taskId: `task-${state}`,
-      contextId: "session-phase3",
-      state: "submitted",
-      artifacts: [],
+      outcome: "accepted",
+      snapshot: {
+        taskId: `task-${state}`,
+        contextId: "session-phase3",
+        state: "submitted",
+        artifacts: [],
+      },
     }),
     async *watchTask() {
       yield {
@@ -443,10 +469,13 @@ function sequentialTerminalTransport() {
     async (request) => {
       submissionCount += 1;
       return {
-        taskId: `a2a-task-sequence-${submissionCount}`,
-        contextId: request.contextId,
-        state: "working",
-        artifacts: [],
+        outcome: "accepted",
+        snapshot: {
+          taskId: `a2a-task-sequence-${submissionCount}`,
+          contextId: request.contextId,
+          state: "working",
+          artifacts: [],
+        },
       };
     },
   );
@@ -490,11 +519,14 @@ function sequentialTerminalTransport() {
 function pendingTransport() {
   const submitTask = vi.fn<AgentCallTransport["submitTask"]>(
     async (request) => ({
-      taskId: "a2a-task-status-query",
-      contextId: request.contextId,
-      state: "working",
-      artifacts: [],
-      statusMessage: "Codex is working",
+      outcome: "accepted",
+      snapshot: {
+        taskId: "a2a-task-status-query",
+        contextId: request.contextId,
+        state: "working",
+        artifacts: [],
+        statusMessage: "Codex is working",
+      },
     }),
   );
   const transport: AgentCallTransport = {
@@ -519,10 +551,13 @@ function pendingTransport() {
 function pausedTransport() {
   const submitTask = vi.fn<AgentCallTransport["submitTask"]>(
     async (request) => ({
-      taskId: "a2a-task-input-required",
-      contextId: request.contextId,
-      state: "working",
-      artifacts: [],
+      outcome: "accepted",
+      snapshot: {
+        taskId: "a2a-task-input-required",
+        contextId: request.contextId,
+        state: "working",
+        artifacts: [],
+      },
     }),
   );
   const transport: AgentCallTransport = {
@@ -576,10 +611,13 @@ function resumablePausedTransport() {
   const taskId = "a2a-task-resumable";
   const submitTask = vi.fn<AgentCallTransport["submitTask"]>(
     async (request) => ({
-      taskId,
-      contextId: request.contextId,
-      state: "working",
-      artifacts: [],
+      outcome: "accepted",
+      snapshot: {
+        taskId,
+        contextId: request.contextId,
+        state: "working",
+        artifacts: [],
+      },
     }),
   );
   const continueTask = vi.fn<AgentCallTransport["continueTask"]>(
@@ -656,12 +694,216 @@ function waitForAbort(signal: AbortSignal): Promise<void> {
   });
 }
 
+function createPhase3HuanLinkRuntime(
+  options: Omit<
+    CreatePhase3HuanLinkRuntimeOptions,
+    "taskService" | "sessionStore"
+  >,
+): Phase3HuanLinkRuntime {
+  const sessionStore = new InMemoryConversationSessionStore();
+  const taskService = new AsyncToolTaskService({
+    maxActiveTasksPerSession: 8,
+    taskKinds: [AGENT_CALL_TASK_KIND_DEFINITION],
+  });
+  const storeRecorder = new ConversationSessionStoreToolHistoryRecorder(
+    sessionStore,
+  );
+  const observedRecorder = options.historyRecorder;
+  const historyRecorder: SessionToolHistoryRecorder =
+    observedRecorder === undefined
+      ? storeRecorder
+      : {
+          recordToolCall: (sessionId, call) => {
+            storeRecorder.recordToolCall(sessionId, call);
+            observedRecorder.recordToolCall(sessionId, call);
+          },
+          recordToolResult: (sessionId, result) => {
+            storeRecorder.recordToolResult(sessionId, result);
+            observedRecorder.recordToolResult(sessionId, result);
+          },
+        };
+  const suppliedBeforeReentry = options.beforeReentry;
+  const runtime = createRawPhase3HuanLinkRuntime({
+    ...options,
+    taskService,
+    sessionStore,
+    historyRecorder,
+    beforeReentry: async (input) => {
+      if (options.getLatestContext !== undefined) {
+        const content = await options.getLatestContext(input.sessionId);
+        appendTestSessionMessage(sessionStore, input.sessionId, content);
+      }
+      return await suppliedBeforeReentry?.(input);
+    },
+  });
+  const runMainAgent = runtime.runMainAgent.bind(runtime);
+  runtime.runMainAgent = (input) => {
+    appendTestSessionMessage(
+      sessionStore,
+      input.sessionId,
+      input.input ?? "test MainAgent turn",
+      true,
+    );
+    return runMainAgent(input);
+  };
+  runtimeSessionStores.set(runtime, sessionStore);
+  return runtime;
+}
+
+function appendTestSessionMessage(
+  sessions: InMemoryConversationSessionStore,
+  sessionId: string,
+  content: string,
+  onlyWhenMissing = false,
+): void {
+  if (onlyWhenMissing && sessions.getSession(sessionId) !== undefined) {
+    return;
+  }
+  messageSequence += 1;
+  sessions.appendChannelMessage(sessionId, {
+    messageId: `phase3-test-message-${messageSequence}`,
+    route: {
+      channelId: "phase3-test",
+      conversationKind: "group",
+      conversationId: sessionId,
+    },
+    sender: { id: "test-user", username: "test", isSelf: false },
+    receivedAt: `2026-08-12T00:00:${String(messageSequence % 60).padStart(2, "0")}.000Z`,
+    content,
+    contentFormat: "plain_text",
+  });
+}
+
 afterEach(async () => {
   await Promise.all(runtimes.splice(0).map((runtime) => runtime.close()));
   await Promise.all(servers.splice(0).map((server) => server.close()));
 });
 
 describe("Phase 3 HuanLink orchestration", () => {
+  test("projects the latest Session context only after a queued turn obtains its slot", async () => {
+    const releaseFirst = deferred();
+    const firstStarted = deferred();
+    const observedInputs: string[] = [];
+    const runner: OpenAiAgentsRunner = {
+      run: async (_agent, input) => {
+        observedInputs.push(input);
+        if (observedInputs.length === 1) {
+          firstStarted.resolve();
+          await releaseFirst.promise;
+        }
+        return { finalOutput: "done" };
+      },
+    };
+    let latestContext = "context before first turn";
+    const runtime = createPhase3HuanLinkRuntime({
+      codexA2aOrigin: "http://127.0.0.1:1",
+      transport: terminalTransport("completed"),
+      runner,
+      getLatestContext: () => latestContext,
+    });
+    runtimes.push(runtime);
+
+    const first = runtime.runMainAgent({
+      runId: "run-context-first",
+      sessionId: "session-context-queue",
+      input: "stale caller input one",
+    });
+    await firstStarted.promise;
+
+    latestContext = "context when second turn was queued";
+    const second = runtime.runMainAgent({
+      runId: "run-context-second",
+      sessionId: "session-context-queue",
+      input: "stale caller input two",
+    });
+    latestContext = "context after second turn was queued";
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(observedInputs).toEqual(["context before first turn"]);
+
+    releaseFirst.resolve();
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      { output: "done" },
+      { output: "done" },
+    ]);
+    expect(observedInputs).toEqual([
+      "context before first turn",
+      "context after second turn was queued",
+    ]);
+  });
+
+  test("queues a terminal re-entry behind the active turn and projects context when it obtains the slot", async () => {
+    const activeTurnStarted = deferred();
+    const releaseActiveTurn = deferred();
+    const reentry = deferred<Phase3ReentryResult>();
+    const observedInputs: string[] = [];
+    const { transport, completions } = sequentialTerminalTransport();
+    const runner: OpenAiAgentsRunner = {
+      run: async (_agent, input) => {
+        observedInputs.push(input);
+        if (observedInputs.length === 1) {
+          activeTurnStarted.resolve();
+          await releaseActiveTurn.promise;
+        }
+        return { finalOutput: "done" };
+      },
+    };
+    let latestContext = "context for active turn";
+    const runtime = createPhase3HuanLinkRuntime({
+      codexA2aOrigin: "http://127.0.0.1:1",
+      transport,
+      runner,
+      getLatestContext: () => latestContext,
+      onReentry: (result) => reentry.resolve(result),
+    });
+    runtimes.push(runtime);
+
+    const activeTurn = runtime.runMainAgent({
+      runId: "run-active-before-terminal",
+      sessionId: "session-phase3-sequence",
+    });
+    await activeTurnStarted.promise;
+
+    runtimeSessionStores
+      .get(runtime)!
+      .appendAgentToolCall("session-phase3-sequence", {
+        runId: "run-submit-before-terminal",
+        toolCallId: "call-submit-before-terminal",
+        toolName: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
+        arguments: {
+          projectId: "huanlink",
+          task: "long external task",
+          executionMode: "async",
+        },
+      });
+    const accepted = await runtime.agentCalls.invoke({
+      runId: "run-submit-before-terminal",
+      sessionId: "session-phase3-sequence",
+      contextId: "session-phase3-sequence",
+      skillId: "codex-code-task",
+      input: "long external task",
+      executionMode: "async",
+      toolName: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
+      sourceToolCallId: "call-submit-before-terminal",
+    });
+    latestContext = "context before terminal arrived";
+    completions[0]!.resolve();
+    await runtime.agentCalls.waitForIdle();
+    latestContext = "context after terminal was queued";
+
+    expect(observedInputs).toEqual(["context for active turn"]);
+
+    releaseActiveTurn.resolve();
+    await expect(activeTurn).resolves.toEqual({ output: "done" });
+    const completed = await reentry.promise;
+
+    expect(completed.latestContext).toContain(
+      "context after terminal was queued",
+    );
+    expect(observedInputs).toHaveLength(2);
+    expect(observedInputs[1]).toContain("context after terminal was queued");
+  });
+
   test("logs MainAgent payload sizes without recording full Channel content", async () => {
     const logger = new RecordingRuntimeLogger();
     const secretInput = "private Channel message with attachment key";
@@ -723,7 +965,7 @@ describe("Phase 3 HuanLink orchestration", () => {
     });
     const accepted = acceptedAgentCall(model.requests[1]);
     await runtime.agentCalls.waitForIdle();
-    expect(onReentry).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(onReentry).toHaveBeenCalledTimes(1));
     const [result] = onReentry.mock.calls[0]!;
 
     expect(result).toMatchObject({
@@ -731,37 +973,20 @@ describe("Phase 3 HuanLink orchestration", () => {
       sessionId: "session-phase3-input-required",
       trigger: "agent_call_input_required",
       reason: "input-required",
-      latestContext,
-      agentCall: {
-        agentCallId: accepted.agentCallId,
+      task: {
+        status: "found",
         taskId: accepted.taskId,
-        contextId: "a2a-context-input-required",
-        state: "input-required",
-      },
-      paused: {
-        taskId: accepted.agentCallId,
-        a2aTaskId: accepted.taskId,
-        contextId: "a2a-context-input-required",
         state: "input-required",
         statusMessage: "A material choice is required",
-        questions: [
-          {
-            id: "approach",
-            options: [
-              {
-                label: "Safe",
-                description: "Preserve the existing public contract.",
-              },
-            ],
-          },
-        ],
-        artifacts: [
-          {
-            id: "artifact-before-choice",
-            text: "The safer approach keeps compatibility.",
-          },
-        ],
-        latestContext,
+        payload: {
+          questions: [expect.objectContaining({ id: "approach" })],
+          artifacts: [
+            expect.objectContaining({
+              id: "artifact-before-choice",
+              text: "The safer approach keeps compatibility.",
+            }),
+          ],
+        },
       },
     });
     expect(result.input).toContain('"questions"');
@@ -841,13 +1066,13 @@ describe("Phase 3 HuanLink orchestration", () => {
       "terminal",
     ]);
     expect(
-      reentries.map(({ agentCall }) => ({
-        taskId: agentCall.agentCallId,
-        a2aTaskId: agentCall.taskId,
+      reentries.map(({ task }) => ({
+        taskId: task.taskId,
+        state: task.state,
       })),
     ).toEqual([
-      { taskId: accepted.agentCallId, a2aTaskId: accepted.taskId },
-      { taskId: accepted.agentCallId, a2aTaskId: accepted.taskId },
+      { taskId: accepted.taskId, state: "input-required" },
+      { taskId: accepted.taskId, state: "completed" },
     ]);
     expect(
       runtime.agentCalls.listByRunId("run-phase3-auto-continue-initial"),
@@ -912,20 +1137,16 @@ describe("Phase 3 HuanLink orchestration", () => {
       runtime.runMainAgent({
         runId: "run-phase3-status-query",
         sessionId: "session-phase3-status",
-        input: `report task ${accepted.agentCallId}`,
+        input: `report task ${accepted.taskId}`,
       }),
     ).resolves.toEqual({ output: "The existing task is still working." });
 
     expect(taskStatusResult(model.requests[3])).toMatchObject({
       status: "found",
-      task: {
-        taskId: accepted.agentCallId,
-        a2aTaskId: accepted.taskId,
-        state: "working",
-        executionMode: "async",
-        statusMessage: "Codex is working",
-        artifacts: [],
-      },
+      taskId: accepted.taskId,
+      state: "working",
+      statusMessage: "Codex is working",
+      payload: { artifacts: [] },
     });
     expect(submitTask).toHaveBeenCalledTimes(1);
     expect(runtime.agentCalls.listByRunId("run-phase3-status-query")).toEqual(
@@ -1003,6 +1224,10 @@ describe("Phase 3 HuanLink orchestration", () => {
 
     const model = new DelegateThenSummarizeModel();
     const reentry = deferred<Phase3ReentryResult>();
+    const historyRecorder: SessionToolHistoryRecorder = {
+      recordToolCall: vi.fn(),
+      recordToolResult: vi.fn(),
+    };
     let latestContext = "group context before acceptance";
     const runtime = createPhase3HuanLinkRuntime({
       codexA2aOrigin: server.origin,
@@ -1012,6 +1237,7 @@ describe("Phase 3 HuanLink orchestration", () => {
       }),
       createRunId: () => "run-phase3-reentry",
       getLatestContext: async () => latestContext,
+      historyRecorder,
       onReentry: (result) => reentry.resolve(result),
     });
     runtimes.push(runtime);
@@ -1026,15 +1252,30 @@ describe("Phase 3 HuanLink orchestration", () => {
     expect(first.output).toBe("Codex task was accepted.");
     expect(accepted).toMatchObject({
       status: "accepted",
-      executionMode: "async",
     });
     expect(
-      runtime.agentCalls.getByAgentCallId(accepted.agentCallId),
+      runtime.agentCalls.listByRunId("run-phase3-initial")[0],
     ).toMatchObject({
-      taskId: accepted.taskId,
       sessionId: "session-phase3",
+      sourceToolCallId: "phase3-tool-call",
       state: expect.stringMatching(/submitted|working/),
     });
+    expect(historyRecorder.recordToolCall).toHaveBeenCalledWith(
+      "session-phase3",
+      expect.objectContaining({
+        runId: "run-phase3-initial",
+        toolCallId: "phase3-tool-call",
+        toolName: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
+      }),
+    );
+    expect(historyRecorder.recordToolResult).toHaveBeenCalledWith(
+      "session-phase3",
+      expect.objectContaining({
+        runId: "run-phase3-initial",
+        toolCallId: "phase3-tool-call",
+        toolName: SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
+      }),
+    );
     expect(model.requests).toHaveLength(2);
 
     latestContext = "latest group message arrived while Codex was working";
@@ -1046,10 +1287,9 @@ describe("Phase 3 HuanLink orchestration", () => {
       sessionId: "session-phase3",
       trigger: "agent_call_terminal",
       reason: "terminal",
-      latestContext,
       output: "Codex task finished and is ready to report.",
-      agentCall: {
-        agentCallId: accepted.agentCallId,
+      task: {
+        status: "found",
         taskId: accepted.taskId,
         state: "completed",
       },
@@ -1110,8 +1350,8 @@ describe("Phase 3 HuanLink orchestration", () => {
       SUBMIT_CODEX_AGENT_CALL_TOOL_NAME,
     ]);
     expect(acceptedAgentCall(model.requests[3])).toMatchObject({
-      taskId: "a2a-task-sequence-2",
-      executionMode: "async",
+      status: "accepted",
+      taskId: expect.not.stringContaining("a2a-task-sequence-2"),
     });
     expect(reentries[0]?.output).toBe(
       "The first step completed and the second step was accepted.",
@@ -1168,11 +1408,11 @@ describe("Phase 3 HuanLink orchestration", () => {
         sessionId: "session-phase3",
         trigger: "agent_call_terminal",
         reason: "terminal",
-        latestContext: `latest context for ${state}`,
-        agentCall: {
-          agentCallId: accepted.agentCallId,
+        task: {
+          status: "found",
+          taskId: accepted.taskId,
           state,
-          artifacts: [{ text: `${state} result` }],
+          payload: { artifacts: [{ text: `${state} result` }] },
         },
       });
       expect(model.requests).toHaveLength(3);
@@ -1212,13 +1452,16 @@ describe("Phase 3 HuanLink orchestration", () => {
     const accepted = acceptedAgentCall(model.requests[1]);
     await summaryStarted.promise;
 
-    await runtime.agentCalls.cancel(accepted.agentCallId);
+    const internalAgentCallId = runtime.agentCalls.listByRunId(
+      "run-phase3-competing-terminal",
+    )[0]!.agentCallId;
+    await runtime.agentCalls.cancel(internalAgentCallId);
     releaseSummary.resolve();
     await reentry.promise;
     await runtime.agentCalls.waitForIdle();
 
     expect(
-      runtime.agentCalls.getByAgentCallId(accepted.agentCallId)?.state,
+      runtime.agentCalls.getByAgentCallId(internalAgentCallId)?.state,
     ).toBe("completed");
     expect(onReentry).toHaveBeenCalledTimes(1);
     expect(model.requests).toHaveLength(3);
@@ -1312,6 +1555,94 @@ describe("Phase 3 HuanLink orchestration", () => {
     },
   );
 
+  test("drains the actual re-entry turn when its runner ignores shutdown", async () => {
+    const model = new DelegateThenSummarizeModel();
+    const initialRunner = new Runner({
+      modelProvider: new SingleModelProvider(model),
+      tracingDisabled: true,
+    });
+    const reentryStarted = deferred<AbortSignal | undefined>();
+    const releaseReentry = deferred();
+    let runnerCalls = 0;
+    const runner: OpenAiAgentsRunner = {
+      async run(agent, input, options) {
+        runnerCalls += 1;
+        if (runnerCalls === 1) {
+          return initialRunner.run(agent, input, options);
+        }
+        reentryStarted.resolve(options?.signal);
+        await releaseReentry.promise;
+        return { finalOutput: "late re-entry output" };
+      },
+    };
+    const onReentry = vi.fn();
+    const onBackgroundError = vi.fn<AgentCallBackgroundErrorListener>();
+    const runtime = createPhase3HuanLinkRuntime({
+      codexA2aOrigin: "http://127.0.0.1:1",
+      transport: terminalTransport("completed"),
+      runner,
+      onReentry,
+      onBackgroundError,
+    });
+    runtimes.push(runtime);
+
+    await runtime.runMainAgent({
+      runId: "run-phase3-noncooperative-reentry",
+      sessionId: "session-phase3-noncooperative-reentry",
+      input: "delegate and wait for shutdown",
+    });
+    const signal = await reentryStarted.promise;
+    const closeOperation = runtime.close();
+
+    expect(signal?.aborted).toBe(true);
+    await expect(settlesWithin(closeOperation, 50)).resolves.toBe(false);
+
+    releaseReentry.resolve();
+    await expect(closeOperation).resolves.toBeUndefined();
+    expect(onReentry).not.toHaveBeenCalled();
+    expect(onBackgroundError).not.toHaveBeenCalled();
+  });
+
+  test("aborts and drains the actual fresh turn before Phase3 closes", async () => {
+    const turnStarted = deferred<AbortSignal | undefined>();
+    const releaseTurn = deferred();
+    const runner: OpenAiAgentsRunner = {
+      run: async (_agent, _input, options) => {
+        turnStarted.resolve(options?.signal);
+        await releaseTurn.promise;
+        return { finalOutput: "done" };
+      },
+    };
+    const runtime = createPhase3HuanLinkRuntime({
+      codexA2aOrigin: "http://127.0.0.1:1",
+      transport: terminalTransport("completed"),
+      runner,
+    });
+    runtimes.push(runtime);
+
+    const turn = runtime.runMainAgent({
+      runId: "run-phase3-fresh-close",
+      sessionId: "session-phase3-fresh-close",
+      input: "wait until Phase3 closes",
+    });
+    const signal = await turnStarted.promise;
+    const closeOperation = runtime.close();
+
+    expect(signal?.aborted).toBe(true);
+    await expect(settlesWithin(closeOperation, 50)).resolves.toBe(false);
+
+    releaseTurn.resolve();
+    await expect(turn).rejects.toThrow(/closed/i);
+    await expect(closeOperation).resolves.toBeUndefined();
+    await expect(
+      runtime.runMainAgent({
+        runId: "run-phase3-after-close",
+        sessionId: "session-phase3-fresh-close",
+        input: "must not start",
+      }),
+    ).rejects.toThrow(/closed/i);
+  });
+
   test("reports a MainAgent re-entry failure through the background error callback", async () => {
     const model = new DelegateThenSummarizeModel();
     const observed = deferred<{
@@ -1333,7 +1664,7 @@ describe("Phase 3 HuanLink orchestration", () => {
         observed.resolve({
           error,
           recordState: record?.state,
-          notificationError: record?.terminalNotificationError,
+          notificationError: undefined,
         }),
     });
     runtimes.push(runtime);
@@ -1346,8 +1677,8 @@ describe("Phase 3 HuanLink orchestration", () => {
     const failure = await observed.promise;
 
     expect(failure.error.message).toContain("QQ egress is unavailable");
-    expect(failure.recordState).toBe("completed");
-    expect(failure.notificationError).toContain("QQ egress is unavailable");
+    expect(failure.recordState).toBeUndefined();
+    expect(failure.notificationError).toBeUndefined();
   });
 });
 

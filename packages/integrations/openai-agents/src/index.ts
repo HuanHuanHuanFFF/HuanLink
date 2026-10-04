@@ -3,3 +3,4 @@ export * from "./openai-agents-runtime.js";
 export * from "./agent-call-tool.js";
 export * from "./task-status-tool.js";
 export * from "./task-continuation-tool.js";
+export * from "./session-tool-history-tool.js";

@@ -1,6 +1,6 @@
 import {
   assertValidChannelConversationRoute,
-  type ChannelConversationRouteV1,
+  type ChannelConversationRoute,
 } from "@huanlink/core";
 
 export type ChannelAccessListMode = "allowlist" | "denylist";
@@ -44,7 +44,7 @@ export function copyChannelInboundAccessPolicy(
 /** 判断一条规范 Channel route 是否属于该实例允许的会话范围。 */
 export function isChannelRouteAllowed(
   policy: ChannelInboundAccessPolicy,
-  route: ChannelConversationRouteV1,
+  route: ChannelConversationRoute,
 ): boolean {
   assertValidChannelConversationRoute(route);
   const accessList =

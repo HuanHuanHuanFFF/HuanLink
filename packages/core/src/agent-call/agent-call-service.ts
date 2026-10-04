@@ -1,37 +1,57 @@
 import { randomUUID } from "node:crypto";
 
 import { NoopRuntimeLogger } from "../logging/noop-runtime-logger.js";
+import {
+  AsyncToolTaskService,
+  AsyncToolTaskPersistenceError,
+} from "../async-tool-task/async-tool-task-service.js";
 import type {
   RuntimeLogFields,
   RuntimeLogLevel,
   RuntimeLogger,
 } from "../logging/types.js";
 import type { AgentCallId, RunId } from "../shared/ids.js";
+import type { AsyncToolTaskPrivateReference } from "../async-tool-task/async-tool-task-store.js";
+import type { AsyncToolTask } from "../async-tool-task/types.js";
+import type {
+  SessionTaskQuotaLease,
+  SessionTaskQuotaService,
+} from "../tasks/session-task-quota-service.js";
 import {
   isAgentCallOutcomeState,
   isAgentCallTerminalState,
+  AGENT_CALL_TASK_KIND,
+  type AgentCallAsyncInvocationResult,
+  type AgentCallAsyncRequest,
   type AgentCallBackgroundErrorListener,
   type AgentCallContinuator,
+  type AgentCallContinueRequest,
+  type AgentCallContinueResult,
   type AgentCallInvocationResult,
   type AgentCallInputAnswers,
   type AgentCallInvoker,
-  type AgentCallPausedListener,
   type AgentCallRecord,
-  type AgentCallReceipt,
   type AgentCallReader,
   type AgentCallRequest,
   type AgentCallSubmitter,
   type AgentCallTaskSnapshot,
-  type AgentCallTerminalListener,
   type AgentCallTransport,
 } from "./types.js";
 
 export type AgentCallServiceOptions = {
   transport: AgentCallTransport;
+  taskService: AsyncToolTaskService;
+  /** Stable configured A2A Agent identity used only in private Task references. */
+  agentId?: string;
+  quotaService?: SessionTaskQuotaService;
   createId?: () => AgentCallId;
   createMessageId?: () => string;
   logger?: RuntimeLogger;
   now?: () => Date;
+  /** Test-only fault injection at the accepted local-bookkeeping seam. */
+  testHooks?: {
+    beforeAsyncTaskAcceptance?: () => void;
+  };
 };
 
 type ActiveWatcher = {
@@ -46,6 +66,52 @@ type ActiveContinuation = {
 
 type AgentCallOutcomeWaiter = (record: AgentCallRecord) => void;
 
+type AgentCallSubmission = {
+  agentCallId: AgentCallId;
+  a2aTaskId: string;
+  state: AgentCallRecord["state"];
+};
+
+type AcceptedSubmissionFacts = {
+  record: AgentCallRecord;
+  snapshot: AgentCallTaskSnapshot;
+};
+
+class AgentCallPreacceptFailure extends Error {
+  constructor(readonly originalError: unknown) {
+    super("AgentCall transport failed before remote acceptance", {
+      cause: originalError,
+    });
+  }
+}
+
+class AgentCallDispatchUncertainFailure extends Error {
+  constructor(readonly originalError: unknown) {
+    super("AgentCall dispatch outcome is uncertain", {
+      cause: originalError,
+    });
+  }
+}
+
+class AgentCallRemoteTaskConflictFailure extends Error {
+  constructor(readonly originalError: unknown) {
+    super("AgentCall remote task conflicts with an existing local record", {
+      cause: originalError,
+    });
+  }
+}
+
+class AgentCallAcceptedBookkeepingFailure extends Error {
+  constructor(
+    readonly originalError: unknown,
+    readonly accepted: AcceptedSubmissionFacts,
+  ) {
+    super("AgentCall was remotely accepted but local bookkeeping failed", {
+      cause: originalError,
+    });
+  }
+}
+
 export class AgentCallService
   implements
     AgentCallSubmitter,
@@ -54,10 +120,14 @@ export class AgentCallService
     AgentCallContinuator
 {
   private readonly transport: AgentCallTransport;
+  private readonly taskService: AsyncToolTaskService;
+  private readonly agentId: string;
+  private readonly quotaService: SessionTaskQuotaService;
   private readonly createId: () => AgentCallId;
   private readonly createMessageId: () => string;
   private readonly logger: RuntimeLogger;
   private readonly now: () => Date;
+  private readonly testHooks?: AgentCallServiceOptions["testHooks"];
   private readonly recordsByAgentCallId = new Map<
     AgentCallId,
     AgentCallRecord
@@ -65,14 +135,15 @@ export class AgentCallService
   private readonly agentCallIdByTaskId = new Map<string, AgentCallId>();
   private readonly terminalHandled = new Set<AgentCallId>();
   private readonly inputRequiredHandled = new Set<AgentCallId>();
-  private readonly notifyOutcomesAfterContinuation = new Set<AgentCallId>();
-  private readonly pausedListeners = new Set<AgentCallPausedListener>();
-  private readonly terminalListeners = new Set<AgentCallTerminalListener>();
   private readonly backgroundErrorListeners =
     new Set<AgentCallBackgroundErrorListener>();
-  private readonly activeSubmissions = new Set<Promise<AgentCallReceipt>>();
+  private readonly activeSubmissions = new Set<Promise<unknown>>();
+  private readonly activeBlockingBySource = new Map<
+    string,
+    Promise<AgentCallInvocationResult>
+  >();
+  private readonly taskBackedAgentCallIds = new Set<AgentCallId>();
   private readonly activeWatchers = new Map<AgentCallId, ActiveWatcher>();
-  private readonly activePauseNotifications = new Set<Promise<void>>();
   private readonly activeContinuationByTaskId = new Map<
     string,
     ActiveContinuation
@@ -87,52 +158,444 @@ export class AgentCallService
     Set<AgentCallOutcomeWaiter>
   >();
   private closed = false;
+  private readonly persistenceRetryAbort = new AbortController();
   private closeOperation?: Promise<void>;
 
   constructor(options: AgentCallServiceOptions) {
     this.transport = options.transport;
+    this.taskService = options.taskService;
+    const agentId = (options.agentId ?? "codex").trim();
+    if (agentId.length === 0) {
+      throw new Error("agentId must not be blank");
+    }
+    this.agentId = agentId;
+    if (
+      options.quotaService !== undefined &&
+      options.quotaService !== options.taskService.taskQuotaService
+    ) {
+      throw new Error(
+        "AgentCallService and AsyncToolTaskService must share one quota service",
+      );
+    }
+    this.quotaService = options.taskService.taskQuotaService;
     this.createId = options.createId ?? randomUUID;
     this.createMessageId = options.createMessageId ?? randomUUID;
     this.logger = options.logger ?? new NoopRuntimeLogger();
     this.now = options.now ?? (() => new Date());
+    this.testHooks = options.testHooks;
   }
 
-  async invoke(request: AgentCallRequest): Promise<AgentCallInvocationResult> {
-    const receipt = await this.submit(request);
+  invoke(request: AgentCallRequest): Promise<AgentCallInvocationResult> {
     if (request.executionMode === "async") {
-      return receipt;
+      return this.submit(request);
     }
 
-    let record: AgentCallRecord;
-    try {
-      record = await this.waitForOutcome(receipt.agentCallId, request.signal);
-    } catch (error) {
-      if (request.signal?.aborted) {
-        this.activeWatchers.get(receipt.agentCallId)?.controller.abort();
-        this.cancelAfterAbortedWait(receipt.agentCallId);
+    this.assertOpen();
+    const existingTask = this.taskService.getBySource(
+      request.sessionId,
+      request.runId,
+      request.sourceToolCallId,
+    );
+    if (existingTask !== undefined) {
+      if (
+        existingTask.kind !== AGENT_CALL_TASK_KIND ||
+        existingTask.toolName !== request.toolName
+      ) {
+        return Promise.reject(
+          new Error("AgentCall source conflicts with an existing Task"),
+        );
       }
+      if (existingTask.state === "unknown") {
+        return Promise.resolve(blockingUncertainResult(existingTask.taskId));
+      }
+      return Promise.reject(
+        new Error(
+          `Blocking AgentCall source already belongs to Task ${existingTask.taskId}`,
+        ),
+      );
+    }
+
+    const sourceKey = blockingSourceKey(request);
+    const active = this.activeBlockingBySource.get(sourceKey);
+    if (active !== undefined) {
+      return active;
+    }
+    const operation = this.performBlockingInvoke(request);
+    this.activeBlockingBySource.set(sourceKey, operation);
+    void operation.then(
+      () => {
+        if (this.activeBlockingBySource.get(sourceKey) === operation) {
+          this.activeBlockingBySource.delete(sourceKey);
+        }
+      },
+      () => {
+        if (this.activeBlockingBySource.get(sourceKey) === operation) {
+          this.activeBlockingBySource.delete(sourceKey);
+        }
+      },
+    );
+    return operation;
+  }
+
+  private async performBlockingInvoke(
+    request: Extract<AgentCallRequest, { executionMode: "blocking" }>,
+  ): Promise<AgentCallInvocationResult> {
+    const quota = this.quotaService.acquire(request.sessionId, "a2a");
+    if (quota.status === "limit-reached") {
+      return {
+        status: "error",
+        error: "task-limit-reached",
+        maxActiveTasksPerSession: quota.maxActiveTasksPerSession,
+      };
+    }
+    let agentCallId = this.createId();
+    let submission: AgentCallSubmission;
+    try {
+      submission = await this.trackSubmission(
+        this.performSubmit(request, agentCallId),
+      );
+    } catch (error) {
+      if (error instanceof AgentCallDispatchUncertainFailure) {
+        try {
+          const adoption = this.taskService.adoptAcceptedTask({
+            taskId: agentCallId,
+            sessionId: request.sessionId,
+            sourceRunId: request.runId,
+            sourceToolCallId: request.sourceToolCallId,
+            toolName: request.toolName,
+            kind: AGENT_CALL_TASK_KIND,
+            payload: { artifacts: [] },
+            state: "unknown",
+            quotaLease: quota.lease,
+            privateReference: this.privateReferenceForDispatchUncertain(
+              request,
+              agentCallId,
+            ),
+          });
+          agentCallId = adoption.task.taskId;
+        } catch (adoptionError) {
+          if (!(adoptionError instanceof AsyncToolTaskPersistenceError)) {
+            quota.lease.release();
+            throw adoptionError;
+          }
+          this.reportPersistenceFailure(
+            adoptionError.originalError,
+            agentCallId,
+          );
+        }
+        this.reportBackgroundError(error.originalError, agentCallId);
+        return blockingUncertainResult(agentCallId);
+      }
+      if (error instanceof AgentCallAcceptedBookkeepingFailure) {
+        try {
+          const adoption = this.taskService.adoptAcceptedTask({
+            taskId: agentCallId,
+            sessionId: request.sessionId,
+            sourceRunId: request.runId,
+            sourceToolCallId: request.sourceToolCallId,
+            toolName: request.toolName,
+            kind: AGENT_CALL_TASK_KIND,
+            payload: { artifacts: [] },
+            state: "unknown",
+            quotaLease: quota.lease,
+            privateReference: this.privateReferenceForAcceptedRecord(
+              error.accepted.record,
+            ),
+          });
+          agentCallId = adoption.task.taskId;
+        } catch (adoptionError) {
+          if (!(adoptionError instanceof AsyncToolTaskPersistenceError)) {
+            quota.lease.release();
+            throw adoptionError;
+          }
+          this.reportPersistenceFailure(
+            adoptionError.originalError,
+            agentCallId,
+          );
+        }
+        await this.recoverAcceptedSubmission(agentCallId, error.accepted);
+        this.reportBackgroundError(error.originalError, agentCallId);
+        return blockingUncertainResult(agentCallId);
+      }
+      if (error instanceof AgentCallRemoteTaskConflictFailure) {
+        quota.lease.release();
+        this.reportBackgroundError(error.originalError, agentCallId);
+        return {
+          status: "error",
+          error: "remote-task-conflict",
+          retrySafe: false,
+        };
+      }
+      if (error instanceof AgentCallPreacceptFailure) {
+        quota.lease.release();
+        throw error.originalError;
+      }
+      quota.lease.release();
       throw error;
     }
-    return {
-      status: "result",
-      executionMode: "blocking",
-      agentCallId: record.agentCallId,
-      taskId: record.taskId,
-      state: record.state,
-      artifacts: record.artifacts,
-      ...(record.questions === undefined
-        ? {}
-        : { questions: cloneQuestions(record.questions) }),
-      ...(record.statusMessage === undefined
-        ? {}
-        : { statusMessage: record.statusMessage }),
-    };
+
+    try {
+      let record: AgentCallRecord;
+      try {
+        record = await this.waitForOutcome(
+          submission.agentCallId,
+          request.signal,
+        );
+      } catch (error) {
+        if (request.signal?.aborted) {
+          this.activeWatchers.get(submission.agentCallId)?.controller.abort();
+          this.cancelAfterAbortedWait(submission.agentCallId);
+        }
+        throw error;
+      }
+      if (
+        record.state === "input-required" ||
+        record.state === "auth-required"
+      ) {
+        await this.interruptBlocking(record);
+        return {
+          status: "blocking-interrupted",
+          executionMode: "blocking",
+          state: record.state,
+          ...(record.questions === undefined
+            ? {}
+            : { questions: cloneQuestions(record.questions) }),
+          ...(record.statusMessage === undefined
+            ? {}
+            : { statusMessage: record.statusMessage }),
+        };
+      }
+      if (!isAgentCallTerminalState(record.state)) {
+        throw new Error(
+          `Blocking AgentCall ${record.agentCallId} stopped in unexpected state ${record.state}`,
+        );
+      }
+      return {
+        status: "result",
+        executionMode: "blocking",
+        state: record.state,
+        artifacts: record.artifacts,
+        ...(record.statusMessage === undefined
+          ? {}
+          : { statusMessage: record.statusMessage }),
+      };
+    } finally {
+      quota.lease.release();
+    }
   }
 
-  submit(request: AgentCallRequest): Promise<AgentCallReceipt> {
+  submit(
+    request: AgentCallAsyncRequest,
+  ): Promise<AgentCallAsyncInvocationResult> {
     this.assertOpen();
+    const reservation = this.taskService.reserve({
+      sessionId: request.sessionId,
+      sourceRunId: request.runId,
+      sourceToolCallId: request.sourceToolCallId,
+      toolName: request.toolName,
+      kind: AGENT_CALL_TASK_KIND,
+      payload: { artifacts: [] },
+    });
+    if (reservation.status === "limit-reached") {
+      return Promise.resolve({
+        status: "error",
+        error: "task-limit-reached",
+        maxActiveTasksPerSession: reservation.maxActiveTasksPerSession,
+      });
+    }
+    if (reservation.status === "duplicate") {
+      if (reservation.task.state === "submitting") {
+        return Promise.reject(
+          new Error(
+            `AgentCall Task ${reservation.task.taskId} is still submitting`,
+          ),
+        );
+      }
+      if (reservation.task.state === "rejected") {
+        return Promise.resolve({
+          status: "error",
+          error: "task-preaccept-rejected",
+        });
+      }
+      if (
+        this.taskService.isPersistenceUncertain(
+          request.sessionId,
+          reservation.task.taskId,
+        )
+      ) {
+        return Promise.resolve({
+          status: "accepted",
+          taskId: reservation.task.taskId,
+          state: "unknown",
+          retrySafe: false,
+          persistenceWarning: "task-state-not-persisted",
+        });
+      }
+      return Promise.resolve({
+        status: "accepted",
+        taskId: reservation.task.taskId,
+        state: reservation.task.state,
+      });
+    }
 
-    const operation = this.performSubmit(request);
+    const operation = this.performAsyncSubmit(request, reservation.task);
+    return this.trackSubmission(operation);
+  }
+
+  private async performAsyncSubmit(
+    request: AgentCallAsyncRequest,
+    reservedTask: AsyncToolTask,
+  ): Promise<AgentCallAsyncInvocationResult> {
+    const agentCallId = reservedTask.taskId;
+    let persistenceUncertain = false;
+    try {
+      const submission = await this.performSubmit(request, agentCallId, () => {
+        this.testHooks?.beforeAsyncTaskAcceptance?.();
+        const record = this.requireRecord(agentCallId);
+        try {
+          this.taskService.accept(
+            request.sessionId,
+            agentCallId,
+            {
+              state: record.state,
+              payload: agentCallTaskPayload(record),
+              ...(record.statusMessage === undefined
+                ? {}
+                : { statusMessage: record.statusMessage }),
+            },
+            {
+              privateReference: this.privateReferenceForAcceptedRecord(record),
+            },
+          );
+        } catch (error) {
+          if (!(error instanceof AsyncToolTaskPersistenceError)) throw error;
+          // Establish the fallback synchronously, before the registered initial
+          // outcome watcher or an immediate continuation can process a snapshot.
+          this.taskService.retainPersistenceUncertain({
+            taskId: agentCallId,
+            sessionId: request.sessionId,
+            sourceRunId: request.runId,
+            sourceToolCallId: request.sourceToolCallId,
+            toolName: request.toolName,
+            kind: AGENT_CALL_TASK_KIND,
+            payload: agentCallTaskPayload(record),
+            state: "unknown",
+            knownTask: reservedTask,
+            privateReference: this.privateReferenceForAcceptedRecord(record),
+          });
+          persistenceUncertain = true;
+          this.reportPersistenceFailure(error.originalError, agentCallId);
+        }
+        this.taskBackedAgentCallIds.add(agentCallId);
+      });
+      if (persistenceUncertain) {
+        return {
+          status: "accepted",
+          taskId: agentCallId,
+          state: "unknown",
+          retrySafe: false,
+          persistenceWarning: "task-state-not-persisted",
+        };
+      }
+      return {
+        status: "accepted",
+        taskId: submission.agentCallId,
+        state: submission.state,
+      };
+    } catch (error) {
+      let task: AsyncToolTask | undefined;
+      task = this.taskService.get(request.sessionId, agentCallId);
+      if (error instanceof AgentCallPreacceptFailure) {
+        if (task?.state !== "submitting") {
+          throw error.originalError;
+        }
+        this.taskService.rejectBeforeAcceptance(
+          request.sessionId,
+          agentCallId,
+          errorMessage(error.originalError),
+        );
+        return {
+          status: "error",
+          error: "task-preaccept-rejected",
+        };
+      }
+      if (error instanceof AgentCallRemoteTaskConflictFailure) {
+        if (task?.state === "submitting") {
+          this.taskService.rejectBeforeAcceptance(
+            request.sessionId,
+            agentCallId,
+            "Remote Agent task identity conflicted with an existing task",
+          );
+        }
+        this.reportBackgroundError(error.originalError, agentCallId);
+        return {
+          status: "error",
+          error: "remote-task-conflict",
+          retrySafe: false,
+        };
+      }
+      if (error instanceof AgentCallAcceptedBookkeepingFailure) {
+        if (task?.state === "submitting") {
+          task = this.taskService.accept(
+            request.sessionId,
+            agentCallId,
+            {
+              state: "unknown",
+              payload: { artifacts: [] },
+            },
+            {
+              privateReference: this.privateReferenceForAcceptedRecord(
+                error.accepted.record,
+              ),
+            },
+          );
+        }
+        this.taskBackedAgentCallIds.add(agentCallId);
+        await this.recoverAcceptedSubmission(agentCallId, error.accepted);
+      }
+      if (task?.state === "submitting") {
+        task = this.taskService.accept(
+          request.sessionId,
+          agentCallId,
+          {
+            state: "unknown",
+            payload: { artifacts: [] },
+          },
+          {
+            ...(error instanceof AgentCallDispatchUncertainFailure
+              ? {
+                  privateReference: this.privateReferenceForDispatchUncertain(
+                    request,
+                    agentCallId,
+                  ),
+                }
+              : {}),
+          },
+        );
+      }
+      if (
+        task === undefined ||
+        task.state === "submitting" ||
+        task.state === "rejected"
+      ) {
+        throw error;
+      }
+      this.reportBackgroundError(
+        error instanceof AgentCallDispatchUncertainFailure ||
+          error instanceof AgentCallAcceptedBookkeepingFailure
+          ? error.originalError
+          : error,
+        agentCallId,
+      );
+      return {
+        status: "accepted",
+        taskId: agentCallId,
+        state: task.state,
+      };
+    }
+  }
+
+  private trackSubmission<T>(operation: Promise<T>): Promise<T> {
     this.activeSubmissions.add(operation);
     void operation.then(
       () => this.activeSubmissions.delete(operation),
@@ -141,10 +604,26 @@ export class AgentCallService
     return operation;
   }
 
+  private async interruptBlocking(record: AgentCallRecord): Promise<void> {
+    try {
+      await this.cancel(record.agentCallId);
+    } catch (error) {
+      this.reportBackgroundError(
+        new Error("Failed to cancel an interrupted blocking AgentCall", {
+          cause: error,
+        }),
+        record.agentCallId,
+      );
+    }
+  }
+
   private async performSubmit(
     request: AgentCallRequest,
-  ): Promise<AgentCallReceipt> {
-    const agentCallId = this.createId();
+    agentCallId: AgentCallId,
+    beforeWatcher?: () => void,
+  ): Promise<AgentCallSubmission> {
+    let transportAccepted = false;
+    let acceptedFacts: AcceptedSubmissionFacts | undefined;
     const startedFields: RuntimeLogFields = {
       sessionId: request.sessionId,
       runId: request.runId,
@@ -152,15 +631,12 @@ export class AgentCallService
       skillId: request.skillId,
       executionMode: request.executionMode,
       inputLength: request.input.length,
-      ...(request.contextId === undefined
+      ...(request.sourceToolCallId === undefined
         ? {}
-        : { contextId: request.contextId }),
+        : { sourceToolCallId: request.sourceToolCallId }),
     };
     this.writeLog("info", "agent_call.submit.started", startedFields);
-    this.writeLog("debug", "agent_call.submit.started", {
-      ...startedFields,
-      input: request.input,
-    });
+    this.writeLog("debug", "agent_call.submit.started", startedFields);
     try {
       const capability = await this.transport.discoverCapability(
         request.skillId,
@@ -169,15 +645,33 @@ export class AgentCallService
       if (this.closed) {
         throw new Error("AgentCallService closed during submission");
       }
-      const submitted = await this.transport.submitTask({
-        messageId: agentCallId,
-        skillId: capability.id,
-        input: request.input,
-        ...(request.contextId === undefined
-          ? {}
-          : { contextId: request.contextId }),
-        ...(request.signal === undefined ? {} : { signal: request.signal }),
-      });
+      let dispatch: Awaited<ReturnType<AgentCallTransport["submitTask"]>>;
+      try {
+        dispatch = await this.transport.submitTask({
+          messageId: agentCallId,
+          skillId: capability.id,
+          input: request.input,
+          ...(request.inputData === undefined
+            ? {}
+            : { inputData: structuredClone(request.inputData) }),
+          ...(request.contextId === undefined
+            ? {}
+            : { contextId: request.contextId }),
+          ...(request.signal === undefined ? {} : { signal: request.signal }),
+        });
+      } catch (error) {
+        // Once the Transport send operation has been entered, an unexpected
+        // throw cannot prove that the remote side did not accept the request.
+        throw new AgentCallDispatchUncertainFailure(error);
+      }
+      if (dispatch.outcome === "not-dispatched") {
+        throw new AgentCallPreacceptFailure(dispatch.error);
+      }
+      if (dispatch.outcome === "dispatch-uncertain") {
+        throw new AgentCallDispatchUncertainFailure(dispatch.error);
+      }
+      const submitted = dispatch.snapshot;
+      transportAccepted = true;
 
       if (this.closed) {
         try {
@@ -194,7 +688,9 @@ export class AgentCallService
       }
 
       if (this.agentCallIdByTaskId.has(submitted.taskId)) {
-        throw new Error(`Remote task ${submitted.taskId} is already tracked`);
+        throw new AgentCallRemoteTaskConflictFailure(
+          new Error(`Remote task ${submitted.taskId} is already tracked`),
+        );
       }
 
       const timestamp = this.now().toISOString();
@@ -210,6 +706,9 @@ export class AgentCallService
         capabilityName: capability.name,
         input: request.input,
         executionMode: request.executionMode,
+        ...(request.sourceToolCallId === undefined
+          ? {}
+          : { sourceToolCallId: request.sourceToolCallId }),
         state: submitted.state,
         artifacts: cloneArtifacts(submitted.artifacts),
         ...(submitted.questions === undefined
@@ -221,6 +720,7 @@ export class AgentCallService
         createdAt: timestamp,
         updatedAt: timestamp,
       };
+      acceptedFacts = { record, snapshot: submitted };
 
       this.recordsByAgentCallId.set(agentCallId, record);
       this.agentCallIdByTaskId.set(submitted.taskId, agentCallId);
@@ -229,24 +729,49 @@ export class AgentCallService
         ...snapshotCountFields(submitted),
       };
       this.writeLog("info", "agent_call.submit.accepted", acceptedFields);
-      this.writeLog("debug", "agent_call.submit.accepted", {
-        ...acceptedFields,
-        snapshot: snapshotForLog(submitted),
-      });
-      this.startWatcher(agentCallId, submitted);
+      this.writeLog("debug", "agent_call.submit.accepted", acceptedFields);
+      if (isAgentCallOutcomeState(submitted.state)) {
+        this.startWatcher(agentCallId, submitted);
+      }
+      beforeWatcher?.();
+      if (!this.activeWatchers.has(agentCallId)) {
+        this.startWatcher(agentCallId, submitted);
+      }
 
       return {
-        status: "accepted",
-        executionMode: request.executionMode,
         agentCallId,
-        taskId: submitted.taskId,
+        a2aTaskId: submitted.taskId,
         state: submitted.state,
       };
     } catch (error) {
-      const failedFields = { ...startedFields, ...errorLogFields(error) };
+      const reportedError =
+        error instanceof AgentCallPreacceptFailure ||
+        error instanceof AgentCallDispatchUncertainFailure ||
+        error instanceof AgentCallRemoteTaskConflictFailure ||
+        error instanceof AgentCallAcceptedBookkeepingFailure
+          ? error.originalError
+          : error;
+      const failedFields = {
+        ...startedFields,
+        ...errorLogFields(reportedError),
+      };
       this.writeLog("error", "agent_call.submit.failed", failedFields);
       this.writeLog("debug", "agent_call.submit.failed", failedFields);
-      throw error;
+      if (
+        error instanceof AgentCallPreacceptFailure ||
+        error instanceof AgentCallDispatchUncertainFailure ||
+        error instanceof AgentCallRemoteTaskConflictFailure ||
+        error instanceof AgentCallAcceptedBookkeepingFailure
+      ) {
+        throw error;
+      }
+      if (!transportAccepted) {
+        throw new AgentCallPreacceptFailure(error);
+      }
+      if (acceptedFacts === undefined) {
+        throw error;
+      }
+      throw new AgentCallAcceptedBookkeepingFailure(error, acceptedFacts);
     }
   }
 
@@ -321,16 +846,6 @@ export class AgentCallService
     }
   }
 
-  onTerminal(listener: AgentCallTerminalListener): () => void {
-    this.terminalListeners.add(listener);
-    return () => this.terminalListeners.delete(listener);
-  }
-
-  onPaused(listener: AgentCallPausedListener): () => void {
-    this.pausedListeners.add(listener);
-    return () => this.pausedListeners.delete(listener);
-  }
-
   onBackgroundError(listener: AgentCallBackgroundErrorListener): () => void {
     this.backgroundErrorListeners.add(listener);
     return () => this.backgroundErrorListeners.delete(listener);
@@ -346,33 +861,25 @@ export class AgentCallService
     }
     const startedFields = agentCallLogFields(record);
     this.writeLog("info", "agent_call.cancel.started", startedFields);
-    this.writeLog("debug", "agent_call.cancel.started", {
-      ...startedFields,
-      snapshot: snapshotForLog(snapshotFromRecord(record)),
-    });
+    this.writeLog("debug", "agent_call.cancel.started", startedFields);
     this.activeContinuationByTaskId.get(record.taskId)?.controller.abort();
     const operation = Promise.resolve()
       .then(() => this.performCancel(agentCallId, record.taskId))
       .then((canceledRecord) => {
-        const snapshot = snapshotFromRecord(canceledRecord);
         const completedFields = {
           ...agentCallLogFields(canceledRecord),
-          ...snapshotCountFields(snapshot),
+          artifactCount: canceledRecord.artifacts.length,
+          questionCount: canceledRecord.questions?.length ?? 0,
+          statusMessageLength: canceledRecord.statusMessage?.length ?? 0,
         };
         this.writeLog("info", "agent_call.cancel.completed", completedFields);
-        this.writeLog("debug", "agent_call.cancel.completed", {
-          ...completedFields,
-          snapshot: snapshotForLog(snapshot),
-        });
+        this.writeLog("debug", "agent_call.cancel.completed", completedFields);
         return canceledRecord;
       })
       .catch((error: unknown) => {
         const failedFields = { ...startedFields, ...errorLogFields(error) };
         this.writeLog("error", "agent_call.cancel.failed", failedFields);
-        this.writeLog("debug", "agent_call.cancel.failed", {
-          ...failedFields,
-          snapshot: snapshotForLog(snapshotFromRecord(record)),
-        });
+        this.writeLog("debug", "agent_call.cancel.failed", failedFields);
         throw error;
       });
     this.activeCancellationByTaskId.set(record.taskId, operation);
@@ -415,44 +922,83 @@ export class AgentCallService
   }
 
   continueTask(
-    taskId: string,
-    answers: AgentCallInputAnswers,
-    signal?: AbortSignal,
-  ): Promise<AgentCallRecord> {
+    request: AgentCallContinueRequest,
+  ): Promise<AgentCallContinueResult> {
     this.assertOpen();
-    const initialRecord = this.getByTaskId(taskId);
+    const task = this.taskService.get(request.sessionId, request.taskId);
+    if (task === undefined) {
+      return Promise.resolve({ status: "not-found", taskId: request.taskId });
+    }
+    if (task.kind !== AGENT_CALL_TASK_KIND) {
+      return Promise.resolve({
+        status: "unsupported",
+        taskId: request.taskId,
+        operation: "continue",
+      });
+    }
+    if (task.state !== "input-required") {
+      return Promise.resolve({
+        status: "invalid-state",
+        taskId: request.taskId,
+        state: task.state,
+      });
+    }
+    const initialRecord = this.getByAgentCallId(request.taskId);
+    if (initialRecord === undefined) {
+      return Promise.reject(
+        new Error(`AgentCall Task ${request.taskId} has no internal record`),
+      );
+    }
+    if (initialRecord.state !== "input-required") {
+      return Promise.resolve({
+        status: "invalid-state",
+        taskId: request.taskId,
+        state: task.state,
+      });
+    }
+    const answers = validateContinuationAnswers(
+      initialRecord.questions,
+      request.answers,
+    );
+    if (answers === undefined) {
+      return Promise.resolve({
+        status: "invalid-answers",
+        taskId: request.taskId,
+        error:
+          "Answers must cover every pending question exactly once with at least one non-blank answer.",
+      });
+    }
+    const a2aTaskId = initialRecord.taskId;
     const questionIds = Object.keys(answers);
     const startedFields: RuntimeLogFields = {
-      ...(initialRecord === undefined
-        ? { a2aTaskId: taskId }
-        : agentCallLogFields(initialRecord)),
+      taskId: request.taskId,
+      ...agentCallLogFields(initialRecord),
       questionIds,
       count: questionIds.length,
     };
     this.writeLog("info", "agent_call.continue.started", startedFields);
-    this.writeLog("debug", "agent_call.continue.started", {
-      ...startedFields,
-      answers: answersForLog(answers, initialRecord?.questions),
-    });
-    if (this.activeCancellationByTaskId.has(taskId)) {
+    this.writeLog("debug", "agent_call.continue.started", startedFields);
+    if (this.activeCancellationByTaskId.has(a2aTaskId)) {
       return Promise.reject(
-        new Error(`Remote task ${taskId} is being canceled`),
+        new Error(`Remote task ${a2aTaskId} is being canceled`),
       );
     }
-    if (this.activeContinuationByTaskId.has(taskId)) {
+    if (this.activeContinuationByTaskId.has(a2aTaskId)) {
       return Promise.reject(
-        new Error(`Remote task ${taskId} already has an active continuation`),
+        new Error(
+          `Remote task ${a2aTaskId} already has an active continuation`,
+        ),
       );
     }
     const controller = new AbortController();
     const continuationSignal =
-      signal === undefined
+      request.signal === undefined
         ? controller.signal
-        : AbortSignal.any([signal, controller.signal]);
-    const operation = Promise.resolve()
+        : AbortSignal.any([request.signal, controller.signal]);
+    const internalOperation = Promise.resolve()
       .then(() =>
         this.performContinueTask(
-          taskId,
+          a2aTaskId,
           answers,
           continuationSignal,
           controller.signal,
@@ -465,41 +1011,38 @@ export class AgentCallService
           count: questionIds.length,
         };
         this.writeLog("info", "agent_call.continue.accepted", acceptedFields);
-        this.writeLog("debug", "agent_call.continue.accepted", {
-          ...acceptedFields,
-          answers: answersForLog(answers, initialRecord?.questions),
-          snapshot: snapshotForLog(snapshotFromRecord(record)),
-        });
+        this.writeLog("debug", "agent_call.continue.accepted", acceptedFields);
         return record;
       })
       .catch((error: unknown) => {
         const failedFields = { ...startedFields, ...errorLogFields(error) };
         this.writeLog("error", "agent_call.continue.failed", failedFields);
-        this.writeLog("debug", "agent_call.continue.failed", {
-          ...failedFields,
-          answers: answersForLog(answers, initialRecord?.questions),
-        });
+        this.writeLog("debug", "agent_call.continue.failed", failedFields);
         throw error;
       });
-    const activeContinuation = { controller, promise: operation };
-    this.activeContinuationByTaskId.set(taskId, activeContinuation);
-    void operation.then(
+    const activeContinuation = { controller, promise: internalOperation };
+    this.activeContinuationByTaskId.set(a2aTaskId, activeContinuation);
+    void internalOperation.then(
       () => {
         if (
-          this.activeContinuationByTaskId.get(taskId) === activeContinuation
+          this.activeContinuationByTaskId.get(a2aTaskId) === activeContinuation
         ) {
-          this.activeContinuationByTaskId.delete(taskId);
+          this.activeContinuationByTaskId.delete(a2aTaskId);
         }
       },
       () => {
         if (
-          this.activeContinuationByTaskId.get(taskId) === activeContinuation
+          this.activeContinuationByTaskId.get(a2aTaskId) === activeContinuation
         ) {
-          this.activeContinuationByTaskId.delete(taskId);
+          this.activeContinuationByTaskId.delete(a2aTaskId);
         }
       },
     );
-    return operation;
+    return internalOperation.then((record) => ({
+      status: "continued",
+      taskId: request.taskId,
+      state: record.state,
+    }));
   }
 
   private async performContinueTask(
@@ -552,15 +1095,12 @@ export class AgentCallService
         `Remote task ${taskId} continued in unexpected state ${continued.state}`,
       );
     }
-    await this.applySnapshot(agentCallId, continued);
+    await this.applySnapshot(agentCallId, continued, internalSignal);
     if (this.closed) {
       this.recordsByAgentCallId.set(agentCallId, latestRecord);
       await this.rejectContinuationDuringShutdown(agentCallId, taskId);
     }
     internalSignal.throwIfAborted();
-    if (latestRecord.executionMode === "blocking") {
-      this.notifyOutcomesAfterContinuation.add(agentCallId);
-    }
     this.startWatcher(agentCallId, continued);
     return this.requireRecordClone(agentCallId);
   }
@@ -588,13 +1128,11 @@ export class AgentCallService
   async waitForIdle(): Promise<void> {
     while (
       this.activeWatchers.size > 0 ||
-      this.activePauseNotifications.size > 0 ||
       this.activeContinuationByTaskId.size > 0 ||
       this.activeCancellations.size > 0
     ) {
       await Promise.allSettled([
         ...[...this.activeWatchers.values()].map((watcher) => watcher.promise),
-        ...this.activePauseNotifications,
         ...[...this.activeContinuationByTaskId.values()].map(
           (continuation) => continuation.promise,
         ),
@@ -608,6 +1146,7 @@ export class AgentCallService
       return this.closeOperation;
     }
     this.closed = true;
+    this.persistenceRetryAbort.abort();
     this.writeLog("info", "agent_call.service.closing", {
       count:
         this.activeSubmissions.size +
@@ -663,10 +1202,7 @@ export class AgentCallService
       const startedRecord = this.requireRecord(agentCallId);
       const startedFields = agentCallLogFields(startedRecord);
       this.writeLog("info", "agent_call.watcher.started", startedFields);
-      this.writeLog("debug", "agent_call.watcher.started", {
-        ...startedFields,
-        snapshot: snapshotForLog(initial),
-      });
+      this.writeLog("debug", "agent_call.watcher.started", startedFields);
       try {
         if (isAgentCallOutcomeState(initial.state)) {
           await this.applySnapshot(agentCallId, initial);
@@ -759,6 +1295,41 @@ export class AgentCallService
   private async applySnapshot(
     agentCallId: AgentCallId,
     snapshot: AgentCallTaskSnapshot,
+    retrySignal?: AbortSignal,
+  ): Promise<void> {
+    const signal =
+      retrySignal === undefined
+        ? this.persistenceRetryAbort.signal
+        : AbortSignal.any([this.persistenceRetryAbort.signal, retrySignal]);
+    const observed = {
+      ...snapshot,
+      artifacts: cloneArtifacts(snapshot.artifacts),
+      ...(snapshot.questions === undefined
+        ? {}
+        : { questions: cloneQuestions(snapshot.questions) }),
+    };
+    let reported = false;
+    for (;;) {
+      try {
+        await this.applySnapshotOnce(agentCallId, observed);
+        return;
+      } catch (error) {
+        if (!(error instanceof AsyncToolTaskPersistenceError)) throw error;
+        // Retry only this Store write, never the remote operation or notification.
+        if (!reported) {
+          this.reportBackgroundError(error.originalError, agentCallId);
+          reported = true;
+        }
+        if (signal.aborted) throw error;
+        await waitForPersistenceRetry(signal);
+        if (signal.aborted) throw error;
+      }
+    }
+  }
+
+  private async applySnapshotOnce(
+    agentCallId: AgentCallId,
+    snapshot: AgentCallTaskSnapshot,
   ): Promise<void> {
     if (this.terminalHandled.has(agentCallId)) {
       return;
@@ -787,6 +1358,23 @@ export class AgentCallService
       updatedAt: this.now().toISOString(),
     };
     this.recordsByAgentCallId.set(agentCallId, updated);
+    if (this.taskBackedAgentCallIds.has(agentCallId)) {
+      try {
+        this.taskService.updateAccepted(updated.sessionId, agentCallId, {
+          state: updated.state,
+          payload: agentCallTaskPayload(updated),
+          ...(updated.statusMessage === undefined
+            ? {}
+            : { statusMessage: updated.statusMessage }),
+        });
+      } catch (error) {
+        // Synchronous post-commit listeners need the new record. Roll back only
+        // Store failures, not exceptions from those already-notified listeners.
+        if (error instanceof AsyncToolTaskPersistenceError)
+          this.recordsByAgentCallId.set(agentCallId, current);
+        throw error;
+      }
+    }
 
     if (current.state !== updated.state) {
       const stateFields = {
@@ -795,10 +1383,7 @@ export class AgentCallService
         ...snapshotCountFields(snapshot),
       };
       this.writeLog("info", "agent_call.state.changed", stateFields);
-      this.writeLog("debug", "agent_call.state.changed", {
-        ...stateFields,
-        snapshot: snapshotForLog(snapshot),
-      });
+      this.writeLog("debug", "agent_call.state.changed", stateFields);
     }
 
     if (snapshot.state === "working") {
@@ -816,17 +1401,7 @@ export class AgentCallService
         statusMessageLength: updated.statusMessage?.length ?? 0,
       };
       this.writeLog("info", "agent_call.paused", pausedFields);
-      this.writeLog("debug", "agent_call.paused", {
-        ...pausedFields,
-        questions: questionsForLog(questions),
-        snapshot: snapshotForLog(snapshot),
-      });
-      if (
-        updated.executionMode === "async" ||
-        this.notifyOutcomesAfterContinuation.has(agentCallId)
-      ) {
-        this.notifyPaused(updated);
-      }
+      this.writeLog("debug", "agent_call.paused", pausedFields);
     }
 
     if (isAgentCallOutcomeState(snapshot.state)) {
@@ -849,33 +1424,8 @@ export class AgentCallService
       statusMessageLength: updated.statusMessage?.length ?? 0,
     };
     this.writeLog("info", "agent_call.terminal", terminalFields);
-    this.writeLog("debug", "agent_call.terminal", {
-      ...terminalFields,
-      artifacts: cloneArtifacts(updated.artifacts),
-      snapshot: snapshotForLog(snapshot),
-    });
-    const notifyAfterContinuation =
-      this.notifyOutcomesAfterContinuation.delete(agentCallId);
-    if (updated.executionMode === "blocking" && !notifyAfterContinuation) {
-      return;
-    }
+    this.writeLog("debug", "agent_call.terminal", terminalFields);
     this.activeWatchers.get(agentCallId)?.controller.abort();
-    const results = await Promise.allSettled(
-      [...this.terminalListeners].map((listener) =>
-        Promise.resolve().then(() => listener(cloneRecord(updated)!)),
-      ),
-    );
-    const failures = results.flatMap((result) =>
-      result.status === "rejected" ? [errorMessage(result.reason)] : [],
-    );
-    if (failures.length > 0) {
-      const terminalNotificationError = failures.join("; ");
-      this.recordsByAgentCallId.set(agentCallId, {
-        ...updated,
-        terminalNotificationError,
-      });
-      throw new Error(terminalNotificationError);
-    }
   }
 
   private assertMatchingTask(
@@ -895,6 +1445,76 @@ export class AgentCallService
       throw new Error(`Unknown AgentCall ${agentCallId}`);
     }
     return record;
+  }
+
+  private async recoverAcceptedSubmission(
+    agentCallId: AgentCallId,
+    accepted: AcceptedSubmissionFacts,
+  ): Promise<void> {
+    const mappedAgentCallId = this.agentCallIdByTaskId.get(
+      accepted.snapshot.taskId,
+    );
+    if (mappedAgentCallId !== undefined && mappedAgentCallId !== agentCallId) {
+      throw new Error(
+        `Remote task ${accepted.snapshot.taskId} is already tracked`,
+      );
+    }
+    const current =
+      this.recordsByAgentCallId.get(agentCallId) ?? accepted.record;
+    this.recordsByAgentCallId.set(agentCallId, current);
+    this.agentCallIdByTaskId.set(accepted.snapshot.taskId, agentCallId);
+    this.taskBackedAgentCallIds.add(agentCallId);
+    if (this.terminalHandled.has(agentCallId)) {
+      this.taskService.updateAccepted(current.sessionId, agentCallId, {
+        state: current.state,
+        payload: agentCallTaskPayload(current),
+        ...(current.statusMessage === undefined
+          ? {}
+          : { statusMessage: current.statusMessage }),
+      });
+      return;
+    }
+    if (isAgentCallOutcomeState(accepted.snapshot.state)) {
+      await this.applySnapshot(agentCallId, accepted.snapshot);
+      return;
+    }
+    if (!this.activeWatchers.has(agentCallId)) {
+      this.startWatcher(agentCallId, accepted.snapshot);
+    }
+  }
+
+  private privateReferenceForAcceptedRecord(
+    record: AgentCallRecord,
+  ): AsyncToolTaskPrivateReference {
+    return {
+      namespace: "agent-call/a2a",
+      agentId: this.agentId,
+      externalTaskId: record.taskId,
+      ...(record.contextId === undefined
+        ? {}
+        : { contextId: record.contextId }),
+      metadata: {
+        messageId: record.agentCallId,
+        skillId: record.skillId,
+      },
+    };
+  }
+
+  private privateReferenceForDispatchUncertain(
+    request: AgentCallRequest,
+    agentCallId: AgentCallId,
+  ): AsyncToolTaskPrivateReference {
+    return {
+      namespace: "agent-call/a2a",
+      agentId: this.agentId,
+      ...(request.contextId === undefined
+        ? {}
+        : { contextId: request.contextId }),
+      metadata: {
+        messageId: agentCallId,
+        skillId: request.skillId,
+      },
+    };
   }
 
   private requireRecordClone(agentCallId: AgentCallId): AgentCallRecord {
@@ -946,23 +1566,34 @@ export class AgentCallService
     }
   }
 
-  private notifyPaused(record: AgentCallRecord): void {
-    const operation = Promise.allSettled(
-      [...this.pausedListeners].map((listener) =>
-        Promise.resolve().then(() => listener(cloneRecord(record)!)),
-      ),
-    ).then((results) => {
-      for (const result of results) {
-        if (result.status === "rejected") {
-          this.reportBackgroundError(result.reason, record.agentCallId);
-        }
+  private reportPersistenceFailure(
+    error: unknown,
+    agentCallId: AgentCallId,
+  ): void {
+    const normalized =
+      error instanceof Error ? error : new Error(errorMessage(error));
+    const record = this.getByAgentCallId(agentCallId);
+    const fields = {
+      agentCallId,
+      ...(record === undefined
+        ? {}
+        : {
+            state: record.state,
+            executionMode: record.executionMode,
+          }),
+      ...errorLogFields(normalized),
+    };
+    this.writeLog("error", "agent_call.background_error", fields);
+    this.writeLog("debug", "agent_call.background_error", fields);
+    for (const listener of this.backgroundErrorListeners) {
+      try {
+        void Promise.resolve(listener(normalized, record)).catch(
+          () => undefined,
+        );
+      } catch {
+        // Error observers must not create another unhandled background failure.
       }
-    });
-    this.activePauseNotifications.add(operation);
-    void operation.then(
-      () => this.activePauseNotifications.delete(operation),
-      () => this.activePauseNotifications.delete(operation),
-    );
+    }
   }
 }
 
@@ -972,15 +1603,14 @@ function cloneArtifacts(
   return artifacts.map((artifact) => ({ ...artifact }));
 }
 
-const LOG_REDACTED_VALUE = "[Redacted]";
-
 function agentCallLogFields(record: AgentCallRecord): RuntimeLogFields {
   return {
     sessionId: record.sessionId,
     runId: record.runId,
     agentCallId: record.agentCallId,
-    a2aTaskId: record.taskId,
-    ...(record.contextId === undefined ? {} : { contextId: record.contextId }),
+    ...(record.sourceToolCallId === undefined
+      ? {}
+      : { sourceToolCallId: record.sourceToolCallId }),
     skillId: record.skillId,
     state: record.state,
     executionMode: record.executionMode,
@@ -1001,84 +1631,6 @@ function errorLogFields(error: unknown): RuntimeLogFields {
   return {
     errorType: error instanceof Error ? error.name : typeof error,
     errorMessageLength: errorMessage(error).length,
-  };
-}
-
-function questionsForLog(
-  questions: NonNullable<AgentCallRecord["questions"]>,
-): unknown[] {
-  return questions.map((question) =>
-    question.isSecret
-      ? {
-          id: question.id,
-          header: LOG_REDACTED_VALUE,
-          question: LOG_REDACTED_VALUE,
-          isOther: question.isOther,
-          isSecret: true,
-          options:
-            question.options === null
-              ? null
-              : question.options.map(() => ({
-                  label: LOG_REDACTED_VALUE,
-                  description: LOG_REDACTED_VALUE,
-                })),
-        }
-      : {
-          ...question,
-          options:
-            question.options === null
-              ? null
-              : question.options.map((option) => ({ ...option })),
-        },
-  );
-}
-
-function answersForLog(
-  answers: AgentCallInputAnswers,
-  questions: AgentCallRecord["questions"],
-): AgentCallInputAnswers {
-  const ordinaryQuestionIds = new Set(
-    (questions ?? [])
-      .filter((question) => !question.isSecret)
-      .map((question) => question.id),
-  );
-  return Object.fromEntries(
-    Object.entries(answers).map(([questionId, values]) => [
-      questionId,
-      ordinaryQuestionIds.has(questionId)
-        ? [...values]
-        : values.map(() => LOG_REDACTED_VALUE),
-    ]),
-  );
-}
-
-function snapshotForLog(snapshot: AgentCallTaskSnapshot): unknown {
-  const containsSecretQuestion =
-    snapshot.questions?.some((question) => question.isSecret) === true;
-  return {
-    ...snapshot,
-    artifacts: cloneArtifacts(snapshot.artifacts),
-    ...(snapshot.questions === undefined
-      ? {}
-      : { questions: questionsForLog(snapshot.questions) }),
-    ...(containsSecretQuestion && snapshot.statusMessage !== undefined
-      ? { statusMessage: LOG_REDACTED_VALUE }
-      : {}),
-  };
-}
-
-function snapshotFromRecord(record: AgentCallRecord): AgentCallTaskSnapshot {
-  return {
-    taskId: record.taskId,
-    ...(record.contextId === undefined ? {} : { contextId: record.contextId }),
-    state: record.state,
-    artifacts: cloneArtifacts(record.artifacts),
-    ...(record.questions === undefined
-      ? {}
-      : { questions: cloneQuestions(record.questions) }),
-    ...(record.statusMessage === undefined
-      ? {}
-      : { statusMessage: record.statusMessage }),
   };
 }
 
@@ -1103,6 +1655,42 @@ function cloneAnswers(answers: AgentCallInputAnswers): AgentCallInputAnswers {
   );
 }
 
+function validateContinuationAnswers(
+  questions: AgentCallRecord["questions"],
+  answers: AgentCallInputAnswers,
+): AgentCallInputAnswers | undefined {
+  if (questions === undefined || questions.length === 0) {
+    return undefined;
+  }
+  const questionIds = new Set(questions.map((question) => question.id));
+  if (questionIds.size !== questions.length) {
+    return undefined;
+  }
+  const answerEntries = Object.entries(answers);
+  if (answerEntries.length !== questionIds.size) {
+    return undefined;
+  }
+  for (const [questionId, values] of answerEntries) {
+    if (
+      !questionIds.has(questionId) ||
+      values.length === 0 ||
+      values.some((value) => value.trim().length === 0)
+    ) {
+      return undefined;
+    }
+  }
+  return cloneAnswers(answers);
+}
+
+function agentCallTaskPayload(record: AgentCallRecord) {
+  return {
+    artifacts: cloneArtifacts(record.artifacts),
+    ...(record.questions === undefined
+      ? {}
+      : { questions: cloneQuestions(record.questions) }),
+  };
+}
+
 function cloneRecord(
   record: AgentCallRecord | undefined,
 ): AgentCallRecord | undefined {
@@ -1119,6 +1707,44 @@ function cloneRecord(
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function blockingSourceKey(
+  request: Extract<AgentCallRequest, { executionMode: "blocking" }>,
+): string {
+  return JSON.stringify([
+    request.sessionId,
+    request.runId,
+    request.sourceToolCallId,
+  ]);
+}
+
+function blockingUncertainResult(
+  taskId: string,
+): Extract<AgentCallInvocationResult, { status: "blocking-uncertain" }> {
+  return {
+    status: "blocking-uncertain",
+    executionMode: "blocking",
+    taskId,
+    state: "unknown",
+    retrySafe: false,
+  };
+}
+
+function waitForPersistenceRetry(signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) {
+      resolve();
+      return;
+    }
+    const finish = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, 1_000);
+    signal.addEventListener("abort", finish, { once: true });
+  });
 }
 
 function waitWithSignal<T>(

@@ -9,6 +9,12 @@ export type AgentTurnSchedulerOptions = {
   runtime: AgentRuntime;
 };
 
+export type AgentTurnOperation<T> = {
+  sessionId: SessionId;
+  signal?: AbortSignal;
+  operation: () => Promise<T>;
+};
+
 // 同一 session 的 fresh turns 串行执行，不把远端长任务放进本地 run。
 export class AgentTurnScheduler implements AgentRuntime {
   private readonly runtime: AgentRuntime;
@@ -19,18 +25,29 @@ export class AgentTurnScheduler implements AgentRuntime {
   }
 
   run(input: AgentRuntimeInput): Promise<AgentRuntimeResult> {
-    const previous = this.tails.get(input.sessionId) ?? Promise.resolve();
+    return this.runOperation({
+      sessionId: input.sessionId,
+      ...(input.signal === undefined ? {} : { signal: input.signal }),
+      operation: () => this.runtime.run(input),
+    });
+  }
+
+  runOperation<T>(request: AgentTurnOperation<T>): Promise<T> {
+    const previous = this.tails.get(request.sessionId) ?? Promise.resolve();
     const result = previous
       .catch(() => undefined)
-      .then(() => this.runtime.run(input));
+      .then(() => {
+        request.signal?.throwIfAborted();
+        return request.operation();
+      });
     const tail = result.then(
       () => undefined,
       () => undefined,
     );
-    this.tails.set(input.sessionId, tail);
+    this.tails.set(request.sessionId, tail);
     void tail.then(() => {
-      if (this.tails.get(input.sessionId) === tail) {
-        this.tails.delete(input.sessionId);
+      if (this.tails.get(request.sessionId) === tail) {
+        this.tails.delete(request.sessionId);
       }
     });
     return result;

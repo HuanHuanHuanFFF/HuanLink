@@ -162,12 +162,19 @@ describe("Phase 2 real A2A to Codex app-server smoke", () => {
     expect(beforeWorktree.branch).toBe(EXPECTED_BRANCH);
     const runtime = await startCodexAdapterRuntime({
       codexExecutable,
-      codexModel: "gpt-5.4-mini",
-      expectedBranch: EXPECTED_BRANCH,
+      projects: [
+        {
+          projectId: "smoke",
+          workspace,
+          branch: EXPECTED_BRANCH,
+          defaultModelId: "gpt-5.4-mini",
+          defaultReasoningEffort: "high",
+        },
+      ],
+      projectRoot: workspace,
       expectedCodexVersion: "0.144.1",
       host: "127.0.0.1",
       port: 0,
-      workspace,
     });
 
     try {
@@ -178,7 +185,12 @@ describe("Phase 2 real A2A to Codex app-server smoke", () => {
             message: {
               messageId: randomUUID(),
               role: "ROLE_USER",
-              parts: [{ text: TASK_PROMPT }],
+              parts: [
+                { text: TASK_PROMPT },
+                {
+                  data: { type: "huanlink.codex-task.v1", projectId: "smoke" },
+                },
+              ],
             },
             configuration: { returnImmediately: true },
           }),

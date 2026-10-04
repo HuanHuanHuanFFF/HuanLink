@@ -1,10 +1,10 @@
 import { Buffer } from "node:buffer";
 
 import {
-  CHANNEL_INBOUND_CONTENT_MAX_BYTES_V1,
-  CHANNEL_INBOUND_CONTENT_TOO_LARGE_PLACEHOLDER_V1,
-  resolveChannelTriggerV1,
-  type InboundChannelMessageV1,
+  CHANNEL_INBOUND_CONTENT_MAX_BYTES,
+  CHANNEL_INBOUND_CONTENT_TOO_LARGE_PLACEHOLDER,
+  resolveChannelTrigger,
+  type InboundChannelMessage,
 } from "@huanlink/core";
 
 import {
@@ -12,20 +12,20 @@ import {
   type OneBot11MessageSegment,
 } from "./codec.js";
 
-export type ParseOneBot11MessageV1Options = {
+export type ParseOneBot11MessageOptions = {
   /** 当前 OneBot Channel 实例的稳定标识。 */
   readonly channelId: string;
 };
 
 /**
- * 将 OneBot 11 的群聊或私聊消息事件转换为 HuanLink V1 入站消息。
+ * 将 OneBot 11 的群聊或私聊消息事件转换为 HuanLink Channel 入站消息。
  * 不支持的事件或缺少必要字段时返回 undefined；配置项为空时抛出错误。
  * 消息正文统一保留为 CQ 字符串，超过 8 KiB 时改为超限占位记录。
  */
-export function parseOneBot11MessageV1(
+export function parseOneBot11Message(
   input: unknown,
-  options: ParseOneBot11MessageV1Options,
-): InboundChannelMessageV1 | undefined {
+  options: ParseOneBot11MessageOptions,
+): InboundChannelMessage | undefined {
   const channelId = nonEmptyString(options.channelId);
   if (channelId === undefined) {
     throw new Error("channelId must be non-empty");
@@ -66,7 +66,7 @@ export function parseOneBot11MessageV1(
   const username = nonEmptyString(sender?.nickname) ?? senderId;
   const displayName = nonEmptyString(sender?.card);
   const contentSize = Buffer.byteLength(normalized.content, "utf8");
-  const message: InboundChannelMessageV1 = {
+  const message: InboundChannelMessage = {
     messageId,
     route: {
       channelId,
@@ -82,10 +82,10 @@ export function parseOneBot11MessageV1(
       isSelf: senderId === selfId,
     },
     receivedAt,
-    ...(contentSize <= CHANNEL_INBOUND_CONTENT_MAX_BYTES_V1
+    ...(contentSize <= CHANNEL_INBOUND_CONTENT_MAX_BYTES
       ? { content: normalized.content }
       : {
-          content: CHANNEL_INBOUND_CONTENT_TOO_LARGE_PLACEHOLDER_V1,
+          content: CHANNEL_INBOUND_CONTENT_TOO_LARGE_PLACEHOLDER,
           contentOmitted: {
             reason: "too_large" as const,
             originalSizeBytes: contentSize,
@@ -104,7 +104,7 @@ export function parseOneBot11MessageV1(
 function optionalMessageMetadata(
   segments: readonly OneBot11MessageSegment[],
   selfId: string,
-): Pick<InboundChannelMessageV1, "replyToMessageId" | "trigger"> {
+): Pick<InboundChannelMessage, "replyToMessageId" | "trigger"> {
   const replyToMessageId = segments
     .filter((segment) => segment.type === "reply")
     .map((segment) => normalizeMessageId(segment.data.id))
@@ -122,13 +122,13 @@ function optionalMessageMetadata(
 function parseTrigger(
   segments: readonly OneBot11MessageSegment[],
   selfId: string,
-): InboundChannelMessageV1["trigger"] {
+): InboundChannelMessage["trigger"] {
   const mentionedSelf = segments.some(
     (segment) =>
       segment.type === "at" && normalizePositiveId(segment.data.qq) === selfId,
   );
   const leadingText = leadingTriggerText(segments, selfId);
-  return resolveChannelTriggerV1({
+  return resolveChannelTrigger({
     mentionedSelf,
     ...(leadingText === undefined ? {} : { leadingText }),
   });

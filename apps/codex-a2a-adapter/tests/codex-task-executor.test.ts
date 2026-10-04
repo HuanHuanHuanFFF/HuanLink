@@ -22,6 +22,7 @@ import type {
   StartCodexTurnOptions,
 } from "../src/codex-app-server-client.js";
 import { CodexTaskExecutor } from "../src/codex-task-executor.js";
+import type { CodexProject } from "../src/dispatch-policy.js";
 import {
   startAdapterServer,
   type RunningAdapterServer,
@@ -29,6 +30,11 @@ import {
 import { RecordingRuntimeLogger } from "./support/recording-runtime-logger.js";
 
 class ControlledCodexRuntime implements CodexRuntimeClient {
+  async listModels() {
+    return [
+      { model: "gpt-5.4-mini", reasoningEfforts: ["low", "high", "xhigh"] },
+    ];
+  }
   closeCalls = 0;
   readonly discardedServerRequests: Array<string | number> = [];
   readonly interruptCalls: InterruptCodexTurnOptions[] = [];
@@ -43,6 +49,8 @@ class ControlledCodexRuntime implements CodexRuntimeClient {
   onRespondToServerRequest?: () => void;
   respondToServerRequestError?: Error;
   startTurnGate?: Promise<void>;
+  startThreadGate?: Promise<void>;
+  startTurnError?: Error;
   private readonly listeners = new Set<
     (notification: CodexAppServerNotification) => void
   >();
@@ -93,14 +101,16 @@ class ControlledCodexRuntime implements CodexRuntimeClient {
     options: StartCodexThreadOptions,
   ): Promise<{ threadId: string }> {
     this.startThreadCalls.push(options);
-    return { threadId: "thread-1" };
+    await this.startThreadGate;
+    return { threadId: `thread-${this.startThreadCalls.length}` };
   }
 
   async startTurn(options: StartCodexTurnOptions): Promise<{ turnId: string }> {
     this.startTurnCalls.push(options);
     this.onStartTurn?.();
     await this.startTurnGate;
-    return { turnId: "turn-1" };
+    if (this.startTurnError) throw this.startTurnError;
+    return { turnId: `turn-${this.startTurnCalls.length}` };
   }
 
   async interruptTurn(options: InterruptCodexTurnOptions): Promise<void> {
@@ -129,12 +139,19 @@ class ControlledCodexRuntime implements CodexRuntimeClient {
 
 const runningServers: RunningAdapterServer[] = [];
 
-function createSendRequest(text: string, returnImmediately: boolean) {
+function createSendRequest(
+  text: string,
+  returnImmediately: boolean,
+  dispatch: Record<string, unknown> = { projectId: "huanlink" },
+) {
   return SendMessageRequest.fromJSON({
     message: {
       messageId: randomUUID(),
       role: "ROLE_USER",
-      parts: [{ text }],
+      parts: [
+        { text },
+        { data: { type: "huanlink.codex-task.v1", ...dispatch } },
+      ],
     },
     configuration: { returnImmediately },
   });
@@ -224,6 +241,7 @@ function taskStateFrom(event: StreamResponse): TaskState | undefined {
 async function startClient(
   runtime: ControlledCodexRuntime,
   options: {
+    projects?: CodexProject[];
     cancelTimeoutMs?: number;
     logger?: RecordingRuntimeLogger;
     validateWorkspace?: () => Promise<{
@@ -234,19 +252,30 @@ async function startClient(
 ): Promise<{ client: Client; executor: CodexTaskExecutor }> {
   const executor = new CodexTaskExecutor({
     client: runtime,
-    workspace: "D:/CodingProject/HuanLink",
-    expectedBranch: "spike/demo-v0",
-    model: "gpt-5.4-mini",
+    projects: options.projects ?? [
+      {
+        projectId: "huanlink",
+        workspace: "D:/CodingProject/HuanLink",
+        branch: "spike/demo-v0",
+        defaultModelId: "gpt-5.4-mini",
+        defaultReasoningEffort: "high",
+      },
+    ],
+    models: await runtime.listModels(),
     cancelTimeoutMs: options.cancelTimeoutMs,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
     validateWorkspace:
       options.validateWorkspace ??
-      (async () => ({
-        branch: "spike/demo-v0",
-        workspace: "D:/CodingProject/HuanLink",
+      (async (workspace, branch) => ({
+        branch,
+        workspace,
       })),
   });
-  const server = await startAdapterServer({ executor, port: 0 });
+  const server = await startAdapterServer({
+    executor,
+    port: 0,
+    validateMessage: (message) => executor.validateMessage(message),
+  });
   runningServers.push(server);
   return {
     client: await new ClientFactory().createFromUrl(server.origin),
@@ -320,6 +349,360 @@ afterEach(async () => {
 });
 
 describe("CodexTaskExecutor", () => {
+  it.each([true, false])(
+    "accepts another answer without client-side closing the earlier stream (failed final check: %s)",
+    async (failFinalCheck) => {
+      const runtime = new ControlledCodexRuntime();
+      scheduleInputRequest(runtime);
+      let validations = 0;
+      let failAt = -1;
+      const { client } = await startClient(runtime, {
+        validateWorkspace: async () => {
+          validations++;
+          if (validations === failAt)
+            throw new Error("Changed after admission");
+          return {
+            branch: "spike/demo-v0",
+            workspace: "D:/CodingProject/HuanLink",
+          };
+        },
+      });
+      const task = requireTask(
+        await client.sendMessage(createSendRequest("work", true)),
+      );
+      await waitForTaskState(
+        client,
+        task.id,
+        TaskState.TASK_STATE_INPUT_REQUIRED,
+      );
+      if (failFinalCheck) failAt = validations + 2;
+      else
+        runtime.onRespondToServerRequest = () => {
+          if (runtime.serverResponses.length === 1)
+            runtime.emitServerRequest(
+              userInputRequest({ id: "second-question" }),
+            );
+        };
+      const stream = client.sendMessageStream(
+        createContinuationRequest(task, { scope: ["Adapter only"] }),
+      );
+      try {
+        for (;;) {
+          const next = await stream.next();
+          if (next.done)
+            throw new Error("Expected the stream to stay open while paused");
+          if (
+            next.value.payload?.$case === "statusUpdate" &&
+            next.value.payload.value.status?.state ===
+              TaskState.TASK_STATE_INPUT_REQUIRED
+          )
+            break;
+        }
+        // The pinned SDK ends an input-required stream while the Task stays alive.
+        expect((await stream.next()).done).toBe(true);
+        await client.sendMessage(
+          createContinuationRequest(task, { scope: ["Adapter only"] }),
+        );
+        expect(runtime.serverResponses).toHaveLength(failFinalCheck ? 1 : 2);
+        expect(runtime.startTurnCalls).toHaveLength(1);
+      } finally {
+        runtime.emitClose(new Error("test cleanup"));
+        await stream.return(undefined);
+      }
+    },
+  );
+
+  it("releases an unused admission when the SDK rejects the request before execution", async () => {
+    const runtime = new ControlledCodexRuntime();
+    const { client } = await startClient(runtime);
+    const malformed = createSendRequest("work", true);
+    malformed.message!.messageId = "";
+    await expect(client.sendMessage(malformed)).rejects.toThrow();
+    const task = requireTask(
+      await client.sendMessage(createSendRequest("valid", true)),
+    );
+    await expect.poll(() => runtime.startTurnCalls.length).toBe(1);
+    runtime.emitClose(new Error("test cleanup"));
+    await waitForTaskState(client, task.id, TaskState.TASK_STATE_FAILED);
+  });
+
+  it("preserves paused work if the final continuation check fails after admission", async () => {
+    const runtime = new ControlledCodexRuntime();
+    scheduleInputRequest(runtime);
+    let validations = 0;
+    let failAt = -1;
+    const { client } = await startClient(runtime, {
+      validateWorkspace: async () => {
+        validations++;
+        if (validations === failAt) throw new Error("Changed after admission");
+        return {
+          branch: "spike/demo-v0",
+          workspace: "D:/CodingProject/HuanLink",
+        };
+      },
+    });
+    const task = requireTask(
+      await client.sendMessage(createSendRequest("work", true)),
+    );
+    await waitForTaskState(
+      client,
+      task.id,
+      TaskState.TASK_STATE_INPUT_REQUIRED,
+    );
+    failAt = validations + 2;
+    const paused = requireTask(
+      await client.sendMessage(
+        createContinuationRequest(task, { scope: ["Adapter only"] }),
+      ),
+    );
+    expect(paused.status?.state).toBe(TaskState.TASK_STATE_INPUT_REQUIRED);
+    expect(runtime.serverResponses).toEqual([]);
+    await expect(
+      client.sendMessage(createSendRequest("no free slot", true)),
+    ).rejects.toThrow("workspace is busy");
+    await client.sendMessage(
+      createContinuationRequest(task, { scope: ["Adapter only"] }),
+    );
+    expect(runtime.serverResponses).toHaveLength(1);
+    expect(runtime.startTurnCalls).toHaveLength(1);
+    runtime.emitClose(new Error("test cleanup"));
+  });
+
+  it("keeps a paused task unanswered when its branch changes and allows continuation after restoration", async () => {
+    const runtime = new ControlledCodexRuntime();
+    scheduleInputRequest(runtime);
+    let changed = false;
+    const { client } = await startClient(runtime, {
+      validateWorkspace: async () => {
+        if (changed) throw new Error("Branch changed while paused");
+        return {
+          branch: "spike/demo-v0",
+          workspace: "D:/CodingProject/HuanLink",
+        };
+      },
+    });
+    const task = requireTask(
+      await client.sendMessage(createSendRequest("work", true)),
+    );
+    await waitForTaskState(
+      client,
+      task.id,
+      TaskState.TASK_STATE_INPUT_REQUIRED,
+    );
+    changed = true;
+    await expect(
+      client.sendMessage(
+        createContinuationRequest(task, { scope: ["Adapter only"] }),
+      ),
+    ).rejects.toThrow();
+    expect(runtime.serverResponses).toEqual([]);
+    await waitForTaskState(
+      client,
+      task.id,
+      TaskState.TASK_STATE_INPUT_REQUIRED,
+    );
+    changed = false;
+    await client.sendMessage(
+      createContinuationRequest(task, { scope: ["Adapter only"] }),
+    );
+    expect(runtime.serverResponses).toHaveLength(1);
+    expect(runtime.startTurnCalls).toHaveLength(1);
+    runtime.emitClose(new Error("test cleanup"));
+  });
+
+  it("does not start a turn if the branch changes while thread creation is pending", async () => {
+    const runtime = new ControlledCodexRuntime();
+    let release!: () => void;
+    runtime.startThreadGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let changed = false;
+    const { client } = await startClient(runtime, {
+      validateWorkspace: async () => {
+        if (changed) throw new Error("Branch changed during thread creation");
+        return {
+          branch: "spike/demo-v0",
+          workspace: "D:/CodingProject/HuanLink",
+        };
+      },
+    });
+    const task = requireTask(
+      await client.sendMessage(createSendRequest("work", true)),
+    );
+    await expect.poll(() => runtime.startThreadCalls.length).toBe(1);
+    changed = true;
+    release();
+    await waitForTaskState(client, task.id, TaskState.TASK_STATE_FAILED);
+    expect(runtime.startTurnCalls).toEqual([]);
+  });
+
+  it("closes the execution runtime after an uncertain turn start and refuses new work", async () => {
+    const runtime = new ControlledCodexRuntime();
+    runtime.startTurnError = new Error("Response lost after dispatch");
+    runtime.onStartTurn = () =>
+      runtime.emit({
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          turn: { id: "turn-1", status: "inProgress", items: [] },
+        },
+      });
+    const { client } = await startClient(runtime);
+    const task = requireTask(
+      await client.sendMessage(createSendRequest("work", true)),
+    );
+    await waitForTaskState(client, task.id, TaskState.TASK_STATE_FAILED);
+    expect(runtime.closeCalls).toBe(1);
+    await expect(
+      client.sendMessage(createSendRequest("unsafe retry", true)),
+    ).rejects.toThrow();
+    expect(runtime.startTurnCalls).toHaveLength(1);
+  });
+
+  it("shares one workspace slot across project aliases and releases it after completion", async () => {
+    const runtime = new ControlledCodexRuntime();
+    const projects = ["alpha", "beta"].map((projectId) => ({
+      projectId,
+      workspace: "D:/projects/shared",
+      branch: "main",
+      defaultModelId: "gpt-5.4-mini",
+      defaultReasoningEffort: "high",
+    }));
+    const { client } = await startClient(runtime, { projects });
+    const tasks = await Promise.allSettled(
+      projects.map((project) =>
+        client
+          .sendMessage(
+            createSendRequest("work", true, { projectId: project.projectId }),
+          )
+          .then(requireTask),
+      ),
+    );
+    expect(tasks.filter((task) => task.status === "rejected")).toHaveLength(1);
+    const accepted = tasks.find((task) => task.status === "fulfilled");
+    if (accepted?.status !== "fulfilled")
+      throw new Error("Expected one accepted task");
+    const active = accepted.value;
+    await expect.poll(() => runtime.startTurnCalls.length).toBe(1);
+    runtime.emit({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: { type: "agentMessage", phase: "final_answer", text: "done" },
+      },
+    });
+    runtime.emit({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: { id: "turn-1", status: "completed", items: [] },
+      },
+    });
+    await waitForTaskState(client, active.id, TaskState.TASK_STATE_COMPLETED);
+    const next = requireTask(
+      await client.sendMessage(
+        createSendRequest("next", true, { projectId: "alpha" }),
+      ),
+    );
+    await expect.poll(() => runtime.startTurnCalls.length).toBe(2);
+    runtime.emitClose(new Error("test cleanup"));
+    await waitForTaskState(client, next.id, TaskState.TASK_STATE_FAILED);
+  });
+
+  it("isolates the same conversational context across projects and runs different workspaces concurrently", async () => {
+    const runtime = new ControlledCodexRuntime();
+    const projects = ["alpha", "beta"].map((projectId) => ({
+      projectId,
+      workspace: `D:/projects/${projectId}`,
+      branch: "main",
+      defaultModelId: "gpt-5.4-mini",
+      defaultReasoningEffort: "high",
+    }));
+    const { client } = await startClient(runtime, { projects });
+    const requests = projects.map((project) => {
+      const request = createSendRequest("work", true, {
+        projectId: project.projectId,
+        reasoningEffort: "low",
+      });
+      request.message!.contextId = "shared-context";
+      return request;
+    });
+    const tasks = await Promise.all(
+      requests.map((request) => client.sendMessage(request).then(requireTask)),
+    );
+    await expect.poll(() => runtime.startTurnCalls.length).toBe(2);
+    expect(runtime.startThreadCalls.map((call) => call.cwd).sort()).toEqual([
+      "D:/projects/alpha",
+      "D:/projects/beta",
+    ]);
+    expect(
+      new Set(runtime.startTurnCalls.map((call) => call.threadId)).size,
+    ).toBe(2);
+    expect(
+      runtime.startTurnCalls.every((call) => call.reasoningEffort === "low"),
+    ).toBe(true);
+    runtime.emitClose(new Error("test cleanup"));
+    await Promise.all(
+      tasks.map((task) =>
+        waitForTaskState(client, task.id, TaskState.TASK_STATE_FAILED),
+      ),
+    );
+  });
+
+  it("does not allow continuation to replace the original project or execution parameters", async () => {
+    const runtime = new ControlledCodexRuntime();
+    scheduleInputRequest(runtime);
+    const { client } = await startClient(runtime);
+    const task = requireTask(
+      await client.sendMessage(createSendRequest("work", true)),
+    );
+    await waitForTaskState(
+      client,
+      task.id,
+      TaskState.TASK_STATE_INPUT_REQUIRED,
+    );
+    await expect(
+      client.sendMessage(createSendRequest("second task while paused", true)),
+    ).rejects.toThrow("workspace is busy");
+    const continuation = createContinuationRequest(task, {
+      scope: ["Adapter only"],
+    });
+    continuation.message!.parts.push(
+      ...createSendRequest("other", true, { projectId: "other" }).message!
+        .parts,
+    );
+    await expect(client.sendMessage(continuation)).rejects.toThrow();
+    expect(runtime.serverResponses).toEqual([]);
+    expect(runtime.startTurnCalls).toHaveLength(1);
+    runtime.emitClose(new Error("test cleanup"));
+  });
+
+  it("rejects an unknown project before accepting or starting a Codex task", async () => {
+    const runtime = new ControlledCodexRuntime();
+    const { client } = await startClient(runtime);
+    await expect(
+      client.sendMessage(
+        createSendRequest("Do work", true, { projectId: "missing" }),
+      ),
+    ).rejects.toThrow();
+    expect(runtime.startThreadCalls).toEqual([]);
+  });
+
+  it("rejects an unsupported reasoning effort instead of using a default", async () => {
+    const runtime = new ControlledCodexRuntime();
+    const { client } = await startClient(runtime);
+    await expect(
+      client.sendMessage(
+        createSendRequest("Do work", true, {
+          projectId: "huanlink",
+          reasoningEffort: "max",
+        }),
+      ),
+    ).rejects.toThrow();
+    expect(runtime.startTurnCalls).toEqual([]);
+  });
+
   it("returns a submitted Task before workspace validation finishes", async () => {
     const runtime = new ControlledCodexRuntime();
     let releaseValidation!: () => void;
@@ -430,6 +813,8 @@ describe("CodexTaskExecutor", () => {
       {
         threadId: "thread-1",
         prompt: "Implement the focused task",
+        model: "gpt-5.4-mini",
+        reasoningEffort: "high",
       },
     ]);
 
@@ -1244,18 +1629,9 @@ describe("CodexTaskExecutor", () => {
     );
     await expect.poll(() => runtime.startTurnCalls).toHaveLength(1);
 
-    const conflicting = requireTask(
-      await client.sendMessage(createSendRequest("Conflicting task", true)),
-    );
-    const rejected = await waitForTaskState(
-      client,
-      conflicting.id,
-      TaskState.TASK_STATE_FAILED,
-    );
-    expect(rejected.status?.message?.parts[0]?.content).toEqual({
-      $case: "text",
-      value: "Codex thread thread-1 already has an active task",
-    });
+    await expect(
+      client.sendMessage(createSendRequest("Conflicting task", true)),
+    ).rejects.toThrow("workspace is busy");
 
     runtime.emit({
       method: "item/completed",
@@ -1478,7 +1854,7 @@ describe("CodexTaskExecutor", () => {
     const { client } = await startClient(runtime, {
       validateWorkspace: async () => {
         validations += 1;
-        if (validations === 2) {
+        if (validations === 3) {
           throw new Error("Expected branch spike/demo-v0, found main");
         }
         return {
@@ -1496,7 +1872,7 @@ describe("CodexTaskExecutor", () => {
       submitted.id,
       TaskState.TASK_STATE_FAILED,
     );
-    expect(validations).toBe(2);
+    expect(validations).toBe(3);
     expect(failed.artifacts).toEqual([]);
     expect(failed.status?.message?.parts[0]?.content).toEqual({
       $case: "text",
