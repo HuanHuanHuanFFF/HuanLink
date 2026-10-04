@@ -87,6 +87,289 @@ class FailingReservationStore extends InMemoryAsyncToolTaskStore {
   }
 }
 
+class FailingSnapshotStore extends InMemoryAsyncToolTaskStore {
+  constructor(private readonly failingState = "completed") {
+    super();
+  }
+  failuresRemaining = 1;
+  readFailuresRemaining = 0;
+  readonly failedStates: string[] = [];
+  override get(sessionId: string, taskId: string): AsyncToolTask | undefined {
+    if (this.readFailuresRemaining > 0) {
+      this.readFailuresRemaining--;
+      throw new Error("injected snapshot read failure");
+    }
+    return super.get(sessionId, taskId);
+  }
+  override replace(
+    expected: AsyncToolTask,
+    next: AsyncToolTask,
+    options?: AsyncToolTaskStoreReplaceOptions,
+  ): AsyncToolTask {
+    if (next.state === this.failingState && this.failuresRemaining > 0) {
+      this.failuresRemaining--;
+      this.failedStates.push(next.state);
+      throw new Error("injected snapshot persistence failure");
+    }
+    return super.replace(expected, next, options);
+  }
+}
+
+test.each(["read", "write"])(
+  "persists an observed completion after a transient Store %s failure without re-dispatching or inventing failure",
+  async (operation) => {
+    const store = new FailingSnapshotStore();
+    if (operation === "read") store.failuresRemaining = 0;
+    const taskService = new AsyncToolTaskService({
+      store,
+      maxActiveTasksPerSession: 1,
+      taskKinds: [AGENT_CALL_TASK_KIND_DEFINITION],
+    });
+    const completion = deferred();
+    const observed = task("completed", {
+      artifacts: [{ id: "result", text: "remote success" }],
+    });
+    const submitTask = vi.fn(async () => acceptedTask("submitted"));
+    const watchTask = vi.fn(async function* () {
+      await completion.promise;
+      yield observed;
+    });
+    const service = new AgentCallService({
+      taskService,
+      transport: {
+        discoverCapability: async (id) => ({ id, name: id }),
+        submitTask,
+        watchTask,
+        continueTask: rejectUnexpectedContinuation,
+        cancelTask: async () => task("canceled"),
+      },
+    });
+    const errors = vi.fn();
+    service.onBackgroundError((error) => {
+      errors(error);
+      observed.state = "failed";
+      observed.artifacts = [];
+    });
+    const notifications: Array<{
+      state: string;
+      recordState: string | undefined;
+    }> = [];
+    taskService.onTerminal((value) => {
+      notifications.push({
+        state: value.state,
+        recordState: service.getByAgentCallId(value.taskId)?.state,
+      });
+    });
+    try {
+      const receipt = await service.invoke({
+        sessionId: "session-snapshot-failure",
+        runId: "run-1",
+        sourceToolCallId: "call-1",
+        toolName: "submit_codex_agent_call",
+        executionMode: "async",
+        skillId: "codex-code-task",
+        input: "do work once",
+      });
+      if (receipt.status !== "accepted") throw new Error("Expected acceptance");
+      if (operation === "read") store.readFailuresRemaining = 1;
+      completion.resolve();
+      await service.waitForIdle();
+      expect(
+        taskService.getStatus("session-snapshot-failure", receipt.taskId),
+      ).toMatchObject({
+        state: "completed",
+        payload: { artifacts: [{ id: "result", text: "remote success" }] },
+      });
+      expect(notifications).toEqual([
+        { state: "completed", recordState: "completed" },
+      ]);
+      expect(
+        taskService.taskQuotaService.acquire("session-snapshot-failure", "a2a")
+          .status,
+      ).toBe("acquired");
+      expect(submitTask).toHaveBeenCalledTimes(1);
+      expect(watchTask).toHaveBeenCalledTimes(1);
+      expect(errors).toHaveBeenCalledTimes(1);
+    } finally {
+      await service.close();
+    }
+  },
+);
+
+test("keeps an unpersisted completion pending and closes promptly without freeing quota or notifying", async () => {
+  const store = new FailingSnapshotStore();
+  store.failuresRemaining = Infinity;
+  const taskService = new AsyncToolTaskService({
+    store,
+    maxActiveTasksPerSession: 1,
+    taskKinds: [AGENT_CALL_TASK_KIND_DEFINITION],
+  });
+  const completion = deferred();
+  const failedWrite = deferred();
+  const terminal = vi.fn();
+  taskService.onTerminal(terminal);
+  const service = new AgentCallService({
+    taskService,
+    transport: {
+      discoverCapability: async (id) => ({ id, name: id }),
+      submitTask: async () => acceptedTask("submitted"),
+      async *watchTask() {
+        await completion.promise;
+        yield task("completed");
+      },
+      continueTask: rejectUnexpectedContinuation,
+      cancelTask: async () => task("canceled"),
+    },
+  });
+  service.onBackgroundError(() => failedWrite.resolve());
+  try {
+    const request = {
+      sessionId: "session-persistent-failure",
+      runId: "run-1",
+      sourceToolCallId: "call-1",
+      toolName: "submit_codex_agent_call",
+      executionMode: "async" as const,
+      skillId: "codex-code-task",
+      input: "do work once",
+    };
+    const receipt = await service.invoke(request);
+    if (receipt.status !== "accepted") throw new Error("Expected acceptance");
+    completion.resolve();
+    await failedWrite.promise;
+    expect(service.getByAgentCallId(receipt.taskId)?.state).toBe("submitted");
+    expect(
+      taskService.getStatus(request.sessionId, receipt.taskId),
+    ).toMatchObject({ state: "submitted" });
+    expect(
+      await service.invoke({
+        ...request,
+        runId: "run-2",
+        sourceToolCallId: "call-2",
+      }),
+    ).toMatchObject({ status: "error", error: "task-limit-reached" });
+    await service.close();
+    await service.waitForIdle();
+    expect(store.failedStates).toEqual(["completed"]);
+    expect(terminal).not.toHaveBeenCalled();
+    expect(
+      taskService.getStatus(request.sessionId, receipt.taskId),
+    ).toMatchObject({ state: "submitted" });
+  } finally {
+    await service.close();
+  }
+});
+
+test("commits a retried input-required snapshot before a listener immediately continues it", async () => {
+  const store = new FailingSnapshotStore("input-required");
+  const taskService = new AsyncToolTaskService({
+    store,
+    maxActiveTasksPerSession: 1,
+    taskKinds: [AGENT_CALL_TASK_KIND_DEFINITION],
+  });
+  let watching = 0;
+  const questions = [
+    {
+      id: "scope",
+      header: "Scope",
+      question: "Which scope?",
+      isOther: false,
+      isSecret: false,
+      options: null,
+    },
+  ];
+  const continueTask = vi.fn(async () => task("working"));
+  const service = new AgentCallService({
+    taskService,
+    transport: {
+      discoverCapability: async (id) => ({ id, name: id }),
+      submitTask: async () => acceptedTask("submitted"),
+      async *watchTask() {
+        if (++watching === 1) yield task("input-required", { questions });
+        else yield task("completed");
+      },
+      continueTask,
+      cancelTask: async () => task("canceled"),
+    },
+  });
+  const notifications = vi.fn();
+  taskService.onTerminal(notifications);
+  let continuation: ReturnType<typeof service.continueTask> | undefined;
+  taskService.onInputRequired((value) => {
+    continuation = service.continueTask({
+      taskId: value.taskId,
+      sessionId: value.sessionId,
+      answers: { scope: ["Core only"] },
+    });
+  });
+  try {
+    const receipt = await service.invoke({
+      sessionId: "session-pause-retry",
+      runId: "run-1",
+      sourceToolCallId: "call-1",
+      toolName: "submit_codex_agent_call",
+      executionMode: "async",
+      skillId: "codex-code-task",
+      input: "ask once",
+    });
+    if (receipt.status !== "accepted") throw new Error("Expected acceptance");
+    await service.waitForIdle();
+    await continuation;
+    expect(continueTask).toHaveBeenCalledTimes(1);
+    expect(
+      taskService.getStatus("session-pause-retry", receipt.taskId),
+    ).toMatchObject({ state: "completed" });
+    expect(notifications).toHaveBeenCalledTimes(1);
+  } finally {
+    await service.close();
+  }
+});
+
+test("does not roll back or repeat a persisted terminal when its notification listener throws", async () => {
+  const taskService = new AsyncToolTaskService({
+    maxActiveTasksPerSession: 1,
+    taskKinds: [AGENT_CALL_TASK_KIND_DEFINITION],
+  });
+  const service = new AgentCallService({
+    taskService,
+    transport: {
+      discoverCapability: async (id) => ({ id, name: id }),
+      submitTask: async () => acceptedTask("submitted"),
+      async *watchTask() {
+        yield task("completed");
+      },
+      continueTask: rejectUnexpectedContinuation,
+      cancelTask: async () => task("canceled"),
+    },
+  });
+  const terminal = vi.fn(() => {
+    throw new Error("listener failed after commit");
+  });
+  taskService.onTerminal(terminal);
+  const errors = vi.fn();
+  service.onBackgroundError(errors);
+  try {
+    const receipt = await service.invoke({
+      sessionId: "session-listener-failure",
+      runId: "run-1",
+      sourceToolCallId: "call-1",
+      toolName: "submit_codex_agent_call",
+      executionMode: "async",
+      skillId: "codex-code-task",
+      input: "once",
+    });
+    if (receipt.status !== "accepted") throw new Error("Expected acceptance");
+    await service.waitForIdle();
+    expect(service.getByAgentCallId(receipt.taskId)?.state).toBe("completed");
+    expect(
+      taskService.getStatus("session-listener-failure", receipt.taskId),
+    ).toMatchObject({ state: "completed" });
+    expect(terminal).toHaveBeenCalledTimes(1);
+    expect(errors).toHaveBeenCalledTimes(1);
+  } finally {
+    await service.close();
+  }
+});
+
 test("rejects split quota owners before any AgentCall can run", () => {
   const taskService = new AsyncToolTaskService({
     quotaService: new SessionTaskQuotaService({

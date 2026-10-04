@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 
 import { NoopRuntimeLogger } from "../logging/noop-runtime-logger.js";
-import { AsyncToolTaskService } from "../async-tool-task/async-tool-task-service.js";
+import {
+  AsyncToolTaskService,
+  AsyncToolTaskPersistenceError,
+} from "../async-tool-task/async-tool-task-service.js";
 import type {
   RuntimeLogFields,
   RuntimeLogLevel,
@@ -163,6 +166,7 @@ export class AgentCallService
     Set<AgentCallOutcomeWaiter>
   >();
   private closed = false;
+  private readonly persistenceRetryAbort = new AbortController();
   private closeOperation?: Promise<void>;
 
   constructor(options: AgentCallServiceOptions) {
@@ -1145,6 +1149,7 @@ export class AgentCallService
       return this.closeOperation;
     }
     this.closed = true;
+    this.persistenceRetryAbort.abort();
     this.writeLog("info", "agent_call.service.closing", {
       count:
         this.activeSubmissions.size +
@@ -1294,6 +1299,36 @@ export class AgentCallService
     agentCallId: AgentCallId,
     snapshot: AgentCallTaskSnapshot,
   ): Promise<void> {
+    const observed = {
+      ...snapshot,
+      artifacts: cloneArtifacts(snapshot.artifacts),
+      ...(snapshot.questions === undefined
+        ? {}
+        : { questions: cloneQuestions(snapshot.questions) }),
+    };
+    let reported = false;
+    for (;;) {
+      try {
+        await this.applySnapshotOnce(agentCallId, observed);
+        return;
+      } catch (error) {
+        if (!(error instanceof AsyncToolTaskPersistenceError)) throw error;
+        // Retry only this Store write, never the remote operation or notification.
+        if (!reported) {
+          this.reportBackgroundError(error.originalError, agentCallId);
+          reported = true;
+        }
+        if (this.closed) throw error;
+        await waitForPersistenceRetry(this.persistenceRetryAbort.signal);
+        if (this.closed) throw error;
+      }
+    }
+  }
+
+  private async applySnapshotOnce(
+    agentCallId: AgentCallId,
+    snapshot: AgentCallTaskSnapshot,
+  ): Promise<void> {
     if (this.terminalHandled.has(agentCallId)) {
       return;
     }
@@ -1322,13 +1357,21 @@ export class AgentCallService
     };
     this.recordsByAgentCallId.set(agentCallId, updated);
     if (this.taskBackedAgentCallIds.has(agentCallId)) {
-      this.taskService.updateAccepted(updated.sessionId, agentCallId, {
-        state: updated.state,
-        payload: agentCallTaskPayload(updated),
-        ...(updated.statusMessage === undefined
-          ? {}
-          : { statusMessage: updated.statusMessage }),
-      });
+      try {
+        this.taskService.updateAccepted(updated.sessionId, agentCallId, {
+          state: updated.state,
+          payload: agentCallTaskPayload(updated),
+          ...(updated.statusMessage === undefined
+            ? {}
+            : { statusMessage: updated.statusMessage }),
+        });
+      } catch (error) {
+        // Synchronous post-commit listeners need the new record. Roll back only
+        // Store failures, not exceptions from those already-notified listeners.
+        if (error instanceof AsyncToolTaskPersistenceError)
+          this.recordsByAgentCallId.set(agentCallId, current);
+        throw error;
+      }
     }
 
     if (current.state !== updated.state) {
@@ -1684,6 +1727,22 @@ function blockingUncertainResult(
     state: "unknown",
     retrySafe: false,
   };
+}
+
+function waitForPersistenceRetry(signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) {
+      resolve();
+      return;
+    }
+    const finish = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, 1_000);
+    signal.addEventListener("abort", finish, { once: true });
+  });
 }
 
 function waitWithSignal<T>(

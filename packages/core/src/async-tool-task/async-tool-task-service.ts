@@ -45,6 +45,17 @@ export type AsyncToolTaskServiceOptions = {
   ) => void;
 };
 
+export class AsyncToolTaskPersistenceError extends Error {
+  constructor(readonly originalError: unknown) {
+    super(
+      originalError instanceof Error
+        ? originalError.message
+        : "Async Tool Task state could not be persisted",
+      { cause: originalError },
+    );
+  }
+}
+
 export class AsyncToolTaskService implements AsyncToolTaskStatusReader {
   /** Shared admission owner for callers that must reserve the same Task pool. */
   readonly taskQuotaService: SessionTaskQuotaService;
@@ -410,7 +421,12 @@ export class AsyncToolTaskService implements AsyncToolTaskStatusReader {
     update: AsyncToolTaskAcceptedUpdate,
     options: AsyncToolTaskMutationOptions = {},
   ): AsyncToolTask {
-    const task = this.requireTask(sessionId, taskId);
+    let task: AsyncToolTask;
+    try {
+      task = this.requireTask(sessionId, taskId);
+    } catch (error) {
+      throw new AsyncToolTaskPersistenceError(error);
+    }
     if (task.state === "submitting") {
       throw new Error(`Async Tool Task ${taskId} was not accepted`);
     }
@@ -551,11 +567,16 @@ export class AsyncToolTaskService implements AsyncToolTaskStatusReader {
     const storeOptions = {
       ...(privateReference === undefined ? {} : { privateReference }),
     };
-    const durable = this.store.get(task.sessionId, task.taskId);
-    const stored =
-      durable === undefined
-        ? this.store.insert(next, storeOptions).task
-        : this.store.replace(durable, next, storeOptions);
+    let stored: AsyncToolTask;
+    try {
+      const durable = this.store.get(task.sessionId, task.taskId);
+      stored =
+        durable === undefined
+          ? this.store.insert(next, storeOptions).task
+          : this.store.replace(durable, next, storeOptions);
+    } catch (error) {
+      throw new AsyncToolTaskPersistenceError(error);
+    }
     this.persistenceUncertainByTaskId.delete(task.taskId);
     this.persistenceUncertainTaskIdBySource.delete(sourceKeyFor(task));
     this.persistenceUncertainReferenceByTaskId.delete(task.taskId);
