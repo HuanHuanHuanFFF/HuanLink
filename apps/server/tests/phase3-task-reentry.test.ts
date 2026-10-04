@@ -9,6 +9,9 @@ import {
   AsyncToolTaskService,
   ConversationSessionStoreToolHistoryRecorder,
   InMemoryConversationSessionStore,
+  InMemoryAsyncToolTaskStore,
+  type AsyncToolTask,
+  type AsyncToolTaskStoreReplaceOptions,
   type AgentCallTransport,
   type AsyncToolTaskKindDefinition,
   type ChannelAdapter,
@@ -38,6 +41,149 @@ const delayedToolKind: AsyncToolTaskKindDefinition = {
 };
 
 describe("Phase 3 Task re-entry", () => {
+  test("re-enters once for an initially paused task after its first acceptance write fails", async () => {
+    class OneShotAcceptanceFailureStore extends InMemoryAsyncToolTaskStore {
+      private fail = true;
+      override replace(
+        expected: AsyncToolTask,
+        next: AsyncToolTask,
+        options?: AsyncToolTaskStoreReplaceOptions,
+      ): AsyncToolTask {
+        if (this.fail) {
+          this.fail = false;
+          throw new Error("acceptance write failed");
+        }
+        return super.replace(expected, next, options);
+      }
+    }
+    const sessions = new InMemoryConversationSessionStore();
+    const sessionId = "session-initial-pause-recovery";
+    sessions.appendChannelMessage(
+      sessionId,
+      inboundMessage("initial", "Update parser"),
+    );
+    sessions.appendAgentToolCall(sessionId, {
+      runId: "source-run",
+      toolCallId: "source-call",
+      toolName: "submit_codex_agent_call",
+      arguments: { task: "Update parser" },
+    });
+    const taskService = new AsyncToolTaskService({
+      maxActiveTasksPerSession: 1,
+      taskKinds: [AGENT_CALL_TASK_KIND_DEFINITION],
+      store: new OneShotAcceptanceFailureStore(),
+    });
+    const reentries = vi.fn();
+    const submitTask = vi.fn<AgentCallTransport["submitTask"]>(async () => ({
+      outcome: "accepted",
+      snapshot: {
+        taskId: "remote-paused",
+        state: "input-required",
+        artifacts: [],
+        questions: [
+          {
+            id: "scope",
+            header: "Scope",
+            question: "Which files?",
+            isOther: false,
+            isSecret: false,
+            options: null,
+          },
+        ],
+      },
+    }));
+    const runtime = createPhase3HuanLinkRuntime({
+      codexA2aOrigin: "http://127.0.0.1:1",
+      transport: {
+        ...unusedTransport(),
+        discoverCapability: async (id) => ({ id, name: id }),
+        submitTask,
+      },
+      taskService,
+      sessionStore: sessions,
+      runner: { run: async () => ({ finalOutput: "Please choose files" }) },
+      onReentry: reentries,
+    });
+    try {
+      const receipt = await runtime.agentCalls.invoke({
+        sessionId,
+        runId: "source-run",
+        sourceToolCallId: "source-call",
+        toolName: "submit_codex_agent_call",
+        skillId: "codex-code-task",
+        executionMode: "async",
+        input: "Update parser",
+      });
+      expect(receipt).toMatchObject({
+        status: "accepted",
+        retrySafe: false,
+        persistenceWarning: "task-state-not-persisted",
+      });
+      if (receipt.status !== "accepted") throw new Error("Expected acceptance");
+      await runtime.agentCalls.waitForIdle();
+      await vi.waitFor(() => expect(reentries).toHaveBeenCalledOnce());
+      expect(reentries.mock.calls[0]?.[0]).toMatchObject({
+        reason: "input-required",
+        task: { taskId: receipt.taskId, state: "input-required" },
+        input: expect.stringContaining("Which files?"),
+      });
+      expect(taskService.getStatus(sessionId, receipt.taskId)).toMatchObject({
+        state: "input-required",
+      });
+      expect(
+        taskService.taskQuotaService.acquire(sessionId, "a2a").status,
+      ).toBe("limit-reached");
+      expect(submitTask).toHaveBeenCalledOnce();
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  test.each(["projection", "runner", "observer"])(
+    "reports an enqueued turn's %s failure without blocking the next turn",
+    async (failureAt) => {
+      const errors = vi.fn(() => {
+        if (failureAt === "observer") throw new Error("observer unavailable");
+      });
+      const run = vi.fn(async () => {
+        if (run.mock.calls.length === 1 && failureAt !== "projection") {
+          throw new Error("model unavailable");
+        }
+        return { finalOutput: "done" };
+      });
+      let projections = 0;
+      const runtime = createPhase3HuanLinkRuntime({
+        codexA2aOrigin: "http://127.0.0.1:1",
+        transport: unusedTransport(),
+        taskService: new AsyncToolTaskService({
+          maxActiveTasksPerSession: 2,
+          taskKinds: [delayedToolKind],
+        }),
+        sessionStore: new InMemoryConversationSessionStore(),
+        runner: { run },
+        getLatestContext: () => {
+          if (++projections === 1 && failureAt === "projection")
+            throw new Error("Store read failed");
+          return "latest";
+        },
+        onBackgroundError: errors,
+      });
+      try {
+        runtime.enqueueMainAgent({ runId: "first", sessionId: "session-1" });
+        runtime.enqueueMainAgent({ runId: "second", sessionId: "session-1" });
+        await vi.waitFor(() => expect(errors).toHaveBeenCalledOnce());
+        await vi.waitFor(() =>
+          expect(run).toHaveBeenCalledTimes(failureAt === "projection" ? 1 : 2),
+        );
+      } finally {
+        await runtime.close();
+      }
+      expect(() =>
+        runtime.enqueueMainAgent({ runId: "closed", sessionId: "session-1" }),
+      ).toThrow(/closed/);
+    },
+  );
+
   test("queues one terminal Task re-entry and reads its source Call plus the latest Window only after obtaining the Session slot", async () => {
     const sessions = new InMemoryConversationSessionStore();
     sessions.appendChannelMessage(

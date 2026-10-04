@@ -92,6 +92,8 @@ export type Phase3MainAgentInput = Pick<
 export interface Phase3HuanLinkRuntime {
   readonly agentCalls: AgentCallService;
   runMainAgent(input: Phase3MainAgentInput): Promise<AgentRuntimeResult>;
+  /** Registers a supervised turn synchronously; does not wait for execution. */
+  enqueueMainAgent(input: Phase3MainAgentInput): void;
   close(): Promise<void>;
 }
 
@@ -417,6 +419,26 @@ export function createPhase3HuanLinkRuntime(
   return {
     agentCalls,
     runMainAgent: runFreshMainAgent,
+    enqueueMainAgent(input) {
+      if (closed) throw new Error("Phase 3 runtime is closed");
+      // runFreshMainAgent registers with the Session scheduler and close drain
+      // before returning. Only the ingress caller's completion wait is removed.
+      void runFreshMainAgent(input).catch((error) => {
+        if (closed || input.signal?.aborted) return;
+        logger.error("main_agent.enqueued.failed", {
+          sessionId: input.sessionId,
+          runId: input.runId,
+          errorType: runtimeErrorType(error),
+        });
+        try {
+          onBackgroundError(normalizeRuntimeError(error), undefined);
+        } catch (observerError) {
+          logger.error("main_agent.background_listener.failed", {
+            errorType: runtimeErrorType(observerError),
+          });
+        }
+      });
+    },
     close() {
       closeOperation ??= performClose();
       return closeOperation;

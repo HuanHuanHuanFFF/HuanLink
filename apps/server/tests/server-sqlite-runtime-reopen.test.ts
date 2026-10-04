@@ -127,7 +127,7 @@ async function assembleSqliteRuntime(input: {
     readonly runId: string;
     readonly sessions: ConversationSessionStore;
     readonly history: SessionToolHistoryRecorder;
-  }) => Promise<void> | void;
+  }) => void;
 }) {
   const persistence = await createServerSqlitePersistence({
     projectRoot: input.projectRoot,
@@ -141,14 +141,13 @@ async function assembleSqliteRuntime(input: {
       storeOwner: persistence.storeOwner,
     }),
     createPhase3: ({ sessionStore, historyRecorder }) => ({
-      runMainAgent: async ({ sessionId, runId }) => {
-        await input.runMainAgent({
+      enqueueMainAgent: ({ sessionId, runId }) => {
+        input.runMainAgent({
           sessionId,
           runId,
           sessions: sessionStore,
           history: historyRecorder,
         });
-        return { output: "done" };
       },
       close: () => undefined,
     }),

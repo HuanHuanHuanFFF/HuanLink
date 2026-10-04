@@ -5,6 +5,7 @@ import {
   AsyncToolTaskService,
   type ChannelAdapter,
   type ChannelMessageListener,
+  type AgentCallTransport,
   type DeliveryReceipt,
   InMemoryConversationSessionStore,
   type ConversationSessionStore,
@@ -19,6 +20,7 @@ import {
   type ChannelRuntimeMessage,
   createChannelRuntime,
   createHuanLinkServerRuntime,
+  createPhase3HuanLinkRuntime,
   HuanLinkServerRuntimeLifecycleError,
   HuanLinkServerRuntimeStateError,
 } from "../src/index.js";
@@ -120,7 +122,7 @@ function createFakes(
     }),
   };
   const phase3 = {
-    runMainAgent: vi.fn(),
+    enqueueMainAgent: vi.fn(),
     close: vi.fn(async () => {
       events.push("phase3:close");
       await input.phase3Close?.();
@@ -154,6 +156,96 @@ function createFakes(
 }
 
 describe("HuanLinkServerRuntime", () => {
+  test("persists queued Channel supplements before terminal re-entry without overlapping Session turns", async () => {
+    const sessionStore = new InMemoryConversationSessionStore();
+    const adapter = new RuntimeIngressAdapter();
+    const taskService = testTaskService();
+    const firstStarted = deferred();
+    const releaseFirst = deferred();
+    const inputs: string[] = [];
+    const failures = vi.fn();
+    const runtime = await assembleHuanLinkServerRuntime({
+      taskService,
+      createStore: () => ({ sessionStore, storeOwner: { close: vi.fn() } }),
+      createPhase3: (input) =>
+        createPhase3HuanLinkRuntime({
+          ...input,
+          codexA2aOrigin: "http://127.0.0.1:1",
+          transport: unusedTransport(),
+          onBackgroundError: failures,
+          runner: {
+            run: async (_agent, context) => {
+              inputs.push(context);
+              if (inputs.length === 1) {
+                firstStarted.resolve();
+                await releaseFirst.promise;
+              }
+              return { finalOutput: "done" };
+            },
+          },
+        }),
+      createChannels: ({ onChannelMessage }) =>
+        createChannelRuntime({
+          channels: [
+            {
+              adapter,
+              inboundPolicy: {
+                groups: { mode: "denylist", ids: [] },
+                directs: { mode: "denylist", ids: [] },
+              },
+            },
+          ],
+          onMessage: onChannelMessage,
+        }),
+    });
+    const sessionId = "channel:qq-main:group:10001";
+    try {
+      await runtime.start();
+      adapter.emit(ingressMention("first", "10001"));
+      await firstStarted.promise;
+      sessionStore.appendAgentToolCall(sessionId, {
+        runId: "source-run",
+        toolCallId: "source-call",
+        toolName: "submit_codex_agent_call",
+        arguments: { task: "work" },
+      });
+      const reservation = taskService.reserve({
+        sessionId,
+        sourceRunId: "source-run",
+        sourceToolCallId: "source-call",
+        toolName: "submit_codex_agent_call",
+        kind: "agent-call",
+        payload: { artifacts: [] },
+      });
+      if (reservation.status !== "reserved")
+        throw new Error("Expected reservation");
+      taskService.accept(sessionId, reservation.task.taskId, {
+        state: "working",
+      });
+      adapter.emit(ingressMention("second-command", "10001"));
+      adapter.emit({
+        ...ingressMention("plain-supplement", "10001"),
+        trigger: undefined,
+      });
+      await vi.waitFor(() =>
+        expect(sessionStore.getSession(sessionId)?.timeline).toHaveLength(4),
+      );
+      taskService.updateAccepted(sessionId, reservation.task.taskId, {
+        state: "completed",
+      });
+      expect(inputs).toHaveLength(1);
+      releaseFirst.resolve();
+      await vi.waitFor(() => expect(inputs).toHaveLength(3));
+      expect(inputs[1]).toContain("second-command");
+      expect(inputs[2]).toContain("plain-supplement");
+      expect(inputs[2]).toContain(reservation.task.taskId);
+      expect(failures).not.toHaveBeenCalled();
+    } finally {
+      releaseFirst.resolve();
+      await runtime.close();
+    }
+  });
+
   test("wires Channel ingress through the Coordinator before invoking Phase3", async () => {
     const sessionStore = new InMemoryConversationSessionStore();
     const storeOwner = { close: vi.fn() };
@@ -166,7 +258,7 @@ describe("HuanLinkServerRuntime", () => {
       taskKinds: [AGENT_CALL_TASK_KIND_DEFINITION],
     });
     const phase3 = {
-      runMainAgent: vi.fn(async ({ sessionId }: { sessionId: string }) => {
+      enqueueMainAgent: vi.fn(async ({ sessionId }: { sessionId: string }) => {
         projectedInputs.push(getLatestContext(sessionId));
         return { output: "accepted" };
       }),
@@ -222,7 +314,7 @@ describe("HuanLinkServerRuntime", () => {
     expect(
       sessionStore.getSession("channel:qq-main:group:10001")?.timeline,
     ).toHaveLength(1);
-    expect(phase3.runMainAgent).toHaveBeenCalledWith({
+    expect(phase3.enqueueMainAgent).toHaveBeenCalledWith({
       runId: expect.any(String),
       sessionId: "channel:qq-main:group:10001",
       signal,
@@ -251,45 +343,41 @@ describe("HuanLinkServerRuntime", () => {
     await runtime.close();
   });
 
-  test("preserves Channel ordering and aborts queued ingress through the assembled Coordinator", async () => {
+  test("persists queued ingress and drains active turns before closing the Store", async () => {
     const sessionStore = new InMemoryConversationSessionStore();
     const adapter = new RuntimeIngressAdapter();
     let activeSignal: AbortSignal | undefined;
-    let getLatestContext!: (sessionId: string) => string;
-    const runMainAgent = vi.fn(
-      async (input: {
-        readonly sessionId: string;
-        readonly signal: AbortSignal;
-      }) => {
-        const projectedInput = getLatestContext(input.sessionId);
+    const releaseTurn = deferred();
+    const storeClose = vi.fn();
+    const failures = vi.fn();
+    const run = vi.fn(
+      async (
+        _agent: unknown,
+        projectedInput: string,
+        options?: { signal?: AbortSignal },
+      ) => {
         if (!projectedInput.includes('"content":"first"')) {
-          return { output: "other route completed" };
+          return { finalOutput: "other route completed" };
         }
-        activeSignal = input.signal;
-        await new Promise<void>((_resolve, reject) => {
-          if (input.signal.aborted) {
-            reject(input.signal.reason);
-            return;
-          }
-          input.signal.addEventListener(
-            "abort",
-            () => reject(input.signal.reason),
-            { once: true },
-          );
-        });
-        return { output: "unreachable" };
+        activeSignal = options?.signal;
+        await releaseTurn.promise;
+        return { finalOutput: "late result" };
       },
     );
     const runtime = await assembleHuanLinkServerRuntime({
       taskService: testTaskService(),
       createStore: () => ({
         sessionStore,
-        storeOwner: { close: vi.fn() },
+        storeOwner: { close: storeClose },
       }),
-      createPhase3: (input) => {
-        getLatestContext = input.getLatestContext;
-        return { runMainAgent, close: vi.fn() };
-      },
+      createPhase3: (input) =>
+        createPhase3HuanLinkRuntime({
+          ...input,
+          codexA2aOrigin: "http://127.0.0.1:1",
+          transport: unusedTransport(),
+          runner: { run },
+          onBackgroundError: failures,
+        }),
       createChannels: ({ onChannelMessage }) =>
         createChannelRuntime({
           channels: [
@@ -307,23 +395,25 @@ describe("HuanLinkServerRuntime", () => {
     await runtime.start();
 
     adapter.emit(ingressMention("first", "10001"));
-    await vi.waitFor(() => expect(runMainAgent).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(run).toHaveBeenCalledOnce());
     adapter.emit(ingressMention("queued-same-route", "10001"));
     adapter.emit(ingressMention("other-route", "20002"));
 
-    await vi.waitFor(() => expect(runMainAgent).toHaveBeenCalledTimes(2));
-    expect(runMainAgent.mock.calls.map(([input]) => input.sessionId)).toEqual([
-      "channel:qq-main:group:10001",
-      "channel:qq-main:group:20002",
-    ]);
-
-    await runtime.close();
-
-    expect(activeSignal?.aborted).toBe(true);
-    expect(runMainAgent).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(2));
+    const closing = runtime.close();
+    try {
+      await vi.waitFor(() => expect(activeSignal?.aborted).toBe(true));
+      expect(storeClose).not.toHaveBeenCalled();
+    } finally {
+      releaseTurn.resolve();
+      await closing;
+    }
+    expect(storeClose).toHaveBeenCalledOnce();
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(failures).not.toHaveBeenCalled();
     expect(
       sessionStore.getSession("channel:qq-main:group:10001")?.timeline,
-    ).toHaveLength(1);
+    ).toHaveLength(2);
     expect(
       sessionStore.getSession("channel:qq-main:group:20002")?.timeline,
     ).toHaveLength(1);
@@ -349,7 +439,7 @@ describe("HuanLinkServerRuntime", () => {
       }),
     };
     const phase3 = {
-      runMainAgent: vi.fn(async () => ({ output: "unused" })),
+      enqueueMainAgent: vi.fn(async () => ({ output: "unused" })),
       close: vi.fn(() => {
         events.push("phase3:close");
         throw phase3CloseError;
@@ -412,7 +502,7 @@ describe("HuanLinkServerRuntime", () => {
       "preflight:dependencies",
     ]);
     expect(fakes.events).toEqual(["channel:start"]);
-    expect(fakes.phase3.runMainAgent).not.toHaveBeenCalled();
+    expect(fakes.phase3.enqueueMainAgent).not.toHaveBeenCalled();
     expect(fakes.runtime.state).toBe("running");
   });
 
@@ -546,6 +636,21 @@ describe("HuanLinkServerRuntime", () => {
     } satisfies Partial<HuanLinkServerRuntimeStateError>);
   });
 });
+
+function unusedTransport(): AgentCallTransport {
+  const unexpected = async () => {
+    throw new Error("Unexpected remote call");
+  };
+  return {
+    discoverCapability: unexpected,
+    submitTask: unexpected,
+    continueTask: unexpected,
+    cancelTask: unexpected,
+    async *watchTask() {
+      throw new Error("Unexpected remote watcher");
+    },
+  };
+}
 
 function testTaskService(): AsyncToolTaskService {
   return new AsyncToolTaskService({

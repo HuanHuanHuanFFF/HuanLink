@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 
 import type {
-  AgentRuntimeResult,
   ConversationSessionStore,
   RunId,
   SessionId,
@@ -16,11 +15,9 @@ export type SessionIngressMainAgentInput = {
   readonly signal: AbortSignal;
 };
 
-/** Structurally compatible with Phase3HuanLinkRuntime's `runMainAgent`. */
+/** The runtime owns execution, error reporting, cancellation, and drain. */
 export interface SessionIngressMainAgentRunner {
-  runMainAgent(
-    input: SessionIngressMainAgentInput,
-  ): Promise<AgentRuntimeResult>;
+  enqueueMainAgent(input: SessionIngressMainAgentInput): void;
 }
 
 export type CreateSessionIngressCoordinatorOptions = {
@@ -35,7 +32,8 @@ export interface SessionIngressCoordinator {
 
 /**
  * Persists Channel facts before applying the temporary fresh-turn policy.
- * Queueing, gating, and Session-context projection remain downstream work.
+ * Registers a turn without blocking subsequent facts behind its execution.
+ * Session scheduling and latest-context projection belong to the runtime.
  */
 export function createSessionIngressCoordinator(
   options: CreateSessionIngressCoordinatorOptions,
@@ -57,7 +55,7 @@ export function createSessionIngressCoordinator(
         return;
       }
 
-      await options.runner.runMainAgent({
+      options.runner.enqueueMainAgent({
         runId: createRunId(),
         sessionId,
         signal,

@@ -54,10 +54,10 @@ function channelMessage(input: {
 }
 
 describe("SessionIngressCoordinator", () => {
-  test("awaits an appended mention without capturing a pre-queue input", async () => {
+  test("registers an appended mention without awaiting execution or capturing a pre-queue input", async () => {
     const sessions = new InMemoryConversationSessionStore();
     const run = deferred<{ output: string }>();
-    const runMainAgent = vi.fn(() => run.promise);
+    const enqueueMainAgent = vi.fn(() => run.promise);
     const createRunId = vi.fn<() => RunId>(() => "run-mention");
     const controller = new AbortController();
     const message = channelMessage({
@@ -68,15 +68,15 @@ describe("SessionIngressCoordinator", () => {
     });
     const coordinator = createSessionIngressCoordinator({
       sessionStore: sessions,
-      runner: { runMainAgent },
+      runner: { enqueueMainAgent },
       createRunId,
     });
 
     const handling = coordinator.handle(message);
-    await vi.waitFor(() => expect(runMainAgent).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(enqueueMainAgent).toHaveBeenCalledOnce());
 
     expect(sessions.getSession(message.sessionId)?.timeline).toHaveLength(1);
-    expect(runMainAgent).toHaveBeenCalledWith({
+    expect(enqueueMainAgent).toHaveBeenCalledWith({
       runId: "run-mention",
       sessionId: message.sessionId,
       signal: controller.signal,
@@ -86,7 +86,7 @@ describe("SessionIngressCoordinator", () => {
     const pending = vi.fn();
     void handling.then(pending);
     await Promise.resolve();
-    expect(pending).not.toHaveBeenCalled();
+    expect(pending).toHaveBeenCalledOnce();
 
     run.resolve({ output: "done" });
     await expect(handling).resolves.toBeUndefined();
@@ -94,10 +94,10 @@ describe("SessionIngressCoordinator", () => {
 
   test("keeps plain and self facts without starting MainAgent", async () => {
     const sessions = new InMemoryConversationSessionStore();
-    const runMainAgent = vi.fn(async () => ({ output: "unexpected" }));
+    const enqueueMainAgent = vi.fn(async () => ({ output: "unexpected" }));
     const coordinator = createSessionIngressCoordinator({
       sessionStore: sessions,
-      runner: { runMainAgent },
+      runner: { enqueueMainAgent },
     });
     const plain = channelMessage({ messageId: "plain-1" });
     const selfCommand = channelMessage({
@@ -109,7 +109,7 @@ describe("SessionIngressCoordinator", () => {
     await coordinator.handle(plain);
     await coordinator.handle(selfCommand);
 
-    expect(runMainAgent).not.toHaveBeenCalled();
+    expect(enqueueMainAgent).not.toHaveBeenCalled();
     expect(sessions.getSession(plain.sessionId)?.timeline).toEqual([
       expect.objectContaining({ messageId: "plain-1" }),
       expect.objectContaining({ messageId: "self-command-1" }),
@@ -118,10 +118,10 @@ describe("SessionIngressCoordinator", () => {
 
   test("starts MainAgent for an appended non-self command", async () => {
     const sessions = new InMemoryConversationSessionStore();
-    const runMainAgent = vi.fn(async () => ({ output: "done" }));
+    const enqueueMainAgent = vi.fn(async () => ({ output: "done" }));
     const coordinator = createSessionIngressCoordinator({
       sessionStore: sessions,
-      runner: { runMainAgent },
+      runner: { enqueueMainAgent },
       createRunId: () => "run-command",
     });
     const command = channelMessage({
@@ -132,7 +132,7 @@ describe("SessionIngressCoordinator", () => {
 
     await coordinator.handle(command);
 
-    expect(runMainAgent).toHaveBeenCalledWith({
+    expect(enqueueMainAgent).toHaveBeenCalledWith({
       runId: "run-command",
       sessionId: command.sessionId,
       signal: command.signal,
@@ -141,10 +141,10 @@ describe("SessionIngressCoordinator", () => {
 
   test("does not start another turn for a duplicate mention", async () => {
     const sessions = new InMemoryConversationSessionStore();
-    const runMainAgent = vi.fn(async () => ({ output: "done" }));
+    const enqueueMainAgent = vi.fn(async () => ({ output: "done" }));
     const coordinator = createSessionIngressCoordinator({
       sessionStore: sessions,
-      runner: { runMainAgent },
+      runner: { enqueueMainAgent },
       createRunId: () => "run-once",
     });
     const mention = channelMessage({
@@ -155,7 +155,7 @@ describe("SessionIngressCoordinator", () => {
     await coordinator.handle(mention);
     await coordinator.handle(mention);
 
-    expect(runMainAgent).toHaveBeenCalledOnce();
+    expect(enqueueMainAgent).toHaveBeenCalledOnce();
     expect(sessions.getSession(mention.sessionId)?.timeline).toHaveLength(1);
   });
 
@@ -171,10 +171,10 @@ describe("SessionIngressCoordinator", () => {
       getSessionMetadata: () => undefined,
       getSessionContextWindow: () => undefined,
     };
-    const runMainAgent = vi.fn(async () => ({ output: "unexpected" }));
+    const enqueueMainAgent = vi.fn(async () => ({ output: "unexpected" }));
     const coordinator = createSessionIngressCoordinator({
       sessionStore,
-      runner: { runMainAgent },
+      runner: { enqueueMainAgent },
     });
     const associated = channelMessage({
       messageId: "self-associated",
@@ -187,15 +187,15 @@ describe("SessionIngressCoordinator", () => {
       associated.sessionId,
       associated.message,
     );
-    expect(runMainAgent).not.toHaveBeenCalled();
+    expect(enqueueMainAgent).not.toHaveBeenCalled();
   });
 
   test("propagates Store conflict without a second MainAgent turn", async () => {
     const sessions = new InMemoryConversationSessionStore();
-    const runMainAgent = vi.fn(async () => ({ output: "done" }));
+    const enqueueMainAgent = vi.fn(async () => ({ output: "done" }));
     const coordinator = createSessionIngressCoordinator({
       sessionStore: sessions,
-      runner: { runMainAgent },
+      runner: { enqueueMainAgent },
     });
     const observed = channelMessage({
       messageId: "conflict-1",
@@ -214,7 +214,7 @@ describe("SessionIngressCoordinator", () => {
       ),
     ).rejects.toThrow("conflicts with existing observed facts");
 
-    expect(runMainAgent).toHaveBeenCalledOnce();
+    expect(enqueueMainAgent).toHaveBeenCalledOnce();
     expect(sessions.getSession(observed.sessionId)?.timeline).toEqual([
       expect.objectContaining({
         messageId: "conflict-1",
@@ -223,15 +223,15 @@ describe("SessionIngressCoordinator", () => {
     ]);
   });
 
-  test("keeps facts when MainAgent fails without retrying", async () => {
+  test("keeps facts when turn registration fails without retrying", async () => {
     const sessions = new InMemoryConversationSessionStore();
     const runnerError = new Error("MainAgent unavailable");
-    const runMainAgent = vi.fn(async () => {
+    const enqueueMainAgent = vi.fn(() => {
       throw runnerError;
     });
     const coordinator = createSessionIngressCoordinator({
       sessionStore: sessions,
-      runner: { runMainAgent },
+      runner: { enqueueMainAgent },
     });
     const mention = channelMessage({
       messageId: "runner-failure-1",
@@ -240,7 +240,7 @@ describe("SessionIngressCoordinator", () => {
 
     await expect(coordinator.handle(mention)).rejects.toBe(runnerError);
 
-    expect(runMainAgent).toHaveBeenCalledOnce();
+    expect(enqueueMainAgent).toHaveBeenCalledOnce();
     expect(sessions.getSession(mention.sessionId)?.timeline).toEqual([
       expect.objectContaining({ messageId: "runner-failure-1" }),
     ]);
@@ -248,13 +248,13 @@ describe("SessionIngressCoordinator", () => {
 
   test("keeps aborted message facts without starting MainAgent", async () => {
     const sessions = new InMemoryConversationSessionStore();
-    const runMainAgent = vi.fn(async () => ({ output: "unexpected" }));
+    const enqueueMainAgent = vi.fn(async () => ({ output: "unexpected" }));
     const createRunId = vi.fn<() => RunId>(() => "run-aborted");
     const controller = new AbortController();
     controller.abort(new Error("ChannelRuntime closed"));
     const coordinator = createSessionIngressCoordinator({
       sessionStore: sessions,
-      runner: { runMainAgent },
+      runner: { enqueueMainAgent },
       createRunId,
     });
     const mention = channelMessage({
@@ -265,7 +265,7 @@ describe("SessionIngressCoordinator", () => {
 
     await coordinator.handle(mention);
 
-    expect(runMainAgent).not.toHaveBeenCalled();
+    expect(enqueueMainAgent).not.toHaveBeenCalled();
     expect(createRunId).not.toHaveBeenCalled();
     expect(sessions.getSession(mention.sessionId)?.timeline).toEqual([
       expect.objectContaining({ messageId: "aborted-mention-1" }),
@@ -279,10 +279,10 @@ describe("SessionIngressCoordinator", () => {
       deferred<{ output: string }>(),
     ];
     let nextRun = 0;
-    const runMainAgent = vi.fn(() => pendingRuns[nextRun++]!.promise);
+    const enqueueMainAgent = vi.fn(() => pendingRuns[nextRun++]!.promise);
     const coordinator = createSessionIngressCoordinator({
       sessionStore: sessions,
-      runner: { runMainAgent },
+      runner: { enqueueMainAgent },
     });
     const first = channelMessage({
       messageId: "route-one",
@@ -296,9 +296,9 @@ describe("SessionIngressCoordinator", () => {
     });
 
     const firstHandling = coordinator.handle(first);
-    await vi.waitFor(() => expect(runMainAgent).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(enqueueMainAgent).toHaveBeenCalledOnce());
     const secondHandling = coordinator.handle(second);
-    await vi.waitFor(() => expect(runMainAgent).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(enqueueMainAgent).toHaveBeenCalledTimes(2));
 
     pendingRuns[0].resolve({ output: "first" });
     pendingRuns[1].resolve({ output: "second" });
@@ -322,10 +322,10 @@ describe("SessionIngressCoordinator", () => {
       getSessionMetadata: () => undefined,
       getSessionContextWindow: () => undefined,
     };
-    const runMainAgent = vi.fn(async () => ({ output: "unexpected" }));
+    const enqueueMainAgent = vi.fn(async () => ({ output: "unexpected" }));
     const coordinator = createSessionIngressCoordinator({
       sessionStore,
-      runner: { runMainAgent },
+      runner: { enqueueMainAgent },
     });
     const mention = channelMessage({
       messageId: "store-error-1",
@@ -335,7 +335,7 @@ describe("SessionIngressCoordinator", () => {
     await expect(coordinator.handle(mention)).rejects.toBe(storeError);
 
     expect(appendChannelMessage).toHaveBeenCalledOnce();
-    expect(runMainAgent).not.toHaveBeenCalled();
+    expect(enqueueMainAgent).not.toHaveBeenCalled();
   });
 
   test("does not start MainAgent if Channel aborts during Store append", async () => {
@@ -355,10 +355,10 @@ describe("SessionIngressCoordinator", () => {
       getSessionMetadata: sessions.getSessionMetadata.bind(sessions),
       getSessionContextWindow: sessions.getSessionContextWindow.bind(sessions),
     };
-    const runMainAgent = vi.fn(async () => ({ output: "unexpected" }));
+    const enqueueMainAgent = vi.fn(async () => ({ output: "unexpected" }));
     const coordinator = createSessionIngressCoordinator({
       sessionStore,
-      runner: { runMainAgent },
+      runner: { enqueueMainAgent },
     });
     const mention = channelMessage({
       messageId: "abort-during-append-1",
@@ -368,7 +368,7 @@ describe("SessionIngressCoordinator", () => {
 
     await coordinator.handle(mention);
 
-    expect(runMainAgent).not.toHaveBeenCalled();
+    expect(enqueueMainAgent).not.toHaveBeenCalled();
     expect(sessions.getSession(mention.sessionId)?.timeline).toEqual([
       expect.objectContaining({ messageId: "abort-during-append-1" }),
     ]);
