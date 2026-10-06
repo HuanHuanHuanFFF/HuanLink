@@ -1,5 +1,5 @@
 import type { Message } from "@a2a-js/sdk";
-import { RequestMalformedError } from "@a2a-js/sdk/server";
+import { RequestMalformedError } from "@a2a-js/sdk/errors";
 import { z } from "zod";
 import type { CodexModelCapability } from "./codex-app-server-client.js";
 import type { CodexAdapterLocalConfig } from "./runtime-config.js";

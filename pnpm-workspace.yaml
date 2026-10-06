@@ -4,3 +4,9 @@ packages:
   - "packages/integrations/*"
 allowBuilds:
   esbuild: true
+minimumReleaseAgeExclude:
+  - "@openai/agents-core@0.19.0"
+  - "@openai/agents-extensions@0.19.0"
+  - "@openai/agents-openai@0.19.0"
+  - "@openai/agents-realtime@0.19.0"
+  - "@openai/agents@0.19.0"

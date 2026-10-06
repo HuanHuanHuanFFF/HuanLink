@@ -215,7 +215,11 @@ describe("createTaskStatusTool", () => {
       JSON.stringify({ taskId: "huanlink-task-status" }),
     );
 
-    expect(String(output)).toContain("status lookup failed");
+    expect(String(output)).toContain(
+      "An error occurred while running the tool",
+    );
+    expect(String(output)).not.toContain(failure.message);
+    expect(failure.message).toBe("status lookup failed");
     expect(logger.entries.at(-1)).toEqual({
       level: "error",
       message: "main_agent.tool.failed",

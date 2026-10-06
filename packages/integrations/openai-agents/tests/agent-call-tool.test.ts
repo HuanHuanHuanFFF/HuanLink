@@ -226,7 +226,10 @@ describe("createCodexAgentCallTool", () => {
     );
 
     expect(invoke).not.toHaveBeenCalled();
-    expect(String(output)).toContain("SDK Tool Call ID");
+    expect(String(output)).toContain(
+      "An error occurred while running the tool",
+    );
+    expect(String(output)).not.toContain("SDK Tool Call ID");
   });
 
   test("returns only the HuanLink task receipt for an async submission", async () => {
@@ -516,8 +519,14 @@ describe("createCodexAgentCallTool", () => {
       inputData: { type: "huanlink.codex-task.v1", projectId: "huanlink" },
       executionMode: scenario.expectedMode,
       sourceToolCallId: "tool-call-01",
-      signal: abortController.signal,
+      signal: expect.any(AbortSignal),
     });
+    const submittedSignal = invoke.mock.calls[0]?.[0].signal;
+    expect(submittedSignal?.aborted).toBe(false);
+    const abortReason = new Error("HuanLink run canceled");
+    abortController.abort(abortReason);
+    expect(submittedSignal?.aborted).toBe(true);
+    expect(submittedSignal?.reason).toBe(abortReason);
     expect(model.requests).toHaveLength(2);
     const continuationInput = JSON.stringify(model.requests[1]?.input);
     expect(continuationInput).toContain(
@@ -647,7 +656,7 @@ describe("createCodexAgentCallTool", () => {
     },
   );
 
-  test("logs a failed submission without changing the tool error result", async () => {
+  test("logs a failed submission without mutating the error or exposing it to the model", async () => {
     const originalMessage = "AgentCall submission failed";
     const failure = new Error(originalMessage);
     const logger = new MutatingRuntimeLogger(({ fields }) => {
@@ -686,7 +695,10 @@ describe("createCodexAgentCallTool", () => {
       ),
     );
 
-    expect(String(output)).toContain(originalMessage);
+    expect(String(output)).toContain(
+      "An error occurred while running the tool",
+    );
+    expect(String(output)).not.toContain(originalMessage);
     expect(failure.message).toBe(originalMessage);
     expect(logger.entries.at(-1)).toEqual({
       level: "error",
@@ -784,8 +796,10 @@ describe("createCodexAgentCallTool", () => {
       expect(invoke).not.toHaveBeenCalled();
       expect(model.requests).toHaveLength(2);
       const continuationInput = JSON.stringify(model.requests[1]?.input);
-      expect(continuationInput).toContain("InvalidToolInputError");
-      expect(continuationInput).toContain("Invalid JSON input for tool");
+      expect(continuationInput).toContain(
+        "An error occurred while running the tool",
+      );
+      expect(continuationInput).not.toContain("InvalidToolInputError");
     },
   );
 

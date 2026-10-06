@@ -19,18 +19,33 @@ export type CreateDeepSeekMainAgentModelBindingOptions = {
   fetch?: DeepSeekProviderSettings["fetch"];
 };
 
-const strictFunctionToolsMiddleware: LanguageModelMiddleware = {
+const deepSeekToolMessageMiddleware: LanguageModelMiddleware = {
   specificationVersion: "v3",
-  transformParams: async ({ params }) => ({
-    ...params,
-    ...(params.tools === undefined
-      ? {}
-      : {
-          tools: params.tools.map((tool) =>
-            tool.type === "function" ? { ...tool, strict: true } : tool,
-          ),
-        }),
-  }),
+  transformParams: async ({ params }) => {
+    const prompt: typeof params.prompt = [];
+    for (const message of params.prompt) {
+      const previous = prompt.at(-1);
+      if (
+        previous?.role === "assistant" &&
+        message.role === "assistant" &&
+        previous.content.some((part) => part.type === "tool-call")
+      ) {
+        // The bridge can split text and calls from one DeepSeek response.
+        // Keep them together so matching tool results immediately follow it.
+        prompt[prompt.length - 1] = {
+          ...previous,
+          content: [...previous.content, ...message.content],
+          providerOptions: {
+            ...previous.providerOptions,
+            ...message.providerOptions,
+          },
+        };
+      } else {
+        prompt.push(message);
+      }
+    }
+    return { ...params, prompt };
+  },
 };
 
 export function createDeepSeekMainAgentModelBinding(
@@ -41,13 +56,13 @@ export function createDeepSeekMainAgentModelBinding(
     baseURL: options.config.baseURL,
     ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
   });
-  const model = wrapLanguageModel({
-    model: provider(options.config.modelId),
-    middleware: strictFunctionToolsMiddleware,
-  });
-
   return {
-    model: aisdk(model),
+    model: aisdk(
+      wrapLanguageModel({
+        model: provider(options.config.modelId),
+        middleware: deepSeekToolMessageMiddleware,
+      }),
+    ),
     modelSettings: {
       providerData: {
         providerOptions: {
