@@ -18,6 +18,7 @@ import type { CodexProject } from "./dispatch-policy.js";
 import { loadCodexAdapterLocalConfig } from "./runtime-config.js";
 
 export interface StartCodexAdapterRuntimeOptions {
+  experimentalDelegation?: boolean;
   spawnTransport?: (
     options: SpawnCodexAppServerOptions,
   ) => CodexAppServerTransport;
@@ -76,6 +77,7 @@ export async function startCodexAdapterRuntime(
     cwd: options.projectRoot,
   });
   const client = await CodexAppServerClient.connect({
+    experimentalDelegation: options.experimentalDelegation,
     transport,
     expectedVersion: options.expectedCodexVersion,
   });
@@ -84,6 +86,7 @@ export async function startCodexAdapterRuntime(
   let server;
   try {
     executor = new CodexTaskExecutor({
+      experimentalDelegation: options.experimentalDelegation,
       client,
       logger,
       projects,
@@ -91,6 +94,8 @@ export async function startCodexAdapterRuntime(
     });
     const activeExecutor = executor;
     server = await startAdapterServer({
+      experimentalDelegation: options.experimentalDelegation,
+      controlMessage: (message) => activeExecutor.controlMessage(message),
       executor: activeExecutor,
       validateMessage: (message) => activeExecutor.validateMessage(message),
       host: options.host,

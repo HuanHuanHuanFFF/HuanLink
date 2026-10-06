@@ -16,6 +16,7 @@ export type OpenAiAgentsRunner = {
     input: string,
     options?: {
       signal?: AbortSignal;
+      maxTurns?: number;
       context?: OpenAiAgentsRunContext;
     },
   ): Promise<{ finalOutput: unknown }>;

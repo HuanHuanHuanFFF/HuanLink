@@ -15,6 +15,7 @@ const CONFIGURED_WORKSPACE = z
   .min(1)
   .refine((value) => value === value.trim() && isRelativeWorkspace(value));
 const RUNTIME_FIELD_NAMES = new Set([
+  "experimentalDelegation",
   "version",
   "host",
   "port",
@@ -36,6 +37,7 @@ const PROJECT_FIELD_NAMES = new Set([
 
 const adapterRuntimeSchema = z
   .object({
+    experimentalDelegation: z.boolean().optional(),
     version: z.literal(1),
     host: NON_EMPTY_STRING.pipe(z.enum(LOOPBACK_HOST_VALUES)),
     port: z.number().int().min(0).max(65_535),

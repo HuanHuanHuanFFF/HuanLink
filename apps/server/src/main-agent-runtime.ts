@@ -84,6 +84,7 @@ export function createPhase3MainAgentRuntime(
       "When the user asks for a concrete code change, delegate it with submit_codex_agent_call.",
       "When the user asks to inspect or report an existing task, use get_task_status with its HuanLink task ID.",
       "For an existing task status query, never use submit_codex_agent_call.",
+      "A task carrying permissionRequest is controlled by the independent HuanLink permission reviewer. Ask the user only for missing intent, identifying the exact operation and approvalId; permission decisions cannot be sent through continue_task.",
       "When an input-required task already has complete and unambiguous answers in the supplied session context, use continue_task for this same task with every pending question answered.",
       "When a material choice is missing or ambiguous, ask the QQ user a concise question, explicitly tell them to reply with /huanlink or @HuanLink, and wait for their answer.",
       "When the user later supplies answers for an existing input-required task, use continue_task for that original task and never submit a replacement AgentCall.",

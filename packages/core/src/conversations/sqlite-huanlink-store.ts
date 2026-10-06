@@ -1,4 +1,6 @@
 import type { AsyncToolTaskStore } from "../async-tool-task/async-tool-task-store.js";
+import { SqliteDelegationStore } from "../delegation/context-store.js";
+import type { DelegationStore } from "../delegation/types.js";
 import { SqliteAsyncToolTaskStore } from "../async-tool-task/sqlite-async-tool-task-store.js";
 
 import type { ConversationSessionStore } from "./conversation-session-store.js";
@@ -12,6 +14,7 @@ import { SqliteConversationSessionStore } from "./sqlite-conversation-session-st
 export type SqliteHuanLinkStore = {
   readonly sessionStore: ConversationSessionStore;
   readonly taskStore: AsyncToolTaskStore;
+  readonly delegationStore: DelegationStore;
   close(): void;
 };
 
@@ -39,6 +42,7 @@ function createSqliteHuanLinkStore(
     sessionStore:
       SqliteConversationSessionStore.fromSharedConnection(connection),
     taskStore: SqliteAsyncToolTaskStore.fromSharedConnection(connection),
+    delegationStore: new SqliteDelegationStore(connection),
     close: () => connection.close(),
   };
 }

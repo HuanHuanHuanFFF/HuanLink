@@ -20,6 +20,7 @@ import type {
   InterruptCodexTurnOptions,
   StartCodexThreadOptions,
   StartCodexTurnOptions,
+  CodexPermissionRequest,
 } from "../src/codex-app-server-client.js";
 import { CodexTaskExecutor } from "../src/codex-task-executor.js";
 import type { CodexProject } from "../src/dispatch-policy.js";
@@ -30,6 +31,35 @@ import {
 import { RecordingRuntimeLogger } from "./support/recording-runtime-logger.js";
 
 class ControlledCodexRuntime implements CodexRuntimeClient {
+  readonly steerCalls: Array<{
+    threadId: string;
+    turnId: string;
+    prompt: string;
+  }> = [];
+  readonly permissionDecisions: Array<{
+    id: string | number;
+    decision: string;
+  }> = [];
+  permissionListener?: (request: CodexPermissionRequest) => void;
+  onPermissionRequest(listener: (request: CodexPermissionRequest) => void) {
+    this.permissionListener = listener;
+    return () => {
+      this.permissionListener = undefined;
+    };
+  }
+  async respondToPermissionRequest(
+    id: string | number,
+    decision: "approve" | "deny",
+  ) {
+    this.permissionDecisions.push({ id, decision });
+  }
+  async steerTurn(options: {
+    threadId: string;
+    turnId: string;
+    prompt: string;
+  }) {
+    this.steerCalls.push(options);
+  }
   async listModels() {
     return [
       { model: "gpt-5.4-mini", reasoningEfforts: ["low", "high", "xhigh"] },
@@ -241,6 +271,7 @@ function taskStateFrom(event: StreamResponse): TaskState | undefined {
 async function startClient(
   runtime: ControlledCodexRuntime,
   options: {
+    experimentalDelegation?: boolean;
     projects?: CodexProject[];
     cancelTimeoutMs?: number;
     logger?: RecordingRuntimeLogger;
@@ -251,6 +282,7 @@ async function startClient(
   } = {},
 ): Promise<{ client: Client; executor: CodexTaskExecutor }> {
   const executor = new CodexTaskExecutor({
+    experimentalDelegation: options.experimentalDelegation,
     client: runtime,
     projects: options.projects ?? [
       {
@@ -275,6 +307,7 @@ async function startClient(
     executor,
     port: 0,
     validateMessage: (message) => executor.validateMessage(message),
+    controlMessage: (message) => executor.controlMessage(message),
   });
   runningServers.push(server);
   return {
@@ -349,6 +382,170 @@ afterEach(async () => {
 });
 
 describe("CodexTaskExecutor", () => {
+  it("fails closed when a native question overlaps a pending permission", async () => {
+    const runtime = new ControlledCodexRuntime();
+    const { client } = await startClient(runtime, {
+      experimentalDelegation: true,
+    });
+    const pack = {
+      type: "huanlink.delegation-context.v1",
+      delegationId: "d",
+      sessionId: "s",
+      goal: "work",
+      revision: 1,
+      throughEntryIndex: 1024,
+      summary: "work",
+      progress: [],
+      decisions: [],
+      constraints: [],
+      openQuestions: [],
+      userEvidence: [
+        {
+          messageId: "u",
+          senderId: "owner",
+          text: "Run tests",
+          entryIndex: 1024,
+        },
+      ],
+      authorization: {
+        allowed: [{ scope: "tests", evidenceMessageIds: ["u"] }],
+        denied: [],
+        uncertain: [],
+      },
+      change: "context",
+      stop: false,
+      authorityCeiling: ["command"],
+    };
+    const request = createSendRequest("work", true, {
+      projectId: "huanlink",
+      delegation: pack,
+    });
+    request.message!.contextId = "d";
+    const task = requireTask(await client.sendMessage(request));
+    await expect.poll(() => runtime.startTurnCalls.length).toBe(1);
+    runtime.permissionListener!({
+      id: "p",
+      kind: "command",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      itemId: "i",
+      command: "npm test",
+      cwd: "D:/CodingProject/HuanLink",
+      reason: "tests",
+    });
+    await waitForTaskState(
+      client,
+      task.id,
+      TaskState.TASK_STATE_INPUT_REQUIRED,
+    );
+    runtime.emitServerRequest(userInputRequest({ id: "overlapping-question" }));
+    await waitForTaskState(client, task.id, TaskState.TASK_STATE_FAILED);
+    expect(runtime.permissionDecisions).toContainEqual({
+      id: "p",
+      decision: "deny",
+    });
+    expect(runtime.serverResponses).toEqual([]);
+    expect(runtime.closeCalls).toBe(1);
+  });
+  it("carries task context over real A2A HTTP and returns one bounded permission decision", async () => {
+    const runtime = new ControlledCodexRuntime();
+    const { client } = await startClient(runtime, {
+      experimentalDelegation: true,
+    });
+    const pack = {
+      type: "huanlink.delegation-context.v1",
+      delegationId: "d",
+      sessionId: "s",
+      goal: "Fix tests",
+      revision: 1,
+      throughEntryIndex: 1024,
+      summary: "Fix tests",
+      progress: [],
+      decisions: [],
+      constraints: ["no push"],
+      openQuestions: [],
+      userEvidence: [
+        {
+          messageId: "u",
+          senderId: "owner",
+          text: "Run tests; do not push",
+          entryIndex: 1024,
+        },
+      ],
+      authorization: {
+        allowed: [{ scope: "run tests", evidenceMessageIds: ["u"] }],
+        denied: [{ scope: "push", evidenceMessageIds: ["u"] }],
+        uncertain: [],
+      },
+      change: "context",
+      stop: false,
+      authorityCeiling: ["command"],
+    };
+    const initial = createSendRequest("Fix tests", true, {
+      projectId: "huanlink",
+      delegation: pack,
+    });
+    initial.message!.contextId = "d";
+    const task = requireTask(await client.sendMessage(initial));
+    await expect.poll(() => runtime.startTurnCalls.length).toBe(1);
+    expect(runtime.startTurnCalls[0]?.prompt).toContain(
+      "Run tests; do not push",
+    );
+    const sendControl = (data: unknown) =>
+      client.sendMessage(
+        SendMessageRequest.fromJSON({
+          message: {
+            messageId: randomUUID(),
+            taskId: task.id,
+            contextId: task.contextId,
+            role: "ROLE_USER",
+            parts: [{ data }],
+          },
+          configuration: { returnImmediately: true },
+        }),
+      );
+    const updated = {
+      ...pack,
+      revision: 2,
+      throughEntryIndex: 2048,
+      summary: "Check parser tests",
+    };
+    await sendControl({ type: "huanlink.delegation-sync.v1", pack: updated });
+    await sendControl({ type: "huanlink.delegation-sync.v1", pack: updated });
+    expect(runtime.steerCalls).toHaveLength(1);
+    runtime.permissionListener!({
+      id: "p",
+      kind: "command",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      itemId: "i",
+      command: "npm test",
+      cwd: "D:/CodingProject/HuanLink",
+      reason: "tests",
+    });
+    const paused = await waitForTaskState(
+      client,
+      task.id,
+      TaskState.TASK_STATE_INPUT_REQUIRED,
+    );
+    const data = paused.status!.message!.parts.find(
+      (p) => p.content?.$case === "data",
+    )!.content!.value as Record<string, unknown>;
+    const approval = data.permissionRequest as { approvalId: string };
+    const decision = {
+      type: "huanlink.delegation-decision.v1",
+      delegationId: "d",
+      approvalId: approval.approvalId,
+      contextRevision: 2,
+      decision: "approve",
+    };
+    await sendControl(decision);
+    await sendControl(decision);
+    expect(runtime.permissionDecisions).toEqual([
+      { id: "p", decision: "approve" },
+    ]);
+    runtime.emitClose(new Error("test cleanup"));
+  });
   it.each([true, false])(
     "accepts another answer without client-side closing the earlier stream (failed final check: %s)",
     async (failFinalCheck) => {

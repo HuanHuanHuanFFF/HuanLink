@@ -10,6 +10,12 @@ import type {
   AsyncToolTaskState,
 } from "../async-tool-task/types.js";
 import type { TaskExecutionMode } from "../tasks/types.js";
+import type {
+  DelegationControl,
+  DelegationControlReceipt,
+  DelegationPermissionRequest,
+} from "../delegation/types.js";
+import { parsePermissionRequest } from "../delegation/validation.js";
 
 export type AgentCallTaskState =
   | "unknown"
@@ -80,6 +86,7 @@ export type AgentCallInputAnswers = Record<string, string[]>;
 export const AGENT_CALL_TASK_KIND = "agent-call" as const;
 
 export type AgentCallTaskPublicPayload = {
+  readonly permissionRequest?: DelegationPermissionRequest;
   readonly artifacts: readonly AgentCallArtifact[];
   readonly questions?: readonly AgentCallInputQuestion[];
 };
@@ -95,6 +102,7 @@ export const AGENT_CALL_TASK_KIND_DEFINITION: AsyncToolTaskKindDefinition = {
 };
 
 export type AgentCallTaskSnapshot = {
+  permissionRequest?: DelegationPermissionRequest;
   taskId: string;
   contextId?: string;
   state: AgentCallTaskState;
@@ -141,6 +149,9 @@ export type AgentCallTransportSubmitResult =
     };
 
 export interface AgentCallTransport {
+  controlTask?(
+    request: AgentCallControlRequest,
+  ): Promise<AgentCallControlResult>;
   discoverCapability(
     skillId: string,
     options?: { signal?: AbortSignal },
@@ -246,6 +257,7 @@ export type AgentCallInvocationResult =
   | AgentCallBlockingUncertainResult;
 
 export type AgentCallRecord = {
+  permissionRequest?: DelegationPermissionRequest;
   agentCallId: AgentCallId;
   taskId: string;
   contextId?: string;
@@ -332,9 +344,26 @@ function validateAgentCallTaskPayload(payload: unknown): AsyncToolTaskPayload {
       : validateAgentCallTaskQuestions(payload.questions);
   return {
     artifacts,
+    ...(payload.permissionRequest === undefined
+      ? {}
+      : {
+          permissionRequest: parsePermissionRequest(payload.permissionRequest),
+        }),
     ...(questions === undefined ? {} : { questions }),
   };
 }
+
+export type AgentCallControlRequest = {
+  taskId: string;
+  contextId: string;
+  messageId: string;
+  control: DelegationControl;
+  signal?: AbortSignal;
+};
+export type AgentCallControlResult = {
+  receipt: DelegationControlReceipt;
+  snapshot: AgentCallTaskSnapshot;
+};
 
 function validateAgentCallTaskQuestions(
   value: unknown,

@@ -19,6 +19,10 @@ import {
   type AgentCallTransportContinueRequest,
   type AgentCallTransportSubmitRequest,
   type AgentCallTransportSubmitResult,
+  type AgentCallControlRequest,
+  type AgentCallControlResult,
+  parsePermissionRequest,
+  isAsyncToolTaskState,
 } from "@huanlink/core";
 import {
   isPaused,
@@ -241,6 +245,76 @@ export class A2aAgentCallTransport implements AgentCallTransport {
       });
       throw error;
     }
+  }
+
+  async controlTask(
+    request: AgentCallControlRequest,
+  ): Promise<AgentCallControlResult> {
+    const client = await this.getClient();
+    const response = await client.sendMessage(
+      SendMessageRequest.fromJSON({
+        message: {
+          messageId: request.messageId,
+          taskId: request.taskId,
+          contextId: request.contextId,
+          role: "ROLE_USER",
+          parts: [{ data: request.control }],
+        },
+        configuration: { returnImmediately: true },
+      }),
+      request.signal ? { signal: request.signal } : undefined,
+    );
+    if (
+      "status" in response ||
+      response.taskId !== request.taskId ||
+      response.contextId !== request.contextId ||
+      response.parts.length !== 1 ||
+      response.parts[0]?.content?.$case !== "data"
+    )
+      throw new A2aProtocolError("Delegation receipt binding mismatch");
+    const data = response.parts[0].content.value;
+    const receipt = data.receipt as
+      | AgentCallControlResult["receipt"]
+      | undefined;
+    const snapshot = data.snapshot as AgentCallTaskSnapshot | undefined;
+    const expectedId =
+      request.control.type === "huanlink.delegation-sync.v1"
+        ? request.control.pack.delegationId
+        : request.control.delegationId;
+    const revision =
+      request.control.type === "huanlink.delegation-sync.v1"
+        ? request.control.pack.revision
+        : request.control.contextRevision;
+    if (
+      !receipt ||
+      receipt.delegationId !== expectedId ||
+      receipt.revision !== revision ||
+      receipt.status !==
+        (request.control.type === "huanlink.delegation-sync.v1"
+          ? "received"
+          : "decided") ||
+      (request.control.type === "huanlink.delegation-decision.v1" &&
+        receipt.approvalId !== request.control.approvalId) ||
+      !snapshot ||
+      snapshot.taskId !== request.taskId ||
+      snapshot.contextId !== request.contextId ||
+      !isAsyncToolTaskState(snapshot.state) ||
+      !Array.isArray(snapshot.artifacts)
+    )
+      throw new A2aProtocolError("Invalid delegation control receipt binding");
+    return {
+      receipt: structuredClone(receipt),
+      snapshot: {
+        ...snapshot,
+        ...(snapshot.permissionRequest
+          ? {
+              permissionRequest: parsePermissionRequest(
+                snapshot.permissionRequest,
+              ),
+            }
+          : {}),
+      },
+    };
   }
 
   async *watchTask(

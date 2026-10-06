@@ -74,8 +74,9 @@ export function buildAsyncToolTaskInputRequiredReentryInput(
   task: AsyncToolTaskStatus,
   latestContext: string,
 ): string {
-  const continuationInstruction =
-    task.kind === "agent-call"
+  const continuationInstruction = task.payload.permissionRequest
+    ? "This is a permission request reviewed independently by HuanLink. Explain the exact pending operation and ask the owner only for the missing authorization; include the approvalId. Their natural-language reply will be reviewed against this request. Do not use continue_task for permission decisions."
+    : task.kind === "agent-call"
       ? "If the available conversation context already supplies complete answers to every pending question, call continue_task for this same HuanLink task."
       : "If the available conversation context already supplies complete answers to every pending question, use only this Task kind's enabled continuation Tool; otherwise ask the user.";
   return [

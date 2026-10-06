@@ -2,6 +2,10 @@ import { randomUUID } from "node:crypto";
 
 import {
   AgentCallService,
+  DelegationCoordinator,
+  InMemoryDelegationStore,
+  type DelegationModel,
+  type DelegationStore,
   AgentTurnScheduler,
   AsyncToolTaskService,
   NoopRuntimeLogger,
@@ -58,6 +62,13 @@ export type Phase3BeforeReentryInput = Pick<
 export type Phase3ReentryCleanup = () => Promise<void> | void;
 
 export type CreatePhase3HuanLinkRuntimeOptions = {
+  delegation?: {
+    model: DelegationModel;
+    store?: DelegationStore;
+    authorizedSenderIds: readonly string[];
+    maxInputChars?: number;
+    maxContextChars?: number;
+  };
   codexA2aOrigin: string;
   codexSkillId?: string;
   /** Stable configured identity persisted only in AgentCall private references. */
@@ -113,8 +124,18 @@ export function createPhase3HuanLinkRuntime(
     ...(options.agentId === undefined ? {} : { agentId: options.agentId }),
     logger: logger.child({ source: "agent_call.service" }),
   });
+  const delegation = options.delegation
+    ? new DelegationCoordinator({
+        ...options.delegation,
+        sessions: options.sessionStore,
+        tasks: options.taskService,
+        agentCalls,
+        store: options.delegation.store ?? new InMemoryDelegationStore(),
+        logger,
+      })
+    : undefined;
   const mainAgent = createPhase3MainAgentRuntime({
-    agentCallInvoker: agentCalls,
+    agentCallInvoker: delegation ?? agentCalls,
     taskStatusReader: options.taskService,
     agentCallContinuator: agentCalls,
     codexSkillId: options.codexSkillId,
@@ -227,6 +248,23 @@ export function createPhase3HuanLinkRuntime(
               skipReason: "stale_trigger",
             });
             return;
+          }
+          if (
+            trigger === "agent_call_input_required" &&
+            delegation &&
+            status.payload.permissionRequest
+          ) {
+            const liveTask = options.taskService.get(
+              task.sessionId,
+              task.taskId,
+            );
+            if (
+              liveTask &&
+              (await delegation.resolvePermission(liveTask, signal))
+            ) {
+              skipped = true;
+              return;
+            }
           }
           const cleanup = await Promise.resolve().then(() =>
             beforeReentry({
@@ -358,6 +396,10 @@ export function createPhase3HuanLinkRuntime(
         sessionId: input.sessionId,
         signal: controller.signal,
         operation: async () => {
+          await delegation?.synchronizeSession(
+            input.sessionId,
+            controller.signal,
+          );
           const projectedInput =
             options.getLatestContext === undefined
               ? input.input

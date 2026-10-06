@@ -3,6 +3,8 @@ import {
   AsyncToolTaskService,
   InMemoryAsyncToolTaskStore,
   InMemoryConversationSessionStore,
+  InMemoryDelegationStore,
+  type DelegationStore,
   NoopRuntimeLogger,
   SessionTaskQuotaService,
   type AgentCallTransport,
@@ -11,6 +13,7 @@ import {
   type ConversationSessionStore,
   type RuntimeLogger,
 } from "@huanlink/core";
+import { createDelegationModel } from "@huanlink/integration-openai-agents";
 import {
   A2aAgentCallTransport,
   type A2aAgentCallTransportOptions,
@@ -51,6 +54,7 @@ export type ConfiguredServerRuntime = HuanLinkServerRuntime & {
 };
 
 export type ConfiguredServerPersistence = {
+  readonly delegationStore?: DelegationStore;
   readonly sessionStore: ConversationSessionStore;
   readonly taskStore: AsyncToolTaskStore;
   readonly storeOwner: HuanLinkServerStoreCloseOwner;
@@ -157,6 +161,25 @@ export async function createConfiguredServerRuntime(
           logger: logger.child({ source: "main_agent.tool.onebot" }),
         });
         return createPhase3HuanLinkRuntime({
+          ...(options.staticConfig.orchestration.delegationExperiment?.enabled
+            ? {
+                delegation: {
+                  model: createDelegationModel(modelBinding),
+                  store:
+                    persistence.delegationStore ??
+                    new InMemoryDelegationStore(),
+                  authorizedSenderIds:
+                    options.staticConfig.orchestration.delegationExperiment
+                      .authorizedSenderIds,
+                  maxInputChars:
+                    options.staticConfig.orchestration.delegationExperiment
+                      .maxInputChars,
+                  maxContextChars:
+                    options.staticConfig.orchestration.delegationExperiment
+                      .maxContextChars,
+                },
+              }
+            : {}),
           codexA2aOrigin: defaultAgent.origin,
           codexSkillId: defaultAgent.skillId,
           agentId: defaultAgent.agentId,

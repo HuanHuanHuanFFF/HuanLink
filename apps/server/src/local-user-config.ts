@@ -81,6 +81,15 @@ const agentFileSchema = z
 
 const orchestrationFileSchema = z
   .object({
+    delegationExperiment: z
+      .object({
+        enabled: z.boolean(),
+        authorizedSenderIds: z.array(z.string().trim().min(1)).min(1),
+        maxInputChars: z.number().int().min(4000).max(200000).default(48000),
+        maxContextChars: z.number().int().min(1000).max(32000).default(16000),
+      })
+      .strict()
+      .optional(),
     version: z.literal(1),
     defaultAgentId: stableIdSchema,
     a2aTaskPolicy: z
@@ -147,6 +156,12 @@ type ServerAgentConfig = {
 };
 
 type ServerOrchestrationStaticConfig = {
+  delegationExperiment?: {
+    enabled: boolean;
+    authorizedSenderIds: string[];
+    maxInputChars: number;
+    maxContextChars: number;
+  };
   defaultAgentId: string;
   a2aTaskPolicy: {
     maxActiveTasksPerSession: number;
@@ -594,6 +609,13 @@ function copyOrchestrationConfig(
   orchestration: z.infer<typeof orchestrationFileSchema>,
 ): ServerOrchestrationStaticConfig {
   return {
+    ...(orchestration.delegationExperiment
+      ? {
+          delegationExperiment: structuredClone(
+            orchestration.delegationExperiment,
+          ),
+        }
+      : {}),
     defaultAgentId: orchestration.defaultAgentId,
     a2aTaskPolicy: {
       maxActiveTasksPerSession:

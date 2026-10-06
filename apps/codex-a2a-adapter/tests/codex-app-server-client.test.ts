@@ -538,6 +538,66 @@ describe("CodexAppServerClient", () => {
     }
   });
 
+  it("binds an experimental approval to one native request and steers only the expected turn", async () => {
+    const transport = createTestTransport();
+    const read = createJsonLineReader(transport.fromClient);
+    const connecting = CodexAppServerClient.connect({
+      transport: transport.client,
+      expectedVersion: "0.145.0",
+      experimentalDelegation: true,
+    });
+    const init = await read();
+    transport.toClient.write(
+      JSON.stringify({
+        id: init.id,
+        result: { userAgent: "codex-cli/0.145.0" },
+      }) + "\n",
+    );
+    await read();
+    const client = await connecting;
+    const permissions: unknown[] = [];
+    client.onPermissionRequest((request) => permissions.push(request));
+    transport.toClient.write(
+      JSON.stringify({
+        id: "p1",
+        method: "item/commandExecution/requestApproval",
+        params: {
+          threadId: "t",
+          turnId: "r",
+          itemId: "i",
+          startedAtMs: 1,
+          command: "npm test",
+          cwd: "/workspace",
+        },
+      }) + "\n",
+    );
+    await expect.poll(() => permissions).toHaveLength(1);
+    await client.respondToPermissionRequest("p1", "deny");
+    expect(await read()).toEqual({ id: "p1", result: { decision: "decline" } });
+    await expect(
+      client.respondToPermissionRequest("p1", "approve"),
+    ).rejects.toThrow(/already answered/);
+    const steering = client.steerTurn({
+      threadId: "t",
+      turnId: "r",
+      prompt: "only inspect",
+    });
+    const request = await read();
+    expect(request).toMatchObject({
+      method: "turn/steer",
+      params: {
+        threadId: "t",
+        expectedTurnId: "r",
+        input: [{ type: "text", text: "only inspect", text_elements: [] }],
+      },
+    });
+    transport.toClient.write(
+      JSON.stringify({ id: request.id, result: { turnId: "r" } }) + "\n",
+    );
+    await steering;
+    await client.close();
+  });
+
   it("fails closed when app-server sends an unsupported reverse request", async () => {
     const transport = createTestTransport();
     const readFromClient = createJsonLineReader(transport.fromClient);

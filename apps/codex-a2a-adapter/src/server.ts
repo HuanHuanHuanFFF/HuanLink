@@ -7,7 +7,7 @@ import {
 } from "@a2a-js/sdk";
 import {
   DefaultRequestHandler,
-  InMemoryTaskStore,
+  DefaultExecutionEventBusManager,
   type AgentExecutor,
   type ServerCallContext,
 } from "@a2a-js/sdk/server";
@@ -19,8 +19,11 @@ import {
 import express, { type RequestHandler, type Response } from "express";
 
 import { createAgentCard } from "./agent-card.js";
+import { DelegationTaskStore } from "./delegation-task-store.js";
 
 export interface StartAdapterServerOptions {
+  experimentalDelegation?: boolean;
+  controlMessage?: (message: Message) => Promise<Message | undefined>;
   validateMessage?: (
     message: Message,
   ) => void | (() => void) | Promise<void | (() => void)>;
@@ -55,12 +58,24 @@ export async function startAdapterServer(
 
   try {
     const origin = `http://${formatHost(host)}:${address.port}`;
-    const agentCard = createAgentCard(origin);
+    const agentCard = createAgentCard(
+      origin,
+      options.experimentalDelegation ?? false,
+    );
+    const buses = new DefaultExecutionEventBusManager();
+    const taskStore = new DelegationTaskStore(buses);
     class ValidatingRequestHandler extends DefaultRequestHandler {
       override async sendMessage(
         params: SendMessageRequest,
         context: ServerCallContext,
       ) {
+        const controlled = params.message
+          ? await options.controlMessage?.(params.message)
+          : undefined;
+        if (controlled) {
+          await taskStore.flush(controlled.taskId);
+          return controlled;
+        }
         const release = params.message
           ? await options.validateMessage?.(params.message)
           : undefined;
@@ -86,8 +101,9 @@ export async function startAdapterServer(
     }
     const requestHandler = new ValidatingRequestHandler(
       agentCard,
-      new InMemoryTaskStore(),
+      taskStore,
       options.executor,
+      buses,
     );
 
     app.use(
@@ -104,7 +120,10 @@ export async function startAdapterServer(
 
     return {
       origin,
-      close: () => close(httpServer),
+      close: async () => {
+        await close(httpServer);
+        await taskStore.close();
+      },
     };
   } catch (error) {
     await close(httpServer);

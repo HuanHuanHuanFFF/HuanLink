@@ -100,7 +100,7 @@ describe("SQLite Conversation migrations", () => {
       inspection
         .prepare("SELECT version FROM schema_migrations ORDER BY version")
         .all(),
-    ).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }]);
+    ).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }]);
     inspection.close();
   });
 
@@ -117,7 +117,8 @@ describe("SQLite Conversation migrations", () => {
     database.exec(`
       DROP TABLE async_tool_task_private_refs;
       DROP TABLE async_tool_tasks;
-      DELETE FROM schema_migrations WHERE version = 3;
+      DROP TABLE delegation_contexts;
+      DELETE FROM schema_migrations WHERE version >= 3;
     `);
     database.close();
 
@@ -136,7 +137,7 @@ describe("SQLite Conversation migrations", () => {
       inspection
         .prepare("SELECT version FROM schema_migrations ORDER BY version")
         .all(),
-    ).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }]);
+    ).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }]);
     inspection.close();
   });
 
@@ -148,7 +149,8 @@ describe("SQLite Conversation migrations", () => {
     database.exec(`
       DROP TABLE async_tool_task_private_refs;
       DROP TABLE async_tool_tasks;
-      DELETE FROM schema_migrations WHERE version = 3;
+      DROP TABLE delegation_contexts;
+      DELETE FROM schema_migrations WHERE version >= 3;
       CREATE TABLE async_tool_task_private_refs (sentinel TEXT);
     `);
     database.close();

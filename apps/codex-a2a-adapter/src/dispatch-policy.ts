@@ -1,11 +1,16 @@
 import type { Message } from "@a2a-js/sdk";
 import { RequestMalformedError } from "@a2a-js/sdk/server";
 import { z } from "zod";
+import {
+  parseDelegationContext,
+  type DelegationContextPack,
+} from "@huanlink/core";
 import type { CodexModelCapability } from "./codex-app-server-client.js";
 import type { CodexAdapterLocalConfig } from "./runtime-config.js";
 
 export type CodexProject = CodexAdapterLocalConfig["projects"][number];
 export type ResolvedCodexDispatch = {
+  delegation?: DelegationContextPack;
   project: CodexProject;
   modelId: string;
   reasoningEffort: string;
@@ -17,6 +22,7 @@ const dispatchSchema = z
     projectId: z.string().min(1),
     modelId: z.string().min(1).optional(),
     reasoningEffort: z.string().min(1).optional(),
+    delegation: z.unknown().optional(),
   })
   .strict();
 
@@ -27,6 +33,7 @@ export class CodexDispatchPolicy {
   constructor(
     projects: readonly CodexProject[],
     models: readonly CodexModelCapability[],
+    private readonly experimentalDelegation = false,
   ) {
     this.projects = new Map(
       projects.map((project) => [project.projectId, { ...project }]),
@@ -73,7 +80,34 @@ export class CodexDispatchPolicy {
     const reasoningEffort =
       parsed.data.reasoningEffort ?? project.defaultReasoningEffort;
     this.validateModel(modelId, reasoningEffort);
-    return { project: { ...project }, modelId, reasoningEffort };
+    let delegation: DelegationContextPack | undefined;
+    if (parsed.data.delegation !== undefined) {
+      if (!this.experimentalDelegation)
+        throw new RequestMalformedError("Delegation experiment is disabled");
+      try {
+        delegation = parseDelegationContext(parsed.data.delegation);
+      } catch {
+        throw new RequestMalformedError("Invalid delegation context");
+      }
+      const taskText = message.parts
+        .flatMap((p) => (p.content?.$case === "text" ? [p.content.value] : []))
+        .join("\n")
+        .trim();
+      if (
+        message.contextId !== delegation.delegationId ||
+        taskText !== delegation.goal ||
+        delegation.stop
+      )
+        throw new RequestMalformedError(
+          "Delegation task/context binding mismatch",
+        );
+    }
+    return {
+      project: { ...project },
+      modelId,
+      reasoningEffort,
+      ...(delegation ? { delegation } : {}),
+    };
   }
 
   private validateModel(modelId: string, effort: string): void {

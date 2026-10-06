@@ -1,4 +1,8 @@
 import { randomUUID } from "node:crypto";
+import type {
+  DelegationControl,
+  DelegationControlReceipt,
+} from "../delegation/types.js";
 
 import { NoopRuntimeLogger } from "../logging/noop-runtime-logger.js";
 import { AsyncToolTaskService } from "../async-tool-task/async-tool-task-service.js";
@@ -124,6 +128,7 @@ export class AgentCallService
     AgentCallReader,
     AgentCallContinuator
 {
+  private readonly activeControls = new Map<string, AbortController>();
   private readonly transport: AgentCallTransport;
   private readonly taskService: AsyncToolTaskService;
   private readonly agentId: string;
@@ -710,6 +715,9 @@ export class AgentCallService
           : { sourceToolCallId: request.sourceToolCallId }),
         state: submitted.state,
         artifacts: cloneArtifacts(submitted.artifacts),
+        ...(submitted.permissionRequest
+          ? { permissionRequest: structuredClone(submitted.permissionRequest) }
+          : {}),
         ...(submitted.questions === undefined
           ? {}
           : { questions: cloneQuestions(submitted.questions) }),
@@ -948,6 +956,12 @@ export class AgentCallService
         new Error(`AgentCall Task ${request.taskId} has no internal record`),
       );
     }
+    if (initialRecord.permissionRequest)
+      return Promise.resolve({
+        status: "invalid-answers",
+        taskId: request.taskId,
+        error: "Permission requests require independent delegation review",
+      });
     if (initialRecord.state !== "input-required") {
       return Promise.resolve({
         status: "invalid-state",
@@ -1140,6 +1154,78 @@ export class AgentCallService
     }
   }
 
+  controlTask(
+    sessionId: string,
+    taskId: string,
+    control: DelegationControl,
+    signal?: AbortSignal,
+  ): Promise<DelegationControlReceipt> {
+    this.assertOpen();
+    const task = this.taskService.get(sessionId, taskId),
+      record = this.getByAgentCallId(taskId);
+    if (
+      !task ||
+      !record ||
+      record.sessionId !== sessionId ||
+      !record.contextId ||
+      isAgentCallTerminalState(record.state)
+    )
+      return Promise.reject(
+        new Error("Delegation task binding or state mismatch"),
+      );
+    if (
+      !this.transport.controlTask ||
+      this.activeControls.has(taskId) ||
+      this.activeCancellationByTaskId.has(record.taskId) ||
+      this.activeContinuationByTaskId.has(record.taskId)
+    )
+      return Promise.reject(
+        new Error("Delegation control unavailable or busy"),
+      );
+    const controller = new AbortController();
+    this.activeControls.set(taskId, controller);
+    const operation = Promise.resolve()
+      .then(async () => {
+        const combined = signal
+          ? AbortSignal.any([signal, controller.signal])
+          : controller.signal;
+        if (control.type === "huanlink.delegation-decision.v1") {
+          const watcher = this.activeWatchers.get(taskId);
+          if (watcher) {
+            watcher.controller.abort();
+            await watcher.promise;
+          }
+        }
+        combined.throwIfAborted();
+        this.assertOpen();
+        const result = await this.transport.controlTask!({
+          taskId: record.taskId,
+          contextId: record.contextId!,
+          messageId: this.createMessageId(),
+          control,
+          signal: combined,
+        });
+        combined.throwIfAborted();
+        this.assertOpen();
+        this.assertMatchingTask(record, result.snapshot);
+        if (result.snapshot.contextId !== record.contextId)
+          throw new Error("Delegation receipt context mismatch");
+        await this.applySnapshot(taskId, result.snapshot);
+        if (
+          control.type === "huanlink.delegation-decision.v1" &&
+          !isAgentCallOutcomeState(result.snapshot.state)
+        )
+          this.startWatcher(taskId, result.snapshot);
+        return result.receipt;
+      })
+      .finally(() => {
+        this.activeControls.delete(taskId);
+        this.activeSubmissions.delete(operation);
+      });
+    this.activeSubmissions.add(operation);
+    return operation;
+  }
+
   close(): Promise<void> {
     if (this.closeOperation) {
       return this.closeOperation;
@@ -1161,6 +1247,7 @@ export class AgentCallService
   }
 
   private async drainClose(): Promise<void> {
+    for (const controller of this.activeControls.values()) controller.abort();
     for (const continuation of this.activeContinuationByTaskId.values()) {
       continuation.controller.abort();
     }
@@ -1306,6 +1393,10 @@ export class AgentCallService
         : { contextId: snapshot.contextId }),
       state: snapshot.state,
       artifacts: cloneArtifacts(snapshot.artifacts),
+      permissionRequest:
+        snapshot.state === "input-required" && snapshot.permissionRequest
+          ? structuredClone(snapshot.permissionRequest)
+          : undefined,
       questions:
         snapshot.state === "input-required" && snapshot.questions !== undefined
           ? cloneQuestions(snapshot.questions)
@@ -1639,6 +1730,9 @@ function validateContinuationAnswers(
 
 function agentCallTaskPayload(record: AgentCallRecord) {
   return {
+    ...(record.permissionRequest
+      ? { permissionRequest: structuredClone(record.permissionRequest) }
+      : {}),
     artifacts: cloneArtifacts(record.artifacts),
     ...(record.questions === undefined
       ? {}
@@ -1654,6 +1748,9 @@ function cloneRecord(
     : {
         ...record,
         artifacts: cloneArtifacts(record.artifacts),
+        ...(record.permissionRequest
+          ? { permissionRequest: structuredClone(record.permissionRequest) }
+          : {}),
         ...(record.questions === undefined
           ? {}
           : { questions: cloneQuestions(record.questions) }),

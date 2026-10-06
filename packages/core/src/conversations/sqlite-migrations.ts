@@ -93,6 +93,17 @@ const MIGRATIONS: readonly SqliteConversationMigration[] = [
   defineMigration(1, "conversation-store-v1", SCHEMA_V1_SQL),
   defineMigration(2, "conversation-store-v2", SCHEMA_V2_SQL),
   defineMigration(3, "async-tool-task-store-v3", SCHEMA_V3_SQL),
+  defineMigration(
+    4,
+    "delegation-context-store-v4",
+    `
+CREATE TABLE delegation_contexts (
+  source_key TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  payload_json TEXT NOT NULL
+);
+CREATE INDEX delegation_contexts_session ON delegation_contexts(session_id);`,
+  ),
 ];
 
 /** Applies the embedded Conversation schema atomically and only in order. */

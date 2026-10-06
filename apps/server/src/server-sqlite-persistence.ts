@@ -5,11 +5,13 @@ import {
   openSqliteHuanLinkStore,
   type AsyncToolTaskStore,
   type ConversationSessionStore,
+  type DelegationStore,
 } from "@huanlink/core";
 
 import type { HuanLinkServerStoreCloseOwner } from "./huanlink-server-runtime.js";
 
 export type ServerSqlitePersistence = {
+  readonly delegationStore: DelegationStore;
   readonly sessionStore: ConversationSessionStore;
   readonly taskStore: AsyncToolTaskStore;
   readonly storeOwner: HuanLinkServerStoreCloseOwner;
@@ -25,6 +27,7 @@ export async function createServerSqlitePersistence(input: {
   return {
     sessionStore: stores.sessionStore,
     taskStore: stores.taskStore,
+    delegationStore: stores.delegationStore,
     storeOwner: stores,
   };
 }

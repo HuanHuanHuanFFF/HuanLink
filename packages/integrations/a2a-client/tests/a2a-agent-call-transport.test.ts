@@ -36,6 +36,56 @@ import { A2aAgentCallTransport } from "../src/index.js";
 
 const servers: RunningAdapterServer[] = [];
 
+test("checks task and context identity on delegation control receipts over HTTP", async () => {
+  let wrong = false;
+  const server = await startAdapterServer({
+    port: 0,
+    executor: new GateExecutor(Promise.resolve()),
+    controlMessage: async (message) =>
+      Message.fromJSON({
+        messageId: "receipt",
+        taskId: wrong ? "another-task" : message.taskId,
+        contextId: message.contextId,
+        role: "ROLE_AGENT",
+        parts: [
+          {
+            data: {
+              receipt: {
+                delegationId: "d",
+                revision: 1,
+                status: "decided",
+                approvalId: "p",
+              },
+              snapshot: {
+                taskId: message.taskId,
+                contextId: message.contextId,
+                state: "working",
+                artifacts: [],
+              },
+            },
+          },
+        ],
+      }),
+  });
+  servers.push(server);
+  const transport = new A2aAgentCallTransport({ origin: server.origin });
+  const request = {
+    taskId: "remote",
+    contextId: "d",
+    messageId: "message",
+    control: {
+      type: "huanlink.delegation-decision.v1" as const,
+      delegationId: "d",
+      approvalId: "p",
+      contextRevision: 1,
+      decision: "deny" as const,
+    },
+  };
+  expect((await transport.controlTask(request)).receipt.status).toBe("decided");
+  wrong = true;
+  await expect(transport.controlTask(request)).rejects.toThrow(/binding/);
+});
+
 type RecordedLogEntry = {
   level: RuntimeLogLevel;
   message: string;

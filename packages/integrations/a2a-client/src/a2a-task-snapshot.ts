@@ -4,6 +4,7 @@ import {
   type AgentCallInputQuestion,
   type AgentCallTaskSnapshot,
   type AgentCallTaskState,
+  parsePermissionRequest,
 } from "@huanlink/core";
 
 export function snapshotFromTask(task: Task): AgentCallTaskSnapshot {
@@ -35,7 +36,10 @@ function artifactFromA2a(artifact: Artifact): AgentCallArtifact {
 
 export function messageFields(
   message: Message | undefined,
-): Pick<AgentCallTaskSnapshot, "statusMessage" | "questions"> {
+): Pick<
+  AgentCallTaskSnapshot,
+  "statusMessage" | "questions" | "permissionRequest"
+> {
   if (!message) {
     return {};
   }
@@ -47,7 +51,16 @@ export function messageFields(
   const questions = message.parts.flatMap((part) =>
     part.content?.$case === "data" ? questionsFromData(part.content.value) : [],
   );
+  const permissions = message.parts.flatMap((part) =>
+    part.content?.$case === "data" &&
+    part.content.value.permissionRequest !== undefined
+      ? [parsePermissionRequest(part.content.value.permissionRequest)]
+      : [],
+  );
+  if (permissions.length > 1)
+    throw new Error("Ambiguous A2A permission request");
   return {
+    ...(permissions[0] ? { permissionRequest: permissions[0] } : {}),
     ...(text === "" ? {} : { statusMessage: text }),
     ...(questions.length === 0 ? {} : { questions }),
   };

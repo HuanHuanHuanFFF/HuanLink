@@ -35,3 +35,8 @@ export * from "./conversations/session-tool-history-recorder.js";
 export * from "./conversations/in-memory-conversation-session-store.js";
 export * from "./conversations/sqlite-conversation-session-store.js";
 export * from "./conversations/sqlite-huanlink-store.js";
+export * from "./delegation/types.js";
+export * from "./delegation/validation.js";
+export * from "./delegation/context-manager.js";
+export * from "./delegation/context-store.js";
+export * from "./delegation/coordinator.js";

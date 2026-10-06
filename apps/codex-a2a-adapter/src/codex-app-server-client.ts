@@ -11,6 +11,7 @@ export interface CodexAppServerTransport {
 }
 
 export interface CodexAppServerClientOptions {
+  experimentalDelegation?: boolean;
   expectedVersion: string;
   requestTimeoutMs?: number;
   transport: CodexAppServerTransport;
@@ -63,6 +64,7 @@ export interface CodexAppServerRequest {
 }
 
 export interface StartCodexThreadOptions {
+  experimentalDelegation?: boolean;
   cwd: string;
   developerInstructions: string;
   model: string;
@@ -86,6 +88,16 @@ export interface InterruptCodexTurnOptions {
 }
 
 export interface CodexRuntimeClient {
+  onPermissionRequest?(
+    listener: (request: CodexPermissionRequest) => void,
+  ): () => void;
+  respondToPermissionRequest?(
+    id: CodexAppServerRequestId,
+    decision: "approve" | "deny",
+  ): Promise<void>;
+  steerTurn?(
+    options: InterruptCodexTurnOptions & { prompt: string },
+  ): Promise<void>;
   listModels(): Promise<CodexModelCapability[]>;
   close(): Promise<void>;
   discardServerRequest(id: CodexAppServerRequestId): void;
@@ -111,6 +123,18 @@ interface InitializeResponse {
   platformOs: string;
   userAgent: string;
 }
+
+export type CodexPermissionRequest = {
+  id: CodexAppServerRequestId;
+  kind: "command" | "file-change";
+  threadId: string;
+  turnId: string;
+  itemId: string;
+  command?: string;
+  cwd?: string;
+  grantRoot?: string;
+  reason: string;
+};
 
 interface RpcError {
   code: number;
@@ -211,6 +235,7 @@ export class CodexAppServerClient implements CodexRuntimeClient {
   private constructor(
     private readonly transport: CodexAppServerTransport,
     requestTimeoutMs: number,
+    private readonly experimentalDelegation = false,
   ) {
     this.requestTimeoutMs = requestTimeoutMs;
     void this.readMessages();
@@ -222,6 +247,7 @@ export class CodexAppServerClient implements CodexRuntimeClient {
     const client = new CodexAppServerClient(
       options.transport,
       options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+      options.experimentalDelegation ?? false,
     );
 
     try {
@@ -287,8 +313,49 @@ export class CodexAppServerClient implements CodexRuntimeClient {
     return () => this.serverRequestListeners.delete(listener);
   }
 
+  private readonly permissionListeners = new Set<
+    (request: CodexPermissionRequest) => void
+  >();
+  private readonly permissionRequests = new Set<CodexAppServerRequestId>();
+  onPermissionRequest(
+    listener: (request: CodexPermissionRequest) => void,
+  ): () => void {
+    this.permissionListeners.add(listener);
+    return () => {
+      this.permissionListeners.delete(listener);
+    };
+  }
+  async respondToPermissionRequest(
+    id: CodexAppServerRequestId,
+    decision: "approve" | "deny",
+  ): Promise<void> {
+    if (this.closed || !this.permissionRequests.delete(id))
+      throw new Error("Unknown or already answered permission request");
+    try {
+      await this.writeMessage({
+        id,
+        result: { decision: decision === "approve" ? "accept" : "decline" },
+      });
+    } catch (error) {
+      this.failConnection(error);
+      throw error;
+    }
+  }
+  async steerTurn(
+    options: InterruptCodexTurnOptions & { prompt: string },
+  ): Promise<void> {
+    const result = await this.request<{ turnId: string }>("turn/steer", {
+      threadId: options.threadId,
+      expectedTurnId: options.turnId,
+      input: [{ type: "text", text: options.prompt, text_elements: [] }],
+    });
+    if (result.turnId !== options.turnId)
+      throw new Error("Steering returned an unexpected turn");
+  }
+
   discardServerRequest(id: CodexAppServerRequestId): void {
     this.serverRequests.delete(id);
+    this.permissionRequests.delete(id);
   }
 
   async respondToServerRequest(
@@ -315,8 +382,10 @@ export class CodexAppServerClient implements CodexRuntimeClient {
       "thread/start",
       {
         cwd: options.cwd,
-        approvalPolicy: "never",
-        sandbox: "workspace-write",
+        approvalPolicy: options.experimentalDelegation ? "on-request" : "never",
+        sandbox: options.experimentalDelegation
+          ? "read-only"
+          : "workspace-write",
         ephemeral: false,
         developerInstructions: options.developerInstructions,
         model: options.model,
@@ -439,6 +508,18 @@ export class CodexAppServerClient implements CodexRuntimeClient {
       typeof message.method === "string" &&
       (typeof message.id === "number" || typeof message.id === "string")
     ) {
+      const permission = this.experimentalDelegation
+        ? permissionRequestFrom(message)
+        : undefined;
+      if (permission && this.permissionListeners.size > 0) {
+        if (this.permissionRequests.has(permission.id)) {
+          this.failConnection(new Error("Duplicate native permission request"));
+          return;
+        }
+        this.permissionRequests.add(permission.id);
+        for (const listener of this.permissionListeners) listener(permission);
+        return;
+      }
       const request = userInputRequestFrom(message);
       if (request && this.serverRequestListeners.size > 0) {
         this.serverRequests.add(request.id);
@@ -539,6 +620,38 @@ export class CodexAppServerClient implements CodexRuntimeClient {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function permissionRequestFrom(
+  message: Record<string, unknown>,
+): CodexPermissionRequest | undefined {
+  const kind =
+    message.method === "item/commandExecution/requestApproval"
+      ? "command"
+      : message.method === "item/fileChange/requestApproval"
+        ? "file-change"
+        : undefined;
+  const p = message.params;
+  if (
+    !kind ||
+    !isRecord(p) ||
+    (typeof message.id !== "string" && typeof message.id !== "number") ||
+    typeof p.threadId !== "string" ||
+    typeof p.turnId !== "string" ||
+    typeof p.itemId !== "string"
+  )
+    return undefined;
+  return {
+    id: message.id,
+    kind,
+    threadId: p.threadId,
+    turnId: p.turnId,
+    itemId: p.itemId,
+    ...(typeof p.command === "string" ? { command: p.command } : {}),
+    ...(typeof p.cwd === "string" ? { cwd: p.cwd } : {}),
+    ...(typeof p.grantRoot === "string" ? { grantRoot: p.grantRoot } : {}),
+    reason: typeof p.reason === "string" ? p.reason : "",
+  };
 }
 
 function userInputRequestFrom(

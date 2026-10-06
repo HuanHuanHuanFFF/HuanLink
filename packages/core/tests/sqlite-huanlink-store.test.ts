@@ -7,6 +7,68 @@ import { afterEach, describe, expect, test } from "vitest";
 
 import { openSqliteHuanLinkStore } from "../src/index.js";
 
+test("delegation snapshots and receipts survive SQLite reopen without changing source facts", async () => {
+  const path = databasePath();
+  const first = openSqliteHuanLinkStore(path);
+  const record = {
+    sourceKey: '["s","r","c"]',
+    sessionId: "s",
+    runId: "r",
+    sourceToolCallId: "c",
+    taskId: "task",
+    receivedRevision: 2,
+    syncState: "received" as const,
+    pendingApprovalId: "approval",
+    askedAtRevision: 2,
+    askedThroughEntryIndex: 2048,
+    pack: {
+      type: "huanlink.delegation-context.v1" as const,
+      delegationId: "d",
+      sessionId: "s",
+      goal: "inspect",
+      revision: 2,
+      throughEntryIndex: 2048,
+      summary: "inspect only",
+      progress: [],
+      decisions: [],
+      constraints: ["no push"],
+      openQuestions: [],
+      userEvidence: [
+        {
+          messageId: "u",
+          senderId: "owner",
+          text: "inspect only; no push",
+          entryIndex: 1024,
+        },
+      ],
+      authorization: {
+        allowed: [{ scope: "inspect", evidenceMessageIds: ["u"] }],
+        denied: [{ scope: "push", evidenceMessageIds: ["u"] }],
+        uncertain: [],
+      },
+      change: "context" as const,
+      stop: false,
+      authorityCeiling: ["command" as const],
+    },
+  };
+  first.delegationStore.put(record);
+  first.close();
+  expect(() => first.delegationStore.list("s")).toThrow(/closed/);
+  const second = openSqliteHuanLinkStore(path);
+  try {
+    expect(second.delegationStore.get(record.sourceKey)).toEqual(record);
+    expect(second.delegationStore.list("other-session")).toEqual([]);
+    expect(() =>
+      second.delegationStore.put({
+        ...record,
+        pack: { ...record.pack, summary: "different" },
+      }),
+    ).toThrow(/revision/);
+  } finally {
+    second.close();
+  }
+});
+
 const directories: string[] = [];
 
 afterEach(() => {

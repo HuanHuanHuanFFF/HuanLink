@@ -9,6 +9,9 @@ import {
 } from "@a2a-js/sdk/server";
 import {
   NoopRuntimeLogger,
+  type DelegationControl,
+  type DelegationPermissionRequest,
+  type AgentCallTaskState,
   type RuntimeLogFields,
   type RuntimeLogLevel,
   type RuntimeLogger,
@@ -26,8 +29,14 @@ import {
   type ValidatedDemoWorkspace,
 } from "./workspace-guard.js";
 import { CodexDispatchPolicy, type CodexProject } from "./dispatch-policy.js";
+import {
+  CodexDelegationExecution,
+  renderDelegationContext,
+} from "./delegation-execution.js";
 
 export interface CodexTaskExecutorOptions {
+  experimentalDelegation?: boolean;
+  permissionTtlMs?: number;
   cancelTimeoutMs?: number;
   client: CodexRuntimeClient;
   logger?: RuntimeLogger;
@@ -40,6 +49,8 @@ export interface CodexTaskExecutorOptions {
 }
 
 interface InFlightExecution {
+  delegation?: CodexDelegationExecution;
+  terminalState?: AgentCallTaskState;
   project?: CodexProject;
   workspaceKey?: string;
   cancelRequested: boolean;
@@ -69,6 +80,9 @@ interface InFlightExecution {
 const DEFAULT_CANCEL_TIMEOUT_MS = 10_000;
 
 export class CodexTaskExecutor implements AgentExecutor {
+  private readonly experimentalDelegation: boolean;
+  private readonly permissionTtlMs: number;
+  private readonly unsubscribePermissions: () => void;
   private readonly client: CodexRuntimeClient;
   private readonly cancelTimeoutMs: number;
   private readonly logger: RuntimeLogger;
@@ -94,12 +108,15 @@ export class CodexTaskExecutor implements AgentExecutor {
   private uncertainStartFailure: Promise<void> | undefined;
 
   constructor(options: CodexTaskExecutorOptions) {
+    this.experimentalDelegation = options.experimentalDelegation ?? false;
+    this.permissionTtlMs = options.permissionTtlMs ?? 300000;
     this.client = options.client;
     this.cancelTimeoutMs = options.cancelTimeoutMs ?? DEFAULT_CANCEL_TIMEOUT_MS;
     this.logger = options.logger ?? new NoopRuntimeLogger();
     this.dispatchPolicy = new CodexDispatchPolicy(
       options.projects,
       options.models,
+      this.experimentalDelegation,
     );
     this.validateWorkspace = options.validateWorkspace ?? validateDemoWorkspace;
     this.unsubscribeNotifications = this.client.onNotification((notification) =>
@@ -111,6 +128,24 @@ export class CodexTaskExecutor implements AgentExecutor {
     this.unsubscribeClose = this.client.onClose((error) =>
       this.handleClientClose(error),
     );
+    this.unsubscribePermissions =
+      this.client.onPermissionRequest?.((request) => {
+        const execution = this.executionByTurn.get(request.turnId);
+        if (!execution?.delegation || execution.threadId !== request.threadId) {
+          if (this.client.respondToPermissionRequest)
+            void this.client
+              .respondToPermissionRequest(request.id, "deny")
+              .catch((error) => this.failDelegationRuntime(error));
+          else
+            this.failDelegationRuntime(
+              new Error("Native permission response capability unavailable"),
+            );
+          return;
+        }
+        void execution.delegation
+          .request(request)
+          .catch((error) => this.failDelegationRuntime(error));
+      }) ?? (() => undefined);
   }
 
   async execute(
@@ -139,6 +174,45 @@ export class CodexTaskExecutor implements AgentExecutor {
     this.pendingAdmissions.delete(workspaceKey);
     execution.project = dispatch.project;
     execution.workspaceKey = workspaceKey;
+    if (dispatch.delegation) {
+      if (!this.client.steerTurn || !this.client.respondToPermissionRequest)
+        throw new RequestMalformedError(
+          "Delegation runtime capabilities are unavailable",
+        );
+      execution.delegation = new CodexDelegationExecution({
+        pack: dispatch.delegation,
+        workspace: dispatch.project.workspace,
+        permissionKinds: ["command", "file-change"],
+        ttlMs: this.permissionTtlMs,
+        getTurn: () =>
+          execution.threadId && execution.turnId
+            ? { threadId: execution.threadId, turnId: execution.turnId }
+            : undefined,
+        validate: async () => {
+          await this.validateExecutionWorkspace(execution);
+          if (execution.terminal) throw new Error("Task ended");
+        },
+        steer: async (prompt) => {
+          if (!execution.threadId || !execution.turnId)
+            throw new Error("Task is not ready for context steering");
+          await this.client.steerTurn!({
+            threadId: execution.threadId,
+            turnId: execution.turnId,
+            prompt,
+          });
+        },
+        decide: (id, decision) =>
+          this.client.respondToPermissionRequest!(id, decision),
+        discard: (id) => this.client.discardServerRequest(id),
+        paused: (request) => this.publishPermission(execution, request),
+        resumed: () => {
+          execution.workingPublished = false;
+          this.publishWorking(execution);
+        },
+        stop: () => this.cancelTask(execution.taskId, execution.eventBus),
+        failed: (error) => this.failDelegationRuntime(error),
+      });
+    }
     this.activeWorkspaces.set(workspaceKey, execution);
     this.executions.set(execution.taskId, execution);
     this.writeLog("info", "adapter.task.received", {
@@ -178,6 +252,7 @@ export class CodexTaskExecutor implements AgentExecutor {
         validated.workspace,
         dispatch.project.branch,
         dispatch.modelId,
+        !!execution.delegation,
       );
       this.writeLog("info", "codex.thread.ready", {
         ...executionLogFields(execution),
@@ -204,7 +279,11 @@ export class CodexTaskExecutor implements AgentExecutor {
       execution.turnStarting = true;
       const started = await this.client.startTurn({
         threadId: execution.threadId,
-        prompt: extractText(requestContext),
+        prompt: execution.delegation
+          ? extractText(requestContext) +
+            "\n\n" +
+            renderDelegationContext(execution.delegation.context)
+          : extractText(requestContext),
         model: dispatch.modelId,
         reasoningEffort: dispatch.reasoningEffort,
       });
@@ -230,6 +309,16 @@ export class CodexTaskExecutor implements AgentExecutor {
     } finally {
       this.cleanup(execution);
     }
+  }
+
+  private failDelegationRuntime(error: unknown): void {
+    this.closing = true;
+    this.handleClientClose(error);
+    void this.client
+      .close()
+      .catch(() =>
+        this.writeLog("error", "adapter.delegation.stop_unconfirmed"),
+      );
   }
 
   async validateMessage(message: Message): Promise<void | (() => void)> {
@@ -289,6 +378,111 @@ export class CodexTaskExecutor implements AgentExecutor {
         "HUANLINK_PREACCEPT_REJECTED: Paused task workspace or state changed; restore the configured branch before continuing",
       );
     }
+  }
+
+  async controlMessage(message: Message): Promise<Message | undefined> {
+    const data =
+      message.parts.length === 1 && message.parts[0]?.content?.$case === "data"
+        ? message.parts[0].content.value
+        : undefined;
+    if (
+      !data ||
+      (data.type !== "huanlink.delegation-sync.v1" &&
+        data.type !== "huanlink.delegation-decision.v1")
+    )
+      return undefined;
+    const execution = this.executions.get(message.taskId);
+    if (
+      !this.experimentalDelegation ||
+      !execution?.delegation ||
+      message.contextId !== execution.contextId ||
+      !message.messageId
+    )
+      throw new RequestMalformedError("Delegation control binding mismatch");
+    try {
+      const receipt = await execution.delegation.control(
+        data as unknown as DelegationControl,
+      );
+      const permissionRequest = execution.delegation.permission;
+      return Message.fromJSON({
+        messageId: message.messageId + "-receipt",
+        taskId: execution.taskId,
+        contextId: execution.contextId,
+        role: "ROLE_AGENT",
+        parts: [
+          {
+            data: {
+              receipt,
+              snapshot: {
+                taskId: execution.taskId,
+                contextId: execution.contextId,
+                state:
+                  execution.terminalState ??
+                  (permissionRequest || execution.pendingInput
+                    ? "input-required"
+                    : "working"),
+                artifacts:
+                  execution.terminalState === "completed"
+                    ? [
+                        {
+                          id: execution.taskId + "-codex-result",
+                          text: createResultArtifact(execution)
+                            .parts.flatMap((p) =>
+                              p.content?.$case === "text"
+                                ? [p.content.value]
+                                : [],
+                            )
+                            .join("\n"),
+                        },
+                      ]
+                    : [],
+                ...(permissionRequest ? { permissionRequest } : {}),
+                ...(execution.pendingInput
+                  ? {
+                      questions: cloneInputQuestions(
+                        execution.pendingInput.questions,
+                      ),
+                    }
+                  : {}),
+              },
+            },
+          },
+        ],
+      });
+    } catch (error) {
+      throw new RequestMalformedError(
+        error instanceof Error ? error.message : "Delegation control failed",
+      );
+    }
+  }
+
+  private publishPermission(
+    execution: InFlightExecution,
+    request: DelegationPermissionRequest,
+  ): void {
+    if (execution.pendingInput || execution.terminal)
+      throw new Error("Task cannot wait for another permission");
+    execution.eventBus.publish(
+      AgentEvent.statusUpdate({
+        taskId: execution.taskId,
+        contextId: execution.contextId,
+        status: {
+          state: TaskState.TASK_STATE_INPUT_REQUIRED,
+          timestamp: new Date().toISOString(),
+          message: Message.fromJSON({
+            messageId: request.approvalId,
+            taskId: execution.taskId,
+            contextId: execution.contextId,
+            role: "ROLE_AGENT",
+            parts: [
+              { text: "需要确认操作权限：" + request.operation },
+              { data: { permissionRequest: request } },
+            ],
+          }),
+        },
+        metadata: undefined,
+      }),
+    );
   }
 
   private async validateExecutionWorkspace(
@@ -431,6 +625,7 @@ export class CodexTaskExecutor implements AgentExecutor {
     this.unsubscribeNotifications();
     this.unsubscribeServerRequests();
     this.unsubscribeClose();
+    this.unsubscribePermissions();
   }
 
   private async continueExecution(
@@ -542,6 +737,7 @@ export class CodexTaskExecutor implements AgentExecutor {
     workspace: string,
     expectedBranch: string,
     model: string,
+    experimentalDelegation = false,
   ): Promise<string> {
     const existing = this.threadByContext.get(contextId);
     if (existing) {
@@ -553,6 +749,7 @@ export class CodexTaskExecutor implements AgentExecutor {
         cwd: workspace,
         developerInstructions: createDeveloperInstructions(expectedBranch),
         model,
+        ...(experimentalDelegation ? { experimentalDelegation: true } : {}),
       })
       .then(({ threadId }) => threadId)
       .catch((error: unknown) => {
@@ -582,6 +779,8 @@ export class CodexTaskExecutor implements AgentExecutor {
     if (notification.method === "item/started") {
       const execution = this.findExecution(params);
       if (execution) {
+        const item = asRecord(params.item);
+        if (item) execution.delegation?.recordItem(item);
         this.publishWorking(execution);
       }
       return;
@@ -619,7 +818,10 @@ export class CodexTaskExecutor implements AgentExecutor {
         turnId: execution.turnId,
         status: turn.status,
       });
-      if (execution.pendingInput && turn.status === "completed") {
+      if (
+        (execution.pendingInput || execution.delegation?.permission) &&
+        turn.status === "completed"
+      ) {
         return;
       }
 
@@ -649,6 +851,13 @@ export class CodexTaskExecutor implements AgentExecutor {
   private handleServerRequest(request: CodexAppServerRequest): void {
     const execution = this.findServerRequestExecution(request);
     if (!execution || execution.terminal) {
+      return;
+    }
+    if (execution.delegation?.permission) {
+      this.client.discardServerRequest(request.id);
+      this.failDelegationRuntime(
+        new Error("Concurrent native question and permission request"),
+      );
       return;
     }
     if (execution.pendingInput) {
@@ -800,6 +1009,13 @@ export class CodexTaskExecutor implements AgentExecutor {
       execution.pendingInput = undefined;
     }
     execution.terminal = true;
+    execution.terminalState =
+      state === TaskState.TASK_STATE_COMPLETED
+        ? "completed"
+        : state === TaskState.TASK_STATE_CANCELED
+          ? "canceled"
+          : "failed";
+    execution.delegation?.close();
     execution.resolveTurnReady();
 
     if (state === TaskState.TASK_STATE_COMPLETED) {

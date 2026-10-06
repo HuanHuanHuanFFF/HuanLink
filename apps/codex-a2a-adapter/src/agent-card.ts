@@ -4,7 +4,10 @@ import {
   type AgentCard as AgentCardValue,
 } from "@a2a-js/sdk";
 
-export function createAgentCard(origin: string): AgentCardValue {
+export function createAgentCard(
+  origin: string,
+  experimentalDelegation = false,
+): AgentCardValue {
   return AgentCard.fromJSON({
     name: "HuanLink Codex A2A Adapter",
     description:
@@ -18,6 +21,18 @@ export function createAgentCard(origin: string): AgentCardValue {
       },
     ],
     capabilities: {
+      ...(experimentalDelegation
+        ? {
+            extensions: [
+              {
+                uri: "urn:huanlink:delegation:v1",
+                description:
+                  "Task-scoped context packets, monotonic context receipt and one-shot permission control via Message Data Parts",
+                required: false,
+              },
+            ],
+          }
+        : {}),
       streaming: true,
       pushNotifications: false,
     },
