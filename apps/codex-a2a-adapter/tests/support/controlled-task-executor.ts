@@ -1,7 +1,7 @@
 import { TaskState, type Artifact, type Task } from "@a2a-js/sdk";
+import { TaskNotCancelableError } from "@a2a-js/sdk/errors";
 import {
   AgentEvent,
-  TaskNotCancelableError,
   type AgentExecutor,
   type ExecutionEventBus,
   type RequestContext,

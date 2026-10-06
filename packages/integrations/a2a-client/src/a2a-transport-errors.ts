@@ -2,7 +2,7 @@ import {
   TaskNotCancelableError,
   RequestMalformedError,
   UnsupportedOperationError,
-} from "@a2a-js/sdk/client";
+} from "@a2a-js/sdk/errors";
 import { type RuntimeLogFields } from "@huanlink/core";
 
 export class A2aProtocolError extends Error {}

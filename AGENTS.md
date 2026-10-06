@@ -51,4 +51,8 @@ Keep reusable code under `packages/*/src`, process composition under `apps/*/src
 ## Agent and Skill Use
 
 - For non-trivial repository implementation, use `$execute-from-goal` as the default execution workflow unless a more specific skill applies.
-- When dispatching subagents, default to GPT-5.6 Terra with xhigh reasoning and use `$prompt-entropy` to keep their tasks short, anchored, and verifiable unless the user specifies otherwise. All subagents share the same worktree: reviewers are read-only by default, and editing subagents must receive non-overlapping file scopes.
+- When dispatching subagents, select primarily from these models and reasoning defaults unless the user specifies otherwise:
+  - `gpt-6.1-sol` with `xhigh`: primary choice for most tasks, balancing capability and cost.
+  - `gpt-6-astra` with `xhigh`: strongest flagship choice for very complex tasks.
+  - `gpt-6-luna` with `max`: cost-efficient choice for straightforward tasks.
+- Use `$prompt-entropy` to keep delegated tasks short, anchored, and verifiable. All subagents share the same worktree: reviewers are read-only by default, and editing subagents must receive non-overlapping file scopes.

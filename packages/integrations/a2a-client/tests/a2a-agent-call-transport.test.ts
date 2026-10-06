@@ -9,9 +9,11 @@ import {
 } from "@a2a-js/sdk";
 import { ClientFactory, type Client } from "@a2a-js/sdk/client";
 import {
-  AgentEvent,
   RequestMalformedError,
   TaskNotCancelableError,
+} from "@a2a-js/sdk/errors";
+import {
+  AgentEvent,
   type AgentExecutor,
   type ExecutionEventBus,
   type RequestContext,

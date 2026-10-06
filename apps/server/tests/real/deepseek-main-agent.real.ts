@@ -62,6 +62,7 @@ describe("real DeepSeek MainAgent smoke", () => {
       input: [
         "Delegate this concrete coding task exactly once with submit_codex_agent_call:",
         "add one focused unit test for a parser.",
+        "Use the registered test projectId huanlink.",
         "Use executionMode async, then acknowledge the accepted task.",
       ].join(" "),
     });
@@ -75,6 +76,7 @@ describe("real DeepSeek MainAgent smoke", () => {
       contextId: "session-real-deepseek",
       skillId: "codex-code-task",
       executionMode: "async",
+      inputData: { type: "huanlink.codex-task.v1", projectId: "huanlink" },
     });
     expect(invocations[0]?.input.trim().length).toBeGreaterThan(0);
     expect(result.output.trim().length).toBeGreaterThan(0);
